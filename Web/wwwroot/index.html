@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monitor & Control</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">M&amp;C</div>
+    <nav>
+      <a href="#" data-view="live" class="active">Live</a>
+      <a href="#" data-view="today">Today</a>
+      <a href="#" data-view="history">History</a>
+      <a href="#" data-view="limits">Limits</a>
+      <a href="#" data-view="discover">Discover</a>
+      <a href="#" data-view="schedule">Schedule</a>
+      <a href="#" data-view="logs">Logs</a>
+      <a href="#" data-view="settings">Settings</a>
+    </nav>
+  </aside>
+  <main class="main">
+    <div id="alert-bar" class="alert-bar hidden"></div>
+    <div id="error-bar" class="error-bar hidden"></div>
+    <div id="view-live" class="view active">
+      <h2>Live Status</h2>
+      <div class="live-card">
+        <div class="live-label">Currently Active</div>
+        <div class="live-app" id="live-app">Waiting...</div>
+        <div class="live-proc" id="live-proc"></div>
+      </div>
+      <div class="live-card">
+        <div class="live-label">Today's Usage</div>
+        <div id="live-today-list"></div>
+      </div>
+    </div>
+    <div id="view-today" class="view">
+      <h2>Today's Usage</h2>
+      <div class="chart-container"><canvas id="today-chart"></canvas></div>
+      <div class="table-container" id="today-table"></div>
+    </div>
+    <div id="view-history" class="view">
+      <h2>Usage History</h2>
+      <div class="history-toolbar">
+        <div class="history-range">
+          <button data-days="7" class="active">7 Days</button>
+          <button data-days="14">14 Days</button>
+          <button data-days="30">30 Days</button>
+          <button data-days="90">90 Days</button>
+        </div>
+        <div class="history-custom">
+          <input type="date" id="history-from">
+          <input type="date" id="history-to">
+          <button id="history-apply" class="btn-secondary">Apply</button>
+        </div>
+        <button id="history-clear" class="btn-danger">Clear History</button>
+      </div>
+      <div class="history-filters">
+        <label>App
+          <select id="history-app-filter"><option value="">All apps</option></select>
+        </label>
+        <label>Day
+          <select id="history-day-filter"><option value="">All days</option></select>
+        </label>
+        <label>Chart
+          <select id="history-chart-mode">
+            <option value="stacked">Daily stack</option>
+            <option value="total">Daily total</option>
+          </select>
+        </label>
+      </div>
+      <div class="history-stats" id="history-stats"></div>
+      <div class="chart-container"><canvas id="history-chart"></canvas></div>
+      <div class="history-grid">
+        <div class="history-panel">
+          <h3>Top Apps</h3>
+          <div id="history-top-apps"></div>
+        </div>
+        <div class="history-panel">
+          <h3>Selected Day</h3>
+          <div id="history-day-detail"></div>
+        </div>
+      </div>
+      <div class="table-container" id="history-table"></div>
+    </div>
+    <div id="view-limits" class="view">
+      <h2>App Limits</h2>
+      <div class="table-container" id="limits-table"></div>
+      <div class="add-form">
+        <h3>Add / Edit Limit</h3>
+        <input type="text" id="limit-app" placeholder="App name (e.g. Fortnite)">
+        <input type="text" id="limit-process" placeholder="Process name (e.g. FortniteClient-Win64-Shipping.exe)" style="width:400px">
+        <input type="number" id="limit-minutes" placeholder="Minutes per day" min="1" value="120">
+        <button id="limit-save">Save</button>
+        <button id="limit-cancel" class="btn-secondary hidden">Cancel</button>
+      </div>
+    </div>
+    <div id="view-discover" class="view">
+      <h2>Discover Apps &amp; Games</h2>
+      <p style="margin-bottom:15px">Scan your system for installed games and apps. Found items listed here can be added to the Known Apps list with one click.</p>
+      <button id="discover-scan" class="btn-secondary" style="margin-bottom:15px">🔍 Scan Now</button>
+      <div id="discover-results" class="table-container">
+        <p style="color:#666;text-align:center;padding:30px">Click "Scan Now" to discover installed apps and games.</p>
+      </div>
+    </div>
+    <div id="view-schedule" class="view">
+      <h2>Allowed Hours Schedule</h2>
+      <div class="table-container" id="schedule-table"></div>
+      <div class="add-form">
+        <h3>Add Allowed Hours Rule</h3>
+        <select id="schedule-day">
+          <option value="Weekday">Weekday (Mon-Fri)</option>
+          <option value="Weekend">Weekend (Sat-Sun)</option>
+          <option value="Monday">Monday</option>
+          <option value="Tuesday">Tuesday</option>
+          <option value="Wednesday">Wednesday</option>
+          <option value="Thursday">Thursday</option>
+          <option value="Friday">Friday</option>
+          <option value="Saturday">Saturday</option>
+          <option value="Sunday">Sunday</option>
+          <option value="Everyday">Everyday</option>
+        </select>
+        <input type="time" id="schedule-start" value="15:00">
+        <input type="time" id="schedule-end" value="21:00">
+        <button id="schedule-save">Add</button>
+      </div>
+    </div>
+    <div id="view-logs" class="view">
+      <h2>Event Log</h2>
+      <div class="logs-toolbar">
+        <button id="logs-refresh" class="btn-secondary">Refresh</button>
+        <label>Show
+          <select id="logs-count">
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="500">500</option>
+            <option value="1000">1000</option>
+          </select>
+        </label>
+        <label>Filter
+          <input type="text" id="logs-filter" placeholder="INFO, WARN, ERROR, app name..." style="width:200px">
+        </label>
+        <button id="logs-clear" class="btn-danger">Clear History</button>
+      </div>
+      <div class="logs-stats" id="logs-stats"></div>
+      <div class="logs-container" id="logs-container">
+        <pre id="logs-output" class="logs-output"></pre>
+      </div>
+    </div>
+    <div id="view-settings" class="view">
+      <h2>Settings</h2>
+      <form class="settings-form" autocomplete="off" onsubmit="return false">
+        <label>Kill Delay (seconds)</label>
+        <input type="number" id="set-kill-delay" min="5" max="300">
+        <label>Show warning on child's PC</label>
+        <select id="set-show-warning"><option value="true">Yes</option><option value="false">No</option></select>
+        <label>Warning message on child's PC</label>
+        <input type="text" id="set-warning-msg" placeholder="Time's up! This app will close soon." style="width:400px">
+        <label>Admin password</label>
+        <input type="password" id="set-admin-pw" placeholder="Set or change admin password" autocomplete="new-password" style="width:350px">
+        <label>Current admin password</label>
+        <input type="password" id="set-admin-current-pw" placeholder="Required when changing password" autocomplete="current-password" style="width:350px">
+        <button id="settings-admin-password" class="btn-secondary">Save Admin Password</button>
+        <span id="admin-password-result" style="margin-left:10px;font-size:13px"></span>
+        <label>Webhook URL (optional)</label>
+        <input type="url" id="set-webhook-url" placeholder="https://hooks.example.com/alert" style="width:400px">
+        <p style="font-size:12px;color:#666">POST&#8203;ed with JSON when limits are breached. Use Discord webhooks, ntfy.sh, Pushover, or your own endpoint.</p>
+        <hr>
+        <h3>Email Notifications &amp; Control (Gmail)</h3>
+        <p style="font-size:12px;color:#888">Requires an <a href="https://support.google.com/accounts/answer/185833" target="_blank" style="color:#7c7cff">App Password</a> (enable 2FA, generate app password).</p>
+        <label>Gmail Address</label>
+        <input type="email" id="set-email-addr" placeholder="you@gmail.com" style="width:350px">
+        <label>App Password</label>
+        <input type="password" id="set-email-pw" placeholder="16-char app password" autocomplete="new-password" style="width:350px">
+        <label>Allowed command senders</label>
+        <input type="text" id="set-email-allowed-sender" placeholder="parent@gmail.com, other@gmail.com" style="width:350px">
+        <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
+          <input type="checkbox" id="set-email-notify" style="width:auto"> Send email alerts on breach/kill
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
+          <input type="checkbox" id="set-email-start-notify" style="width:auto"> Send email when a limited app starts
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
+          <input type="checkbox" id="set-email-control" style="width:auto"> Control via email (reply with commands)
+        </label>
+        <p style="font-size:12px;color:#888">Email commands must start with <code style="font-size:11px">mc:</code>, for example <code style="font-size:11px">mc: status</code>, <code style="font-size:11px">mc: set [app] [min] min</code>, <code style="font-size:11px">mc: set schedule [day] [start]-[end]</code>, <code style="font-size:11px">mc: set kill-delay [sec]</code>, <code style="font-size:11px">mc: add [proc.exe] [name]</code></p>
+        <button id="settings-email-test" class="btn-secondary">Test Email</button>
+        <button id="settings-email-start-test" class="btn-secondary">Test App Start Email</button>
+        <button id="settings-email-start-reset" class="btn-secondary">Reset App Start Emails</button>
+        <span id="email-test-result" style="margin-left:10px;font-size:13px"></span>
+        <hr>
+        <button id="settings-save">Save Settings</button>
+        <button id="settings-webhook-test" class="btn-secondary">Test Webhook</button>
+        <span id="webhook-test-result" style="margin-left:10px;font-size:13px"></span>
+        <hr>
+        <h3>How to access</h3>
+        <p>From another PC on your network, open:<br>
+        <code id="access-url">http://CHILD_PC_IP:5000</code></p>
+        <p id="admin-token-note" style="font-size:12px;color:#888"></p>
+        <p>On the child's PC, press <strong>Ctrl+Alt+H</strong> to open this dashboard.</p>
+      </form>
+    </div>
+  </main>
+</div>
+<script src="dashboard.js"></script>
+</body>
+</html>

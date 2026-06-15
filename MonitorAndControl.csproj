@@ -1,0 +1,42 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>SystemHelper</AssemblyName>
+    <RootNamespace>MonitorAndControl</RootNamespace>
+    <StartupObject>MonitorAndControl.Program</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Watchdog\**\*.cs" />
+    <None Remove="Watchdog\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MailKit" Version="4.17.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="Web/wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CopyAssetsAfterPublish" AfterTargets="Publish">
+    <Copy SourceFiles="appsettings.json" DestinationFiles="$(PublishDir)appsettings.json" />
+    <ItemGroup>
+      <WwwrootFiles Include="Web/wwwroot/**" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WwwrootFiles)" DestinationFiles="$([System.IO.Path]::Combine('$(PublishDir)', 'wwwroot', '%(RecursiveDir)%(Filename)%(Extension)'))" />
+    <RemoveDir Directories="$(PublishDir)Web" Condition="Exists('$(PublishDir)Web')" />
+  </Target>
+
+</Project>

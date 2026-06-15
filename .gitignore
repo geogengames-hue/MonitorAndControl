@@ -1,0 +1,19 @@
+# Build
+bin/
+obj/
+
+# IDE
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+# Publish output
+**/publish/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Runtime
+*.log
