@@ -65,6 +65,15 @@ public class LimitEnforcer
             KillAppProcesses(app);
             OnAppKilled?.Invoke(app);
         }
+
+        // Child closed and reopened app during countdown — kill immediately
+        if (!_exceededToday.ContainsKey(app) && _activeCountdowns.ContainsKey(app.ToLowerInvariant()) && IsProcessRunning(proc))
+        {
+            CancelCountdown(app);
+            _exceededToday[app] = today;
+            KillAppProcesses(app);
+            OnAppKilled?.Invoke(app);
+        }
     }
 
     public async Task EnforceAsync(

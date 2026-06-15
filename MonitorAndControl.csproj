@@ -7,14 +7,20 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
-    <AssemblyName>SystemHelper</AssemblyName>
+    <AssemblyName>DeviceMon</AssemblyName>
     <RootNamespace>MonitorAndControl</RootNamespace>
     <StartupObject>MonitorAndControl.Program</StartupObject>
+    <Company>DeviceMon</Company>
+    <Product>DeviceMon</Product>
+    <Description>Local parental monitoring and app limit dashboard</Description>
+    <AssemblyTitle>DeviceMon</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Remove="Watchdog\**\*.cs" />
+    <Compile Remove="PopupHost\**\*.cs" />
     <None Remove="Watchdog\**\*" />
+    <None Remove="PopupHost\**\*" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +30,7 @@
   <ItemGroup>
     <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.4" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

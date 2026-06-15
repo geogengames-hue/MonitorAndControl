@@ -4,24 +4,168 @@ using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using System.Text;
 
-namespace SystemHelperWatchdog;
+namespace MonitorAndControlWatchdog;
 
 internal static class Program
 {
+    internal const string ServiceName = "GameHost";
+    internal const string LegacyServiceName = "MonitorAndControlWatchdog";
+    internal const string OlderServiceName = "SystemHelperWatchdog";
+    internal const string MonitorExeName = "DeviceMon.exe";
+    internal const string WatchdogExeName = "GameHost.exe";
+    internal const string LegacyMonitorExeName = "MonitorAndControl.exe";
+    internal const string LegacyWatchdogExeName = "MonitorAndControlWatchdog.exe";
+    internal const string OlderMonitorExeName = "SystemHelper.exe";
+    internal const string OlderWatchdogExeName = "SystemHelperWatchdog.exe";
+
     public static void Main(string[] args)
     {
+        if (args.Contains("--install", StringComparer.OrdinalIgnoreCase))
+        {
+            InstallService(args);
+            return;
+        }
+        if (args.Contains("--update", StringComparer.OrdinalIgnoreCase))
+        {
+            UpdateService(args);
+            return;
+        }
+        if (args.Contains("--uninstall", StringComparer.OrdinalIgnoreCase))
+        {
+            UninstallService();
+            return;
+        }
+
         var options = WatchdogOptions.Parse(args);
         if (args.Contains("--console", StringComparer.OrdinalIgnoreCase) || Environment.UserInteractive)
         {
             using var watchdog = new WatchdogService(options);
             watchdog.StartForConsole();
-            Console.WriteLine("SystemHelper watchdog running. Press Enter to stop.");
+            Console.WriteLine("GameHost watchdog running. Press Enter to stop.");
             Console.ReadLine();
             watchdog.StopForConsole();
             return;
         }
 
         ServiceBase.Run(new WatchdogService(options));
+    }
+
+    private static bool IsElevated()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        var principal = new System.Security.Principal.WindowsPrincipal(identity);
+        return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+    }
+
+    private static void InstallService(string[] args)
+    {
+        if (!IsElevated())
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = Environment.ProcessPath!,
+                Arguments = string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)),
+                UseShellExecute = true,
+                Verb = "runas"
+            };
+            try { Process.Start(psi)?.WaitForExit(); }
+            catch { }
+            return;
+        }
+
+        var options = WatchdogOptions.Parse(args);
+        var exePath = Path.Combine(AppContext.BaseDirectory, WatchdogExeName);
+        if (!File.Exists(exePath))
+            exePath = options.MonitorPath.Replace(MonitorExeName, WatchdogExeName);
+        if (!File.Exists(exePath))
+            exePath = options.MonitorPath.Replace(LegacyMonitorExeName, LegacyWatchdogExeName);
+        if (!File.Exists(exePath))
+            exePath = options.MonitorPath.Replace(OlderMonitorExeName, OlderWatchdogExeName);
+
+        RunSc($"stop {LegacyServiceName}");
+        RunSc($"delete {LegacyServiceName}");
+        RunSc($"stop {OlderServiceName}");
+        RunSc($"delete {OlderServiceName}");
+        RunSc($"stop {ServiceName}");
+        RunSc($"delete {ServiceName}");
+        var scCreate = $"create {ServiceName} binPath= \"{exePath}\" start= auto DisplayName= \"GameHost\"";
+        RunSc(scCreate);
+        RunSc($"description {ServiceName} \"Restarts DeviceMon.exe if it is stopped.\"");
+        Thread.Sleep(1000);
+        RunSc($"start {ServiceName}");
+        Console.WriteLine("Watchdog service installed and started.");
+    }
+
+    private static void UpdateService(string[] args)
+    {
+        if (!IsElevated())
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = Environment.ProcessPath!,
+                Arguments = string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)),
+                UseShellExecute = true,
+                Verb = "runas"
+            };
+            try { Process.Start(psi)?.WaitForExit(); }
+            catch { }
+            return;
+        }
+
+        var options = WatchdogOptions.Parse(args);
+        var exePath = Path.Combine(AppContext.BaseDirectory, WatchdogExeName);
+        if (!File.Exists(exePath))
+            exePath = options.MonitorPath.Replace(MonitorExeName, WatchdogExeName);
+        if (!File.Exists(exePath))
+            exePath = options.MonitorPath.Replace(LegacyMonitorExeName, LegacyWatchdogExeName);
+        if (!File.Exists(exePath))
+            exePath = options.MonitorPath.Replace(OlderMonitorExeName, OlderWatchdogExeName);
+
+        RunSc($"config {ServiceName} binPath= \"{exePath}\"");
+        Console.WriteLine("Watchdog service path updated.");
+    }
+
+    private static void UninstallService()
+    {
+        if (!IsElevated())
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = Environment.ProcessPath!,
+                Arguments = "--uninstall",
+                UseShellExecute = true,
+                Verb = "runas"
+            };
+            try { Process.Start(psi)?.WaitForExit(); }
+            catch { }
+            return;
+        }
+
+        RunSc($"stop {ServiceName}");
+        RunSc($"stop {LegacyServiceName}");
+        RunSc($"stop {OlderServiceName}");
+        Thread.Sleep(1000);
+        RunSc($"delete {ServiceName}");
+        RunSc($"delete {LegacyServiceName}");
+        RunSc($"delete {OlderServiceName}");
+        Console.WriteLine("Watchdog service removed.");
+    }
+
+    private static void RunSc(string arguments)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("sc", arguments)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(10000);
+        }
+        catch { }
     }
 }
 
@@ -35,7 +179,7 @@ internal sealed class WatchdogService : ServiceBase
     public WatchdogService(WatchdogOptions options)
     {
         _options = options;
-        ServiceName = "SystemHelperWatchdog";
+        ServiceName = Program.ServiceName;
         CanStop = true;
         CanShutdown = true;
         _timer = new System.Threading.Timer(CheckMonitor, null, Timeout.Infinite, Timeout.Infinite);
@@ -222,7 +366,7 @@ internal sealed record WatchdogOptions(string MonitorPath, int IntervalSeconds, 
 
     public static WatchdogOptions Parse(string[] args)
     {
-        var monitorPath = Path.Combine(AppContext.BaseDirectory, "SystemHelper.exe");
+        var monitorPath = Path.Combine(AppContext.BaseDirectory, Program.MonitorExeName);
         var interval = 15;
         var dataDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),

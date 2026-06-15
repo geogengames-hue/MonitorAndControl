@@ -11,6 +11,14 @@ namespace MonitorAndControl;
 
 internal static class Program
 {
+    private const string AppName = "DeviceMon";
+    private const string LegacyAppName = "SystemHelper";
+    private const string WatchdogServiceName = "GameHost";
+    private const string LegacyWatchdogServiceName = "MonitorAndControlWatchdog";
+    private const string WatchdogExeName = "GameHost.exe";
+    private const string LegacyWatchdogExeName = "MonitorAndControlWatchdog.exe";
+    private const string OlderWatchdogExeName = "SystemHelperWatchdog.exe";
+
     private static UsageDatabase? _db;
     private static WindowTracker? _tracker;
     private static UsageTracker? _usageTracker;
@@ -27,7 +35,7 @@ internal static class Program
     static void Main(string[] args)
     {
         // Single-instance check
-        _instanceMutex = new Mutex(true, "SystemHelper_MonitorAndControl", out var createdNew);
+        _instanceMutex = new Mutex(true, "DeviceMon_SingleInstance", out var createdNew);
         if (!createdNew)
         {
             Logger.Instance.Warn("Another instance already running — exiting");
@@ -43,6 +51,7 @@ internal static class Program
             var config = LoadConfig();
             Initialize(config).GetAwaiter().GetResult();
             RegisterAutoStart();
+            EnsureWatchdogInstalled();
             StartServices(config);
 
             var (mods, key) = HotKeyService.ParseHotKey(config.HotKeyModifiers, config.HotKeyKey);
@@ -105,7 +114,7 @@ internal static class Program
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
-            return key?.GetValue("SystemHelper") != null;
+            return key?.GetValue(AppName) != null || key?.GetValue(LegacyAppName) != null;
         }
         catch { return false; }
     }
@@ -120,12 +129,99 @@ internal static class Program
             {
                 var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
                 if (exePath != null)
-                    key.SetValue("SystemHelper", $"\"{exePath}\"");
+                {
+                    key.SetValue(AppName, $"\"{exePath}\"");
+                    key.DeleteValue(LegacyAppName, false);
+                }
             }
             else
-                key.DeleteValue("SystemHelper", false);
+            {
+                key.DeleteValue(AppName, false);
+                key.DeleteValue(LegacyAppName, false);
+            }
         }
         catch { }
+    }
+
+    private static void EnsureWatchdogInstalled()
+    {
+        try
+        {
+            var watchdogPath = GetWatchdogPath();
+            if (string.IsNullOrEmpty(watchdogPath)) return;
+            var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (exePath == null) return;
+
+            using var sc = new System.ServiceProcess.ServiceController(WatchdogServiceName);
+            _ = sc.Status;
+            // Service exists — check if binPath matches current location
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                    $@"SYSTEM\CurrentControlSet\Services\{WatchdogServiceName}");
+                var currentBinPath = key?.GetValue("ImagePath") as string ?? "";
+                if (currentBinPath.Trim('"').Equals(watchdogPath, StringComparison.OrdinalIgnoreCase))
+                    return; // Path matches, nothing to do
+
+                Logger.Instance.Info("Watchdog path changed, updating service...");
+                var psi = new ProcessStartInfo
+                {
+                    FileName = watchdogPath,
+                    Arguments = $"--update --monitor \"{exePath}\"",
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                using var proc = Process.Start(psi);
+                proc?.WaitForExit(30000);
+                Logger.Instance.Info("Watchdog service path updated");
+            }
+            catch { return; }
+            return;
+        }
+        catch (InvalidOperationException) { }
+
+        try
+        {
+            var watchdogPath = GetWatchdogPath();
+            if (string.IsNullOrEmpty(watchdogPath)) return;
+            var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (exePath == null) return;
+
+            Logger.Instance.Info("Installing watchdog service...");
+            var psi = new ProcessStartInfo
+            {
+                FileName = watchdogPath,
+                Arguments = $"--install --monitor \"{exePath}\"",
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(30000);
+            Logger.Instance.Info("Watchdog service installation completed");
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to install watchdog: {ex.Message}");
+        }
+    }
+
+    private static string GetWatchdogPath()
+    {
+        var dir = AppContext.BaseDirectory;
+        var path = Path.Combine(dir, WatchdogExeName);
+        if (File.Exists(path)) return path;
+        path = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? dir, WatchdogExeName);
+        if (File.Exists(path)) return path;
+        path = Path.Combine(dir, LegacyWatchdogExeName);
+        if (File.Exists(path)) return path;
+        path = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? dir, LegacyWatchdogExeName);
+        if (File.Exists(path)) return path;
+        path = Path.Combine(dir, OlderWatchdogExeName);
+        if (File.Exists(path)) return path;
+        path = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? dir, OlderWatchdogExeName);
+        return File.Exists(path) ? path : "";
     }
 
     public static void Shutdown()

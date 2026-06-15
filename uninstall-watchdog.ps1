@@ -1,14 +1,16 @@
 # Run as Administrator.
 param(
-    [string]$ServiceName = 'SystemHelperWatchdog'
+    [string]$ServiceName = 'GameHost'
 )
 
-$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if (-not $existing) {
-    Write-Host "$ServiceName is not installed."
-    return
-}
+foreach ($name in @($ServiceName, 'MonitorAndControlWatchdog', 'SystemHelperWatchdog')) {
+    $existing = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if (-not $existing) {
+        Write-Host "$name is not installed."
+        continue
+    }
 
-Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-sc.exe delete $ServiceName | Out-Null
-Write-Host "Removed $ServiceName."
+    Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
+    sc.exe delete $name | Out-Null
+    Write-Host "Removed $name."
+}

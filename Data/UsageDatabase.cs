@@ -381,6 +381,19 @@ public class UsageDatabase : IDisposable
         finally { _lock.Release(); }
     }
 
+    public async Task DeleteAppUsageAsync(string appName)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM UsageRecords WHERE AppName = @app";
+            cmd.Parameters.AddWithValue("@app", appName);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
     public async Task InitializeDefaults(AppConfig config)
     {
         var existing = await GetLimitRulesAsync();

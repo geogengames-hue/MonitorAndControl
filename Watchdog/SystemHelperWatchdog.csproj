@@ -6,7 +6,11 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>SystemHelperWatchdog</AssemblyName>
+    <AssemblyName>GameHost</AssemblyName>
+    <Company>DeviceMon</Company>
+    <Product>GameHost</Product>
+    <Description>Watchdog service for DeviceMon</Description>
+    <AssemblyTitle>GameHost</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>

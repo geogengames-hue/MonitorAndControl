@@ -63,6 +63,7 @@ public class DashboardServer
         {
             if (ctx.Request.Path.StartsWithSegments("/api") &&
                 !ctx.Request.Path.StartsWithSegments("/api/auth") &&
+                !ctx.Request.Path.StartsWithSegments("/api/health") &&
                 _adminPasswordSet)
             {
                 var auth = RequireWriteAccess(ctx);
@@ -124,6 +125,14 @@ public class DashboardServer
 
         app.MapGet("/api/auth/status", () =>
             Results.Ok(new { passwordSet = _adminPasswordSet }));
+
+        app.MapGet("/api/health", () =>
+            Results.Ok(new
+            {
+                status = "ok",
+                machine = Environment.MachineName,
+                timestamp = DateTimeOffset.Now
+            }));
 
         app.MapPost("/api/auth/password", async (HttpContext ctx) =>
         {
@@ -237,6 +246,7 @@ public class DashboardServer
             var appName = tracker.KnownApps.TryGetValue(processName, out var name)
                 ? name : Path.GetFileNameWithoutExtension(processName);
             enforcer.ClearExceeded(appName);
+            await db.DeleteAppUsageAsync(appName);
 
             await db.DeleteAppMappingAsync(processName);
             // Rebuild tracker mappings from config + remaining dynamic
