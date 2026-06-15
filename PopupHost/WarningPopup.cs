@@ -1,4 +1,4 @@
-namespace MonitorAndControl.Services;
+namespace PopupHost;
 
 public class WarningPopup : Form
 {
@@ -7,7 +7,7 @@ public class WarningPopup : Form
     private readonly System.Windows.Forms.Timer _timer;
     private int _secondsRemaining;
 
-    public WarningPopup(string appName, int totalSeconds, string? message = null)
+    public WarningPopup(string appName, int totalSeconds, string message)
     {
         _secondsRemaining = totalSeconds;
 
@@ -26,10 +26,9 @@ public class WarningPopup : Form
             Padding = new Padding(20)
         };
 
-        var displayMessage = message ?? $"{appName} time limit reached!";
         _messageLabel = new Label
         {
-            Text = displayMessage,
+            Text = message,
             ForeColor = Color.FromArgb(255, 200, 100),
             Font = new Font("Segoe UI", 16, FontStyle.Bold),
             Dock = DockStyle.Top,
@@ -39,7 +38,7 @@ public class WarningPopup : Form
 
         _countdownLabel = new Label
         {
-            Text = $"Closing in {totalSeconds} seconds...",
+            Text = $"Closing {appName} in {totalSeconds} seconds...",
             ForeColor = Color.White,
             Font = new Font("Segoe UI", 20, FontStyle.Bold),
             Dock = DockStyle.Fill,
@@ -57,17 +56,20 @@ public class WarningPopup : Form
             if (_secondsRemaining <= 0)
             {
                 _timer.Stop();
-                Close();
+                _countdownLabel.Text = "Closing...";
+                var closeTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+                closeTimer.Tick += (_, __) => { closeTimer.Stop(); Close(); };
+                closeTimer.Start();
             }
             else
             {
-                _countdownLabel.Text = $"Closing in {_secondsRemaining} seconds...";
+                _countdownLabel.Text = $"Closing {appName} in {_secondsRemaining} seconds...";
             }
         };
         _timer.Start();
     }
 
-        protected override void OnLoad(EventArgs e)
+    protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
         var screen = Screen.PrimaryScreen?.WorkingArea;

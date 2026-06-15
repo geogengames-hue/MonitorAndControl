@@ -24,19 +24,47 @@ public class Logger
     public void Warn(string message) => Write("WARN", message);
     public void Error(string message) => Write("ERROR", message);
 
+    private const long MaxFileSize = 2 * 1024 * 1024; // 2 MB (~1 week)
+    private const int KeepLines = 15000;
+
     private void Write(string level, string message)
     {
         var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}";
         lock (_lock)
         {
-            try { File.AppendAllText(_logPath, line + Environment.NewLine); } catch { }
+            try
+            {
+                File.AppendAllText(_logPath, line + Environment.NewLine);
+                TrimIfOversized();
+            }
+            catch { }
         }
         _recent.Enqueue(line);
         if (_recent.Count > MaxRecent)
             _recent.TryDequeue(out _);
     }
 
-    public string[] GetRecent(int count = 200) => _recent.Reverse().Take(count).Reverse().ToArray();
+    private void TrimIfOversized()
+    {
+        var fi = new FileInfo(_logPath);
+        if (!fi.Exists || fi.Length <= MaxFileSize) return;
+
+        var allLines = File.ReadAllLines(_logPath);
+        if (allLines.Length <= KeepLines) return;
+
+        var kept = allLines[^KeepLines..];
+        File.WriteAllLines(_logPath, kept);
+    }
+
+    public string[] GetRecent(int count = 200)
+    {
+        try
+        {
+            if (!File.Exists(_logPath)) return [];
+            return File.ReadAllLines(_logPath).Reverse().Take(count).Reverse().ToArray();
+        }
+        catch { return []; }
+    }
 
     public string[] GetAll()
     {

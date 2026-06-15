@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Win32;
 using MonitorAndControl.Data;
@@ -172,8 +173,6 @@ internal static class Program
         }
     }
 
-    private static WarningPopup? _activePopup;
-
     private static async Task SendWatchdogRestartAlertAsync()
     {
         try
@@ -203,14 +202,30 @@ internal static class Program
             var showWarning = await _db!.GetShowWarningAsync();
             if (!showWarning) return;
             var warningMsg = await _db!.GetWarningMessageAsync();
-            if (_hiddenForm != null && !_hiddenForm.IsDisposed)
+            var exeDir = AppContext.BaseDirectory;
+            var popupPath = Path.Combine(exeDir, "PopupHost.exe");
+            if (!File.Exists(popupPath))
             {
-                _hiddenForm.BeginInvoke(() =>
+                // Fallback: try next to the published exe
+                popupPath = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? exeDir, "PopupHost.exe");
+            }
+            if (File.Exists(popupPath))
+            {
+                var input = System.Text.Json.JsonSerializer.Serialize(new
                 {
-                    _activePopup?.Close();
-                    _activePopup = new WarningPopup(appName, delaySeconds, warningMsg);
-                    _activePopup.Show();
+                    appName,
+                    delay = delaySeconds,
+                    message = warningMsg
                 });
+                var psi = new ProcessStartInfo
+                {
+                    FileName = popupPath,
+                    Arguments = input,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                };
+                Process.Start(psi);
             }
         }
         catch { }
@@ -218,18 +233,7 @@ internal static class Program
 
     private static void OnAppKilled(string appName)
     {
-        try
-        {
-            if (_hiddenForm != null && !_hiddenForm.IsDisposed)
-            {
-                _hiddenForm.BeginInvoke(() =>
-                {
-                    _activePopup?.Close();
-                    _activePopup = null;
-                });
-            }
-        }
-        catch { }
+        // Popup is handled by separate PopupHost process
     }
 
     private static async Task Cleanup()

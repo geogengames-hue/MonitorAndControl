@@ -59,10 +59,7 @@ public class UsageTracker : IDisposable
         if (elapsed is < 1000 or > 60000) return;
         var secs = (int)(elapsed / 1000);
         if (secs > 0)
-        {
             await _db.RecordUsageAsync(_lastApp, _lastProc ?? "unknown", secs);
-            Logger.Instance.Info($"Recorded {secs}s for {_lastApp}");
-        }
     }
 
     private async Task FlushAsync()
