@@ -11,16 +11,17 @@ static class Program
 
         if (args.Length < 1) return;
 
-        var input = string.Join(" ", args);
         try
         {
-            using var doc = JsonDocument.Parse(input);
+            var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(args[0]));
+            using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             var appName = root.GetProperty("appName").GetString() ?? "";
             var delay = root.GetProperty("delay").GetInt32();
             var message = root.GetProperty("message").GetString() ?? $"{appName} time limit reached!";
+            var proc = root.TryGetProperty("proc", out var p) ? p.GetString() ?? "" : "";
 
-            Application.Run(new WarningPopup(appName, delay, message));
+            Application.Run(new WarningPopup(appName, delay, message, proc));
         }
         catch
         {

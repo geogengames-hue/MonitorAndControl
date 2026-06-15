@@ -12,7 +12,7 @@ public class LimitEnforcer
     private readonly ConcurrentDictionary<string, string> _exceededToday = new(StringComparer.OrdinalIgnoreCase);
     private string _todayDate = DateTime.Now.ToString("yyyy-MM-dd");
 
-    public event Action<string, int>? OnBreachAlert;
+    public event Action<string, int, string>? OnBreachAlert;
     public event Action<string, int>? OnCountdownTick;
     public event Action<string>? OnAppKilled;
     public event Action<string>? OnAppTerminatedBySchedule;
@@ -46,8 +46,6 @@ public class LimitEnforcer
             if (maxSecs <= 0 || usage.TotalSeconds < maxSecs) continue;
 
             _exceededToday[limit.AppName] = today;
-            KillAppProcesses(limit.AppName);
-            OnAppKilled?.Invoke(limit.AppName);
         }
     }
 
@@ -127,11 +125,12 @@ public class LimitEnforcer
         var delay = await _db.GetKillDelayAsync();
         var cts = new CancellationTokenSource();
         var key = appName.ToLowerInvariant();
+        var procName = _tracker.GetProcessNameForApp(appName) ?? appName;
 
         if (!_activeCountdowns.TryAdd(key, cts))
             return;
 
-        OnBreachAlert?.Invoke(appName, delay);
+        OnBreachAlert?.Invoke(appName, delay, procName);
 
         try
         {

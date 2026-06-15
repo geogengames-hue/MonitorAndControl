@@ -378,6 +378,7 @@ public class DashboardServer
                 emailAllowedSender,
                 hostname,
                 localIps,
+                autoStart = Program.GetAutoStart(),
                 emailNotifyEnabled = emailNotifyEnabled == "true",
                 emailStartNotifyEnabled = emailStartNotifyEnabled == "true",
                 emailControlEnabled = emailControlEnabled == "true",
@@ -444,6 +445,8 @@ public class DashboardServer
                 await db.SetSettingAsync("EmailStartNotifyEnabled", esn.GetBoolean() ? "true" : "false");
             if (root.TryGetProperty("emailControlEnabled", out var ec))
                 await db.SetSettingAsync("EmailControlEnabled", ec.GetBoolean() ? "true" : "false");
+            if (root.TryGetProperty("autoStart", out var asv))
+                Program.SetAutoStart(asv.GetBoolean());
             // Always reload email config after save
             await emailService.LoadSettingsAsync();
             if (emailService.IsEnabled) emailService.StartPolling(); else emailService.StopPolling();
@@ -547,7 +550,7 @@ public class DashboardServer
                 catch { }
             }
 
-            enforcer.OnBreachAlert += (app, delay) => SendAlert("breach", app, delay);
+            enforcer.OnBreachAlert += (app, delay, proc) => SendAlert("breach", app, delay);
             enforcer.OnCountdownTick += (app, secs) => SendAlert("countdown", app, secs);
             enforcer.OnAppKilled += (app) => SendAlert("killed", app);
             enforcer.OnAppTerminatedBySchedule += (app) => SendAlert("schedule_kill", app);

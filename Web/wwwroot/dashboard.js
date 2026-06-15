@@ -690,6 +690,7 @@ async function loadSettings() {
     document.getElementById('set-webhook-url').value = s.webhookUrl || '';
     document.getElementById('set-email-addr').value = s.emailAddress || '';
     document.getElementById('set-email-allowed-sender').value = s.emailAllowedSender || s.emailAddress || '';
+    document.getElementById('set-auto-start').checked = s.autoStart;
     document.getElementById('set-email-notify').checked = s.emailNotifyEnabled;
     document.getElementById('set-email-start-notify').checked = s.emailStartNotifyEnabled;
     document.getElementById('set-email-control').checked = s.emailControlEnabled;
@@ -740,7 +741,8 @@ document.getElementById('settings-save').addEventListener('click', async () => {
   const emailNotifyEnabled = document.getElementById('set-email-notify').checked;
   const emailStartNotifyEnabled = document.getElementById('set-email-start-notify').checked;
   const emailControlEnabled = document.getElementById('set-email-control').checked;
-  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled };
+  const autoStart = document.getElementById('set-auto-start').checked;
+  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, autoStart, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled };
   if (emailPassword) payload.emailPassword = emailPassword;
   await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   document.getElementById('set-email-pw').value = '';
