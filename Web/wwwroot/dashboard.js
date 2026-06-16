@@ -6,6 +6,8 @@ let currentDays = 7;
 let historyRaw = [];
 let historyFiltered = [];
 let historyRange = { mode: 'days', days: 7, from: '', to: '' };
+let alertEventSource = null;
+let alertReconnectTimer = null;
 
 // Discover
 document.getElementById('discover-scan').addEventListener('click', loadDiscover);
@@ -114,10 +116,19 @@ let todayTimer = null;
 
 // SSE alerts
 function connectSSE() {
+  if (alertEventSource) {
+    alertEventSource.close();
+    alertEventSource = null;
+  }
+  if (alertReconnectTimer) {
+    clearTimeout(alertReconnectTimer);
+    alertReconnectTimer = null;
+  }
   const token = sessionStorage.getItem('dashboardAdminToken') || '';
   const streamUrl = token ? `/api/alerts/stream?token=${encodeURIComponent(token)}` : '/api/alerts/stream';
   const evtSource = new EventSource(streamUrl);
-    evtSource.onmessage = e => {
+  alertEventSource = evtSource;
+  evtSource.onmessage = e => {
     try { handleAlert(JSON.parse(e.data)); } catch (e) { log(e); }
   };
   evtSource.addEventListener('breach', e => {
@@ -132,7 +143,12 @@ function connectSSE() {
   evtSource.addEventListener('schedule_kill', e => {
     try { handleAlert(JSON.parse(e.data)); } catch (e) { log(e); }
   });
-  evtSource.onerror = () => setTimeout(connectSSE, 5000);
+  evtSource.onerror = () => {
+    evtSource.close();
+    if (alertEventSource === evtSource) alertEventSource = null;
+    if (!alertReconnectTimer)
+      alertReconnectTimer = setTimeout(connectSSE, 5000);
+  };
 }
 
 function handleAlert(data) {
@@ -265,6 +281,40 @@ document.getElementById('action-reset-today').addEventListener('click', () =>
 document.getElementById('action-block-all').addEventListener('click', () =>
   runQuickAction('block-all', null, 'Close all running tracked apps now?'));
 
+document.getElementById('quick-extend-15').addEventListener('click', () => quickExtend(15));
+document.getElementById('quick-extend-30').addEventListener('click', () => quickExtend(30));
+document.getElementById('quick-extend-bedtime').addEventListener('click', quickExtendUntilBedtime);
+
+async function quickExtend(minutes) {
+  const appName = document.getElementById('quick-extend-app').value;
+  if (!appName) {
+    alert('Choose an app first.');
+    return;
+  }
+  await grantBonus(appName, minutes);
+}
+
+async function quickExtendUntilBedtime() {
+  const appName = document.getElementById('quick-extend-app').value;
+  if (!appName) {
+    alert('Choose an app first.');
+    return;
+  }
+  try {
+    await api('/api/bonus/until-bedtime', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appName })
+    });
+    loadLimits();
+    loadLiveToday();
+    loadToday();
+  } catch (e) {
+    log(e);
+    alert('Failed to extend until bedtime.');
+  }
+}
+
 async function loadLiveToday() {
   try {
     const usage = await api('/api/usage/today');
@@ -274,8 +324,10 @@ async function loadLiveToday() {
     list.innerHTML = '';
     if (usage.length === 0) {
       list.innerHTML = '<div class="live-app-item"><span class="name" style="color:#666">No activity yet today</span></div>';
+      syncQuickExtendApps(limits, usage);
       return;
     }
+    syncQuickExtendApps(limits, usage);
     usage.forEach(u => {
       const limit = limits.find(l => l.appName === u.appName);
       const bonus = bonuses.find(b => b.appName === u.appName)?.bonusMinutes || 0;
@@ -294,6 +346,19 @@ async function loadLiveToday() {
       list.appendChild(item);
     });
   } catch (e) { log(e); }
+}
+
+function syncQuickExtendApps(limits, usage) {
+  const select = document.getElementById('quick-extend-app');
+  if (!select) return;
+  const current = select.value;
+  const apps = [...new Set([
+    ...limits.map(l => l.appName),
+    ...usage.map(u => u.appName)
+  ])].filter(Boolean).sort();
+  select.innerHTML = '<option value="">Choose app</option>' +
+    apps.map(app => `<option value="${escAttr(app)}">${esc(app)}</option>`).join('');
+  if (apps.includes(current)) select.value = current;
 }
 
 // Today
@@ -782,8 +847,32 @@ async function loadSettings() {
     tokenNote.textContent = s.adminPasswordSet
       ? 'Dashboard changes and shutdown require the admin password.'
       : 'Set an admin password to protect dashboard changes and shutdown.';
+    loadHealth();
   } catch (e) { log(e); }
 }
+
+async function loadHealth() {
+  try {
+    const h = await api('/api/health');
+    const r = h.runtime || {};
+    const items = [
+      ['Watchdog', `${r.watchdog?.installed ? 'Installed' : 'Not installed'} (${r.watchdog?.status || 'unknown'})`],
+      ['Autostart', r.autoStart?.enabled ? 'Enabled' : 'Disabled'],
+      ['Dashboard', `${r.dashboard?.bindAddress || 'unknown'}:${r.dashboard?.port || ''}${r.dashboard?.remoteEnabled ? ' remote' : ' local'}`],
+      ['Email', r.email?.configured ? 'Configured' : 'Not configured'],
+      ['Database', `${r.database?.exists ? 'Found' : 'Missing'} - ${r.database?.path || ''}`]
+    ];
+    document.getElementById('health-status').innerHTML = items.map(([label, value]) =>
+      `<div class="health-item"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`
+    ).join('');
+  } catch (e) {
+    log(e);
+    document.getElementById('health-status').innerHTML =
+      '<div class="health-item"><div class="label">Health</div><div class="value">Unable to load</div></div>';
+  }
+}
+
+document.getElementById('settings-health-refresh').addEventListener('click', loadHealth);
 
 document.getElementById('settings-admin-password').addEventListener('click', async () => {
   const el = document.getElementById('admin-password-result');

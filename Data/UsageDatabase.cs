@@ -7,6 +7,7 @@ public class UsageDatabase : IDisposable
 {
     private readonly SqliteConnection _connection;
     private static readonly SemaphoreSlim _lock = new(1, 1);
+    public string DatabasePath { get; }
 
     public UsageDatabase(string? dbPath = null)
     {
@@ -25,7 +26,8 @@ public class UsageDatabase : IDisposable
                 Directory.CreateDirectory(folder);
         }
 
-        _connection = new SqliteConnection($"Data Source={dbPath}");
+        DatabasePath = Path.GetFullPath(dbPath);
+        _connection = new SqliteConnection($"Data Source={DatabasePath}");
         _connection.Open();
         Initialize();
     }

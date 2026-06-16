@@ -256,6 +256,7 @@ public class EmailService : IDisposable
   status                        - current limits, schedule, today's usage
   set [app] [minutes] min       - set daily limit (e.g. set aces 60 min)
   bonus [app] [minutes] min     - add bonus time today (e.g. bonus aces 15 min)
+  extend [app] until bedtime    - add enough time for the current allowed window
   set schedule [day] [start]-[end] - set schedule (e.g. set schedule weekday 22:00-06:00)
   set kill-delay [seconds]      - set kill delay
   add [process.exe] [appname]   - register a known app (e.g. add aces.exe Aces)
@@ -322,6 +323,32 @@ Prefix commands with mc:, for example: mc: status";
                 var total = await _db.AddTodayBonusMinutesAsync(appName, minutes);
                 _enforcer.ClearExceeded(appName);
                 return $"OK: Bonus time added: {appName} +{minutes} min today ({total} min total).";
+            }
+
+            var bedtimeMatch = Regex.Match(line, @"^(?:bonus|extend|allow)\s+(.+?)\s+(?:until\s+)?bedtime$", RegexOptions.IgnoreCase);
+            if (bedtimeMatch.Success)
+            {
+                var appName = bedtimeMatch.Groups[1].Value.Trim();
+                var limits = await _db.GetLimitRulesAsync();
+                var limit = limits.FirstOrDefault(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
+                if (limit == null)
+                    return $"Error: No limit found for {appName}.";
+
+                var now = DateTime.Now;
+                var rules = await _scheduler.GetRulesAsync();
+                var allowedUntil = SchedulerService.GetCurrentAllowedWindowEnd(rules, appName, now)
+                    ?? now.Date.AddDays(1);
+                if (allowedUntil <= now)
+                    return "Error: No remaining allowed time today.";
+
+                var usageSeconds = await _db.GetAppTodaySecondsAsync(appName);
+                var currentBonus = await _db.GetTodayBonusMinutesAsync(appName);
+                var currentAllowanceMinutes = limit.DailyMaxMinutes + currentBonus;
+                var desiredAllowanceMinutes = (int)Math.Ceiling((usageSeconds + (allowedUntil - now).TotalSeconds) / 60.0);
+                var minutesToAdd = Math.Clamp(desiredAllowanceMinutes - currentAllowanceMinutes, 1, 720);
+                var total = await _db.AddTodayBonusMinutesAsync(appName, minutesToAdd);
+                _enforcer.ClearExceeded(appName);
+                return $"OK: Bonus time added until bedtime: {appName} +{minutesToAdd} min today ({total} min total, until {allowedUntil:g}).";
             }
 
             // set schedule [day] [start]-[end]

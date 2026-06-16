@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Monitor & Control</title>
 <link rel="stylesheet" href="style.css">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="chart.umd.min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -41,6 +41,15 @@
           <button id="action-resume" class="btn-secondary">Resume</button>
           <button id="action-reset-today" class="btn-secondary">Reset Today</button>
           <button id="action-block-all" class="btn-danger">Block All Now</button>
+        </div>
+      </div>
+      <div class="live-card">
+        <div class="live-label">Extend App Time</div>
+        <div class="quick-actions">
+          <select id="quick-extend-app"><option value="">Choose app</option></select>
+          <button id="quick-extend-15" class="btn-secondary">+15m</button>
+          <button id="quick-extend-30" class="btn-secondary">+30m</button>
+          <button id="quick-extend-bedtime" class="btn-secondary">Until Bedtime</button>
         </div>
       </div>
       <div class="live-card">
@@ -229,6 +238,10 @@
         <p>From another PC on your network, open:<br>
         <code id="access-url">http://CHILD_PC_IP:5000</code></p>
         <p id="admin-token-note" style="font-size:12px;color:#888"></p>
+        <hr>
+        <h3>Health</h3>
+        <button id="settings-health-refresh" class="btn-secondary">Refresh Health</button>
+        <div id="health-status" class="health-grid"></div>
         <p>On the child's PC, press <strong>Ctrl+Alt+H</strong> to open this dashboard.</p>
       </form>
     </div>

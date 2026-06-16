@@ -25,9 +25,15 @@ static class Program
 
             Application.Run(new WarningPopup(appName, delay, message, proc, reason, detail));
         }
-        catch
+        catch (Exception ex)
         {
-            // Invalid args, silently exit
+            try
+            {
+                File.AppendAllText(
+                    Path.Combine(Path.GetTempPath(), "SystemHelper_popup_error.log"),
+                    $"{DateTime.Now}: {ex}{Environment.NewLine}");
+            }
+            catch { }
         }
     }
 }

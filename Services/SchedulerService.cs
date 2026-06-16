@@ -131,6 +131,41 @@ public class SchedulerService
         return null;
     }
 
+    public static DateTime? GetCurrentAllowedWindowEnd(IEnumerable<ScheduleRule> rules, string appName, DateTime now)
+    {
+        var matching = rules
+            .Where(r => r.Enabled &&
+                (string.IsNullOrWhiteSpace(r.AppName) ||
+                 r.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        DateTime? bestEnd = null;
+        foreach (var rule in matching)
+        {
+            if (!MatchesDay(rule, now.DayOfWeek))
+                continue;
+            if (!TimeSpan.TryParse(rule.StartTime, out var start) ||
+                !TimeSpan.TryParse(rule.EndTime, out var end))
+                continue;
+
+            var current = now.TimeOfDay;
+            var inside = end > start
+                ? current >= start && current < end
+                : current >= start || current < end;
+            if (!inside)
+                continue;
+
+            var endDate = now.Date.Add(end);
+            if (end <= start && current >= start)
+                endDate = endDate.AddDays(1);
+
+            if (bestEnd == null || endDate > bestEnd)
+                bestEnd = endDate;
+        }
+
+        return bestEnd;
+    }
+
     private static bool MatchesDay(ScheduleRule rule, DayOfWeek today) =>
         rule.DayOfWeek.ToLowerInvariant() switch
         {

@@ -143,7 +143,8 @@ public class DashboardServer
             {
                 status = "ok",
                 machine = Environment.MachineName,
-                timestamp = DateTimeOffset.Now
+                timestamp = DateTimeOffset.Now,
+                runtime = Program.GetRuntimeHealth(Program.GetConfig(), db, emailService)
             }));
 
         app.MapPost("/api/auth/password", async (HttpContext ctx) =>
@@ -353,19 +354,31 @@ public class DashboardServer
                             return !string.IsNullOrEmpty(p.MainWindowTitle) &&
                                    !knownKeys.Contains(name);
                         }
-                        catch { return false; }
+                        catch (Exception ex)
+                        {
+                            Logger.Instance.Error($"Failed to inspect process {p.Id}: {ex.Message}");
+                            return false;
+                        }
                     })
                     .Select(p =>
                     {
                         try { return new { name = p.ProcessName + ".exe", title = p.MainWindowTitle ?? "", pid = p.Id }; }
-                        catch { return null; }
+                        catch (Exception ex)
+                        {
+                            Logger.Instance.Error($"Failed to read process details for {p.Id}: {ex.Message}");
+                            return null;
+                        }
                     })
                     .Where(x => x != null)
                     .DistinctBy(x => x!.name)
                     .ToList();
                 return Results.Json(result, JsonOpts);
             }
-            catch { return Results.Json(new List<object>(), JsonOpts); }
+            catch (Exception ex)
+            {
+                Logger.Instance.Error($"Failed to enumerate running processes: {ex.Message}");
+                return Results.Json(new List<object>(), JsonOpts);
+            }
         });
 
         app.MapGet("/api/limits", async () =>
@@ -402,6 +415,53 @@ public class DashboardServer
             enforcer.ClearExceeded(appName);
             Logger.Instance.Warn($"Bonus time granted: {appName} +{minutes} min today ({totalBonusMinutes} min total)");
             return Results.Ok(new { status = "granted", appName, bonusMinutes = totalBonusMinutes });
+        });
+
+        app.MapPost("/api/bonus/until-bedtime", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+
+            string appName = "";
+            if (ctx.Request.ContentLength > 0)
+            {
+                using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+                if (doc.RootElement.TryGetProperty("appName", out var app))
+                    appName = Clean(app.GetString());
+            }
+
+            if (!IsValidAppName(appName))
+                return Results.BadRequest(new { error = "A valid app name is required." });
+
+            var limits = await db.GetLimitRulesAsync();
+            var limit = limits.FirstOrDefault(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
+            if (limit == null)
+                return Results.BadRequest(new { error = "Bonus time can only be granted to apps with a limit." });
+
+            var now = DateTime.Now;
+            var rules = await scheduler.GetRulesAsync();
+            var allowedUntil = SchedulerService.GetCurrentAllowedWindowEnd(rules, appName, now)
+                ?? now.Date.AddDays(1);
+            if (allowedUntil <= now)
+                return Results.BadRequest(new { error = "No remaining allowed time today." });
+
+            var usageSeconds = await db.GetAppTodaySecondsAsync(appName);
+            var currentBonus = await db.GetTodayBonusMinutesAsync(appName);
+            var currentAllowanceMinutes = limit.DailyMaxMinutes + currentBonus;
+            var desiredAllowanceMinutes = (int)Math.Ceiling((usageSeconds + (allowedUntil - now).TotalSeconds) / 60.0);
+            var minutesToAdd = Math.Clamp(desiredAllowanceMinutes - currentAllowanceMinutes, 1, 720);
+
+            var totalBonusMinutes = await db.AddTodayBonusMinutesAsync(appName, minutesToAdd);
+            enforcer.ClearExceeded(appName);
+            Logger.Instance.Warn($"Bonus time granted until bedtime: {appName} +{minutesToAdd} min today ({totalBonusMinutes} min total, until {allowedUntil:g})");
+            return Results.Ok(new
+            {
+                status = "granted",
+                appName,
+                addedMinutes = minutesToAdd,
+                bonusMinutes = totalBonusMinutes,
+                allowedUntil
+            });
         });
 
         app.MapPost("/api/limits", async (HttpContext ctx, AppLimitRule limit) =>
@@ -721,7 +781,10 @@ public class DashboardServer
                     ctx.Response.WriteAsync($"event: {type}\ndata: {data}\n\n", ct).Wait();
                     ctx.Response.Body.FlushAsync(ct).Wait();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Logger.Instance.Error($"SSE send failed for {type}/{appName}: {ex.Message}");
+                }
             }
 
             Action<string, int, string> breachHandler = (app, delay, proc) => SendAlert("breach", app, delay);

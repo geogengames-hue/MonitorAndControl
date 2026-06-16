@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text;
 
@@ -74,6 +76,7 @@ internal static class Program
         }
 
         var options = WatchdogOptions.Parse(args);
+        PrepareDataDirectory(options.DataDirectory);
         var exePath = Path.Combine(AppContext.BaseDirectory, WatchdogExeName);
         if (!File.Exists(exePath))
             exePath = options.MonitorPath.Replace(MonitorExeName, WatchdogExeName);
@@ -91,6 +94,7 @@ internal static class Program
         var scCreate = $"create {ServiceName} binPath= \"{exePath}\" start= auto DisplayName= \"GameHost\"";
         RunSc(scCreate);
         RunSc($"description {ServiceName} \"Restarts DeviceMon.exe if it is stopped.\"");
+        ConfigureServiceRecovery();
         Thread.Sleep(1000);
         RunSc($"start {ServiceName}");
         Console.WriteLine("Watchdog service installed and started.");
@@ -113,6 +117,7 @@ internal static class Program
         }
 
         var options = WatchdogOptions.Parse(args);
+        PrepareDataDirectory(options.DataDirectory);
         var exePath = Path.Combine(AppContext.BaseDirectory, WatchdogExeName);
         if (!File.Exists(exePath))
             exePath = options.MonitorPath.Replace(MonitorExeName, WatchdogExeName);
@@ -122,7 +127,9 @@ internal static class Program
             exePath = options.MonitorPath.Replace(OlderMonitorExeName, OlderWatchdogExeName);
 
         RunSc($"config {ServiceName} binPath= \"{exePath}\"");
-        Console.WriteLine("Watchdog service path updated.");
+        ConfigureServiceRecovery();
+        RunSc($"start {ServiceName}");
+        Console.WriteLine("Watchdog service path updated and started.");
     }
 
     private static void UninstallService()
@@ -167,6 +174,34 @@ internal static class Program
         }
         catch { }
     }
+
+    private static void ConfigureServiceRecovery()
+    {
+        RunSc($"failure {ServiceName} reset= 60 actions= restart/5000/restart/5000/restart/5000");
+        RunSc($"failureflag {ServiceName} 1");
+    }
+
+    internal static void PrepareDataDirectory(string dataDirectory)
+    {
+        Directory.CreateDirectory(dataDirectory);
+        try
+        {
+            var dirInfo = new DirectoryInfo(dataDirectory);
+            var security = dirInfo.GetAccessControl();
+            var users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+            var rule = new FileSystemAccessRule(
+                users,
+                FileSystemRights.Modify,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow);
+            security.AddAccessRule(rule);
+            dirInfo.SetAccessControl(security);
+        }
+        catch
+        {
+        }
+    }
 }
 
 internal sealed class WatchdogService : ServiceBase
@@ -190,7 +225,7 @@ internal sealed class WatchdogService : ServiceBase
 
     protected override void OnStart(string[] args)
     {
-        Directory.CreateDirectory(_options.DataDirectory);
+        Program.PrepareDataDirectory(_options.DataDirectory);
         Log($"Watchdog started. Monitor={_options.MonitorPath}");
         _timer.Change(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(_options.IntervalSeconds));
     }

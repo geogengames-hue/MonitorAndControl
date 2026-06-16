@@ -17,6 +17,9 @@ if (-not (Test-Path -LiteralPath $monitorExe)) {
 }
 
 $binPath = "`"$watchdogExe`" --monitor `"$monitorExe`" --interval $IntervalSeconds"
+$dataDir = 'C:\ProgramData\SystemHelper'
+New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+icacls.exe $dataDir /grant 'Users:(OI)(CI)M' | Out-Null
 
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
@@ -35,6 +38,8 @@ foreach ($legacyName in @('MonitorAndControlWatchdog', 'SystemHelperWatchdog')) 
 
 sc.exe create $ServiceName binPath= $binPath start= auto obj= LocalSystem DisplayName= "GameHost" | Out-Null
 sc.exe description $ServiceName "Restarts DeviceMon.exe if it is stopped." | Out-Null
+sc.exe failure $ServiceName reset= 60 actions= restart/5000/restart/5000/restart/5000 | Out-Null
+sc.exe failureflag $ServiceName 1 | Out-Null
 Start-Service -Name $ServiceName
 
 Write-Host "Installed and started $ServiceName."

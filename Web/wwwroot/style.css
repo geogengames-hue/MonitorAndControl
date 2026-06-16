@@ -166,6 +166,20 @@ input[type="checkbox"] { width: 18px; height: 18px; margin: 0; }
 .settings-form hr { border: none; border-top: 1px solid #2a2a3e; margin: 25px 0; }
 .settings-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
 .settings-row button { margin: 0; }
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.health-item {
+  background: #111827;
+  border: 1px solid #2a2a3e;
+  border-radius: 8px;
+  padding: 12px;
+}
+.health-item .label { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+.health-item .value { color: #e0e0e0; font-size: 13px; margin-top: 5px; overflow-wrap: anywhere; }
 code { background: #2a2a3e; padding: 3px 8px; border-radius: 4px; font-size: 14px; }
 p { margin: 10px 0; color: #aaa; line-height: 1.5; }
 
@@ -211,5 +225,5 @@ p { margin: 10px 0; color: #aaa; line-height: 1.5; }
   .app { flex-direction: column; }
   .sidebar { width: 100%; }
   .main { padding: 20px; }
-  .history-stats, .history-grid { grid-template-columns: 1fr; }
+  .history-stats, .history-grid, .health-grid { grid-template-columns: 1fr; }
 }

@@ -8,6 +8,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Scheduler blocks time outside same-day window", TestSchedulerOutsideSameDayWindow),
     ("Scheduler handles overnight windows", TestSchedulerOvernightWindow),
     ("Scheduler finds next allowed time", TestSchedulerNextAllowedTime),
+    ("Scheduler finds current allowed window end", TestSchedulerCurrentAllowedWindowEnd),
     ("Usage database accumulates daily app usage", TestUsageDatabaseAccumulatesUsage),
     ("Usage database clears today's usage", TestUsageDatabaseClearsToday),
     ("Usage database tracks and clears daily bonus time", TestUsageDatabaseTracksBonusTime),
@@ -91,6 +92,29 @@ static Task TestSchedulerNextAllowedTime()
     now = new DateTime(2026, 6, 16, 22, 0, 0);
     next = SchedulerService.GetNextAllowedTime(rules, now);
     AssertEqual(new DateTime(2026, 6, 17, 15, 0, 0), next, "Expected next allowed time tomorrow.");
+
+    return Task.CompletedTask;
+}
+
+static Task TestSchedulerCurrentAllowedWindowEnd()
+{
+    var rules = new[]
+    {
+        Rule("Everyday", "15:00", "21:00"),
+        new ScheduleRule
+        {
+            AppName = "Chess",
+            DayOfWeek = "Everyday",
+            StartTime = "18:00",
+            EndTime = "22:00",
+            Enabled = true
+        }
+    };
+    var now = new DateTime(2026, 6, 16, 19, 0, 0);
+    var end = SchedulerService.GetCurrentAllowedWindowEnd(rules, "Chess", now);
+
+    AssertEqual(new DateTime(2026, 6, 16, 22, 0, 0), end, "Expected app-specific later window end.");
+    AssertEqual(null, SchedulerService.GetCurrentAllowedWindowEnd(rules, "Chess", new DateTime(2026, 6, 16, 23, 0, 0)), "Expected no active allowed window.");
 
     return Task.CompletedTask;
 }

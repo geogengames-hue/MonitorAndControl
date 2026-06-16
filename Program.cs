@@ -116,7 +116,11 @@ internal static class Program
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
             return key?.GetValue(AppName) != null || key?.GetValue(LegacyAppName) != null;
         }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to read autostart setting: {ex.Message}");
+            return false;
+        }
     }
 
     public static void SetAutoStart(bool enable)
@@ -140,7 +144,10 @@ internal static class Program
                 key.DeleteValue(LegacyAppName, false);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to update autostart setting: {ex.Message}");
+        }
     }
 
     private static void EnsureWatchdogInstalled()
@@ -161,7 +168,10 @@ internal static class Program
                     $@"SYSTEM\CurrentControlSet\Services\{WatchdogServiceName}");
                 var currentBinPath = key?.GetValue("ImagePath") as string ?? "";
                 if (currentBinPath.Trim('"').Equals(watchdogPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    StartWatchdogServiceIfNeeded(sc, watchdogPath, exePath);
                     return; // Path matches, nothing to do
+                }
 
                 Logger.Instance.Info("Watchdog path changed, updating service...");
                 var psi = new ProcessStartInfo
@@ -175,8 +185,13 @@ internal static class Program
                 using var proc = Process.Start(psi);
                 proc?.WaitForExit(30000);
                 Logger.Instance.Info("Watchdog service path updated");
+                StartWatchdogServiceIfNeeded(sc, watchdogPath, exePath);
             }
-            catch { return; }
+            catch (Exception ex)
+            {
+                Logger.Instance.Error($"Failed to inspect watchdog service path: {ex.Message}");
+                return;
+            }
             return;
         }
         catch (InvalidOperationException) { }
@@ -207,6 +222,52 @@ internal static class Program
         }
     }
 
+    private static void StartWatchdogServiceIfNeeded(System.ServiceProcess.ServiceController sc, string watchdogPath, string monitorPath)
+    {
+        try
+        {
+            sc.Refresh();
+            if (sc.Status == System.ServiceProcess.ServiceControllerStatus.Running ||
+                sc.Status == System.ServiceProcess.ServiceControllerStatus.StartPending)
+                return;
+
+            Logger.Instance.Warn($"Watchdog service is {sc.Status}; starting it...");
+            sc.Start();
+            sc.WaitForStatus(System.ServiceProcess.ServiceControllerStatus.Running, TimeSpan.FromSeconds(15));
+            Logger.Instance.Info("Watchdog service started");
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to start watchdog service: {ex.Message}");
+            TryElevatedWatchdogUpdate(watchdogPath, monitorPath);
+        }
+    }
+
+    private static void TryElevatedWatchdogUpdate(string watchdogPath, string monitorPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(watchdogPath) || !File.Exists(watchdogPath))
+                return;
+
+            Logger.Instance.Warn("Requesting elevated watchdog service repair/start...");
+            var psi = new ProcessStartInfo
+            {
+                FileName = watchdogPath,
+                Arguments = $"--update --monitor \"{monitorPath}\"",
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(30000);
+        }
+        catch (Exception repairEx)
+        {
+            Logger.Instance.Error($"Elevated watchdog repair/start failed: {repairEx.Message}");
+        }
+    }
+
     private static string GetWatchdogPath()
     {
         var dir = AppContext.BaseDirectory;
@@ -227,7 +288,7 @@ internal static class Program
     public static void Shutdown()
     {
         Cleanup().GetAwaiter().GetResult();
-        try { Environment.Exit(0); } catch { }
+        try { Environment.Exit(0); } catch (Exception ex) { Logger.Instance.Error($"Failed to exit process: {ex.Message}"); }
     }
 
     private static async Task Initialize(AppConfig config)
@@ -318,8 +379,9 @@ internal static class Program
                 "Monitor Restarted by Watchdog",
                 $"The monitor was restarted by the watchdog on {Environment.MachineName}.\n{markerText}");
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.Instance.Error($"Failed to send watchdog restart alert: {ex.Message}");
         }
     }
 
@@ -358,7 +420,10 @@ internal static class Program
                 string.IsNullOrWhiteSpace(warningMsg) ? $"{appName} reached today's limit." : warningMsg,
                 detail);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to show limit warning popup for {appName}: {ex.Message}");
+        }
     }
 
     private static async void ShowScheduleWarningPopup(string appName)
@@ -377,7 +442,10 @@ internal static class Program
                 $"{appName} is not allowed right now.",
                 detail);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to show schedule warning popup for {appName}: {ex.Message}");
+        }
     }
 
     private static void ShowWarningPopup(
@@ -412,7 +480,10 @@ internal static class Program
                 CreateNoWindow = true
             });
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to launch warning popup for {appName}: {ex.Message}");
+        }
     }
 
     private static async Task<string> GetLimitResetDetailAsync(string appName)
@@ -429,8 +500,9 @@ internal static class Program
             var reset = DateTime.Today.AddDays(1);
             return $"Today's allowance: {total} min. Resets at {reset:t}.";
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.Instance.Error($"Failed to calculate limit reset detail for {appName}: {ex.Message}");
             return "The app can be used again after the limit resets at midnight.";
         }
     }
@@ -454,10 +526,59 @@ internal static class Program
                 ? $"Next allowed time: {next.Value:g}."
                 : "Check the dashboard schedule for the next allowed time.";
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.Instance.Error($"Failed to calculate schedule reset detail for {appName}: {ex.Message}");
             return "Check the dashboard schedule for the next allowed time.";
         }
+    }
+
+    public static object GetRuntimeHealth(AppConfig config, UsageDatabase db, EmailService emailService)
+    {
+        return new
+        {
+            watchdog = GetWatchdogStatus(),
+            autoStart = new { enabled = GetAutoStart() },
+            dashboard = new
+            {
+                bindAddress = config.EnableRemoteDashboard
+                    ? (string.IsNullOrWhiteSpace(config.DashboardBindAddress) ? "0.0.0.0" : config.DashboardBindAddress)
+                    : "127.0.0.1",
+                port = DashboardServer.Port,
+                remoteEnabled = config.EnableRemoteDashboard
+            },
+            email = new { configured = emailService.IsEnabled },
+            database = new
+            {
+                path = db.DatabasePath,
+                exists = File.Exists(db.DatabasePath)
+            }
+        };
+    }
+
+    private static object GetWatchdogStatus()
+    {
+        var path = GetWatchdogPath();
+        var installed = false;
+        var status = "not_installed";
+
+        try
+        {
+            using var sc = new System.ServiceProcess.ServiceController(WatchdogServiceName);
+            status = sc.Status.ToString();
+            installed = true;
+        }
+        catch (Exception ex)
+        {
+            status = string.IsNullOrEmpty(path) ? "missing_executable" : $"not_available: {ex.Message}";
+        }
+
+        return new
+        {
+            installed,
+            status,
+            executablePath = path
+        };
     }
 
     private static void OnAppKilled(string appName)
