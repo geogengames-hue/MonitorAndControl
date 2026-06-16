@@ -11,6 +11,9 @@ obj/
 # Publish output
 **/publish/
 
+# Release archives
+*.zip
+
 # OS
 Thumbs.db
 .DS_Store
