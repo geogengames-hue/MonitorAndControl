@@ -36,13 +36,26 @@ Monitor & Control consists of three executables:
 | Component | File | Description |
 |-----------|------|-------------|
 | **Monitor** | `DeviceMon.exe` | Main application — tracks usage, enforces limits, hosts the web dashboard |
-| **Watchdog** | `GameHost.exe` | Optional Windows service that restarts the monitor if it crashes |
-| **PopupHost** | `PopupHost.exe` | Child process that shows full‑screen warning popups |
+| **Watchdog** | `GameHost.exe` | Windows service that restarts the monitor if it crashes. **Auto-installs when you run DeviceMon.exe** — it prompts for admin elevation once, then runs silently in the background |
+| **PopupHost** | `PopupHost.exe` | Child process launched by the monitor to show full‑screen warning popups with countdown |
+
+> **Note on executable names:** `DeviceMon.exe` is the Monitor & Control app and `GameHost.exe` is the watchdog. The names are intentionally generic to avoid drawing attention on a child's PC — keeping them as-is is recommended.  
+> If you must rename them, you'll need to edit the corresponding constants in `Program.cs` (e.g., `AppName`, `WatchdogServiceName`, `WatchdogExeName`) and `Watchdog/Program.cs` (e.g., `ServiceName`, `MonitorExeName`, `WatchdogExeName`), then rebuild. There's no configuration file for this — the names are baked into the code.
+
+### Watchdog — how auto-install works
+
+When you run `DeviceMon.exe`, it automatically looks for `GameHost.exe` in the same folder. If the watchdog service is not installed (or needs updating), DeviceMon silently asks for administrator privileges via a UAC prompt and installs/updates it. After that:
+- The watchdog runs as a Windows service named `GameHost`
+- It checks every 15 seconds whether `DeviceMon.exe` is still running
+- If the monitor process is missing, the watchdog relaunches it in the active user session
+- No further UAC prompts — the service runs under the SYSTEM account
+- If you ever want to remove it, see the [Watchdog uninstall](#installing-the-watchdog-optional-requires-admin) section
 
 ### Data storage
 
 - **SQLite database** at `%LOCALAPPDATA%\SystemHelper\monitor.db` — usage records, limits, schedules, settings
 - **Log file** at `%LOCALAPPDATA%\SystemHelper\monitor.log`
+- **Watchdog log** at `C:\ProgramData\SystemHelper\watchdog.log`
 - **Configuration** at `appsettings.json` (alongside the exe)
 
 ---
@@ -126,9 +139,10 @@ Opens the dashboard at `http://localhost:5000` and runs in the system tray.
 
 ### Quick start
 
-1. **Download** the latest release from the [Releases](https://github.com/geogengames-hue/MonitorAndControl/releases) page
+1. **Download** the latest release from the [Releases](https://github.com/geogengames-hue/MonitorAndControl/releases) page (all three `.exe` files must be kept together in the same folder)
 2. **Extract** the zip to a folder (e.g. `C:\MonitorAndControl`)
 3. **Run `DeviceMon.exe`** (no admin required for basic usage)
+   - On first run, it will detect `GameHost.exe` and ask for **administrator elevation** via a UAC prompt to install the watchdog service. This is optional — click **Yes** to enable auto-restart on crash, or **No** to skip (the app will still run normally)
 4. **Open the dashboard** — press `Ctrl+Alt+H` or open `http://localhost:5000` in a browser
 5. **Set limits** — navigate to **Limits** tab, add apps and set daily max minutes
 6. **Configure schedule** (optional) — navigate to **Schedule** tab, set allowed hours
@@ -186,7 +200,9 @@ Place this file alongside `DeviceMon.exe`. All settings are optional — default
 
 ### Installing the Watchdog (optional, requires admin)
 
-The watchdog (`GameHost.exe`) runs as a Windows service that restarts `DeviceMon.exe` if it stops.
+**Normally you don't need to do this manually** — when you run `DeviceMon.exe`, it auto-detects `GameHost.exe` in the same folder and offers to install the watchdog service with a single UAC prompt.
+
+Manual install is only needed if you want to install the watchdog separately (e.g., deploying to a different folder after the fact):
 
 ```powershell
 # Run PowerShell as Administrator, then:
@@ -196,13 +212,15 @@ The watchdog (`GameHost.exe`) runs as a Windows service that restarts `DeviceMon
 .\install-watchdog.ps1 -PublishDir "C:\MonitorAndControl"
 ```
 
-To remove:
+To remove the watchdog:
 
 ```powershell
 .\GameHost.exe --uninstall
 # or
 .\uninstall-watchdog.ps1
 ```
+
+Once installed, the `GameHost` service runs under the SYSTEM account and automatically restarts `DeviceMon.exe` if it crashes — no further UAC prompts needed.
 
 ### Using the dashboard
 
