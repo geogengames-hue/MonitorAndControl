@@ -164,6 +164,8 @@ input[type="checkbox"] { width: 18px; height: 18px; margin: 0; }
 .settings-form label { display: block; margin-top: 15px; margin-bottom: 5px; color: #aaa; font-size: 13px; }
 .settings-form input, .settings-form select { width: 250px; }
 .settings-form hr { border: none; border-top: 1px solid #2a2a3e; margin: 25px 0; }
+.settings-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.settings-row button { margin: 0; }
 code { background: #2a2a3e; padding: 3px 8px; border-radius: 4px; font-size: 14px; }
 p { margin: 10px 0; color: #aaa; line-height: 1.5; }
 

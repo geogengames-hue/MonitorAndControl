@@ -30,12 +30,13 @@ public class WarningPopup : Form
 {
     private readonly Label _messageLabel;
     private readonly Label _countdownLabel;
+    private readonly Label _detailLabel;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly System.Windows.Forms.Timer _checkTimer;
     private readonly string _processName;
     private int _secondsRemaining;
 
-    public WarningPopup(string appName, int totalSeconds, string message, string processName)
+    public WarningPopup(string appName, int totalSeconds, string message, string processName, string reason = "", string detail = "")
     {
         _secondsRemaining = totalSeconds;
         _processName = processName;
@@ -45,7 +46,7 @@ public class WarningPopup : Form
         TopMost = true;
         ShowInTaskbar = false;
         Width = 420;
-        Height = 130;
+        Height = 170;
         BackColor = Color.FromArgb(30, 30, 46);
         Opacity = 0.95;
 
@@ -57,7 +58,7 @@ public class WarningPopup : Form
 
         _messageLabel = new Label
         {
-            Text = message,
+            Text = string.IsNullOrWhiteSpace(reason) ? message : reason,
             ForeColor = Color.FromArgb(255, 200, 100),
             Font = new Font("Segoe UI", 16, FontStyle.Bold),
             Dock = DockStyle.Top,
@@ -67,13 +68,26 @@ public class WarningPopup : Form
 
         _countdownLabel = new Label
         {
-            Text = $"Closing {appName} in {totalSeconds} seconds...",
+            Text = totalSeconds > 0
+                ? $"Closing {appName} in {totalSeconds} seconds..."
+                : $"{appName} was closed.",
             ForeColor = Color.White,
             Font = new Font("Segoe UI", 20, FontStyle.Bold),
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter
         };
 
+        _detailLabel = new Label
+        {
+            Text = string.IsNullOrWhiteSpace(detail) ? message : detail,
+            ForeColor = Color.FromArgb(190, 190, 205),
+            Font = new Font("Segoe UI", 10, FontStyle.Regular),
+            Dock = DockStyle.Bottom,
+            Height = 36,
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+
+        panel.Controls.Add(_detailLabel);
         panel.Controls.Add(_countdownLabel);
         panel.Controls.Add(_messageLabel);
         Controls.Add(panel);
@@ -108,7 +122,16 @@ public class WarningPopup : Form
                 _countdownLabel.Text = $"Closing {appName} in {_secondsRemaining} seconds...";
             }
         };
-        _timer.Start();
+        if (totalSeconds > 0)
+        {
+            _timer.Start();
+        }
+        else
+        {
+            var closeTimer = new System.Windows.Forms.Timer { Interval = 7000 };
+            closeTimer.Tick += (_, __) => { closeTimer.Stop(); Close(); };
+            closeTimer.Start();
+        }
     }
 
     protected override void OnLoad(EventArgs e)

@@ -269,6 +269,7 @@ async function loadLiveToday() {
   try {
     const usage = await api('/api/usage/today');
     const limits = await api('/api/limits');
+    const bonuses = await api('/api/bonus/today');
     const list = document.getElementById('live-today-list');
     list.innerHTML = '';
     if (usage.length === 0) {
@@ -277,7 +278,8 @@ async function loadLiveToday() {
     }
     usage.forEach(u => {
       const limit = limits.find(l => l.appName === u.appName);
-      const maxSecs = limit ? limit.dailyMaxMinutes * 60 : 0;
+      const bonus = bonuses.find(b => b.appName === u.appName)?.bonusMinutes || 0;
+      const maxSecs = limit ? (limit.dailyMaxMinutes + bonus) * 60 : 0;
       const remaining = maxSecs > 0 ? maxSecs - u.totalSeconds : 0;
       const cls = remaining <= 0 && maxSecs > 0 ? 'exceeded' :
                   remaining < 300 && maxSecs > 0 ? 'warning' : '';
@@ -286,7 +288,7 @@ async function loadLiveToday() {
       item.innerHTML = `
         <div>
           <div class="name">${esc(u.appName)}</div>
-          ${limit ? `<div class="remaining">${remaining > 0 ? Math.floor(remaining / 60) + 'm remaining' : 'Limit exceeded'}</div>` : ''}
+          ${limit ? `<div class="remaining">${remaining > 0 ? Math.floor(remaining / 60) + 'm remaining' : 'Limit exceeded'}${bonus ? ` (+${bonus}m bonus)` : ''}</div>` : ''}
         </div>
         <div class="time">${esc(u.durationFormatted)}</div>`;
       list.appendChild(item);
@@ -525,11 +527,12 @@ function renderHistoryChart(usage) {
 // Limits
 async function loadLimits() {
   try {
-    const [limits, known, today, mappings] = await Promise.all([
+    const [limits, known, today, mappings, bonuses] = await Promise.all([
       api('/api/limits'),
       api('/api/apps'),
       api('/api/usage/today'),
-      api('/api/mappings')
+      api('/api/mappings'),
+      api('/api/bonus/today')
     ]);
     const allApps = [...new Set([...Object.keys(known).map(k => known[k]), ...limits.map(l => l.appName)])].sort();
 
@@ -545,8 +548,9 @@ async function loadLimits() {
     for (const app of allApps) {
       const limit = limits.find(l => l.appName === app);
       const usage = today.find(u => u.appName === app);
+      const bonus = bonuses.find(b => b.appName === app)?.bonusMinutes || 0;
       const used = usage ? usage.totalSeconds : 0;
-      const max = limit ? limit.dailyMaxMinutes * 60 : 0;
+      const max = limit ? (limit.dailyMaxMinutes + bonus) * 60 : 0;
       const pct = max > 0 ? Math.round((used / max) * 100) : 0;
       const exceeded = max > 0 && used >= max;
       const enabled = limit ? limit.enabled : false;
@@ -554,11 +558,12 @@ async function loadLimits() {
       html += `<tr>
         <td><strong>${esc(app)}</strong></td>
         <td style="font-size:11px;color:#666;max-width:250px;word-break:break-all">${esc(procName) || '-'}</td>
-        <td>${limit ? limit.dailyMaxMinutes + ' min' : '<span style="color:#666">No limit</span>'}</td>
+        <td>${limit ? limit.dailyMaxMinutes + ' min' + (bonus ? ` <span style="color:#ffcc66">(+${bonus})</span>` : '') : '<span style="color:#666">No limit</span>'}</td>
         <td>${usage ? esc(usage.durationFormatted) : '0m'}</td>
         <td>${enabled ? (exceeded ? '<span style="color:#ff4444">Exceeded</span>' : (pct > 80 ? '<span style="color:#ff8800">' + pct + '%</span>' : '<span style="color:#44bb44">' + pct + '%</span>')) : '<span style="color:#666">Disabled</span>'}</td>
         <td class="actions">
           <button onclick="editLimit('${escAttr(app)}')">Edit</button>
+          ${limit ? `<button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',15)">+15m</button><button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',30)">+30m</button>` : ''}
           ${limit ? `<button class="btn-danger" onclick="deleteLimit('${escAttr(app)}')">Remove</button>` : `<button onclick="addLimit('${escAttr(app)}')">Add</button>`}
           ${procName ? `<button class="btn-danger" onclick="forgetApp('${escAttr(app)}','${escAttr(procName)}')" title="Delete mapping &amp; all data" style="background:#882222">&times; Forget</button>` : ''}
         </td>
@@ -567,6 +572,22 @@ async function loadLimits() {
     html += '</tbody></table>';
     table.innerHTML = html;
   } catch (e) { log(e); }
+}
+
+async function grantBonus(appName, minutes) {
+  try {
+    await api('/api/bonus', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appName, minutes })
+    });
+    loadLimits();
+    loadLiveToday();
+    loadToday();
+  } catch (e) {
+    log(e);
+    alert('Failed to grant bonus time.');
+  }
 }
 
 function editLimit(appName) {
@@ -787,6 +808,27 @@ document.getElementById('settings-admin-password').addEventListener('click', asy
   setTimeout(() => el.textContent = '', 8000);
 });
 
+document.getElementById('settings-logout').addEventListener('click', () => {
+  sessionStorage.removeItem('dashboardAdminToken');
+  window.location.reload();
+});
+
+document.getElementById('settings-rotate-token').addEventListener('click', async () => {
+  if (!confirm('Rotate the dashboard session token? Other open dashboard sessions will need to log in again.')) return;
+  const el = document.getElementById('session-result');
+  el.textContent = 'Rotating...';
+  try {
+    const r = await api('/api/auth/token/rotate', { method: 'POST' });
+    if (r.token) sessionStorage.setItem('dashboardAdminToken', r.token);
+    el.style.color = '#44bb44';
+    el.textContent = 'Token rotated';
+  } catch (e) {
+    el.style.color = '#ff4444';
+    el.textContent = e.message || 'Failed';
+  }
+  setTimeout(() => el.textContent = '', 8000);
+});
+
 document.getElementById('settings-save').addEventListener('click', async () => {
   const killDelay = parseInt(document.getElementById('set-kill-delay').value);
   const showWarning = document.getElementById('set-show-warning').value === 'true';
@@ -876,6 +918,62 @@ document.getElementById('settings-email-start-reset').addEventListener('click', 
     el.textContent = e.message || 'Failed';
   }
   setTimeout(() => el.textContent = '', 8000);
+});
+
+document.getElementById('settings-export-config').addEventListener('click', async () => {
+  const el = document.getElementById('config-backup-result');
+  el.textContent = 'Exporting...';
+  try {
+    const backup = await api('/api/config/export');
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `monitor-config-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    el.style.color = '#44bb44';
+    el.textContent = 'Exported';
+  } catch (e) {
+    el.style.color = '#ff4444';
+    el.textContent = e.message || 'Export failed';
+  }
+  setTimeout(() => el.textContent = '', 8000);
+});
+
+document.getElementById('settings-import-config').addEventListener('click', async () => {
+  const el = document.getElementById('config-backup-result');
+  const file = document.getElementById('settings-import-file').files[0];
+  if (!file) {
+    el.style.color = '#ff4444';
+    el.textContent = 'Choose a JSON backup first.';
+    return;
+  }
+  if (!confirm('Import this config backup? Current limits, schedules, and app mappings will be replaced.')) return;
+
+  el.textContent = 'Importing...';
+  try {
+    const text = await file.text();
+    JSON.parse(text);
+    await api('/api/config/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: text
+    });
+    el.style.color = '#44bb44';
+    el.textContent = 'Imported';
+    loadSettings();
+    loadLimits();
+    loadSchedule();
+    loadLiveToday();
+  } catch (e) {
+    el.style.color = '#ff4444';
+    el.textContent = e.message || 'Import failed';
+  }
+  setTimeout(() => el.textContent = '', 10000);
 });
 
 function renderTable(id, data, props, headers) {

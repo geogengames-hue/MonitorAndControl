@@ -84,6 +84,8 @@ public class UsageTracker : IDisposable
 
             var limits = await _db.GetLimitRulesAsync();
             var todayUsage = await _db.GetTodayUsageAsync();
+            var bonusByApp = (await _db.GetTodayBonusTimeAsync())
+                .ToDictionary(b => b.AppName, b => b.BonusMinutes, StringComparer.OrdinalIgnoreCase);
             var breached = new List<(string AppName, long UsedSecs, long MaxSecs)>();
 
             foreach (var limit in limits.Where(l => l.Enabled))
@@ -91,7 +93,8 @@ public class UsageTracker : IDisposable
                 var usage = todayUsage.FirstOrDefault(u =>
                     u.AppName.Equals(limit.AppName, StringComparison.OrdinalIgnoreCase));
                 var usedSecs = usage?.TotalSeconds ?? 0;
-                var maxSecs = limit.DailyMaxMinutes * 60L;
+                bonusByApp.TryGetValue(limit.AppName, out var bonusMinutes);
+                var maxSecs = (limit.DailyMaxMinutes + bonusMinutes) * 60L;
                 if (usedSecs >= maxSecs)
                     breached.Add((limit.AppName, usedSecs, maxSecs));
             }

@@ -39,6 +39,8 @@ public class LimitEnforcer
 
         var limits = await _db.GetLimitRulesAsync();
         var todayUsage = await _db.GetTodayUsageAsync();
+        var bonusByApp = (await _db.GetTodayBonusTimeAsync())
+            .ToDictionary(b => b.AppName, b => b.BonusMinutes, StringComparer.OrdinalIgnoreCase);
 
         foreach (var limit in limits.Where(l => l.Enabled))
         {
@@ -46,7 +48,8 @@ public class LimitEnforcer
                 u.AppName.Equals(limit.AppName, StringComparison.OrdinalIgnoreCase));
             if (usage == null) continue;
 
-            var maxSecs = limit.DailyMaxMinutes * 60L;
+            bonusByApp.TryGetValue(limit.AppName, out var bonusMinutes);
+            var maxSecs = (limit.DailyMaxMinutes + bonusMinutes) * 60L;
             if (maxSecs <= 0 || usage.TotalSeconds < maxSecs) continue;
 
             _exceededToday[limit.AppName] = today;

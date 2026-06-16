@@ -69,6 +69,14 @@ public class UsageDatabase : IDisposable
                 ProcessName TEXT NOT NULL UNIQUE,
                 AppName TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS AppBonusTime (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                AppName TEXT NOT NULL,
+                Date TEXT NOT NULL,
+                BonusMinutes INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(AppName, Date)
+            );
             """;
         cmd.ExecuteNonQuery();
 
@@ -152,10 +160,91 @@ public class UsageDatabase : IDisposable
         await _lock.WaitAsync();
         try
         {
+            using var tx = _connection.BeginTransaction();
+            var date = DateTime.Today.ToString("yyyy-MM-dd");
+
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "DELETE FROM UsageRecords WHERE Date = @date";
+                cmd.Parameters.AddWithValue("@date", date);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "DELETE FROM AppBonusTime WHERE Date = @date";
+                cmd.Parameters.AddWithValue("@date", date);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<List<AppBonusTime>> GetTodayBonusTimeAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var list = new List<AppBonusTime>();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM UsageRecords WHERE Date = @date";
+            cmd.CommandText = """
+                SELECT AppName, Date, BonusMinutes
+                FROM AppBonusTime
+                WHERE Date = @date
+                ORDER BY AppName;
+                """;
             cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
-            await cmd.ExecuteNonQueryAsync();
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new AppBonusTime
+                {
+                    AppName = r.GetString(0),
+                    Date = r.GetString(1),
+                    BonusMinutes = r.GetInt32(2)
+                });
+            return list;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<int> GetTodayBonusMinutesAsync(string appName)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT BonusMinutes FROM AppBonusTime WHERE AppName = @app AND Date = @date";
+            cmd.Parameters.AddWithValue("@app", appName);
+            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            var result = await cmd.ExecuteScalarAsync();
+            return result is long l ? (int)l : 0;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<int> AddTodayBonusMinutesAsync(string appName, int minutes)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO AppBonusTime (AppName, Date, BonusMinutes)
+                VALUES (@app, @date, @minutes)
+                ON CONFLICT(AppName, Date) DO UPDATE SET
+                    BonusMinutes = BonusMinutes + @minutes;
+
+                SELECT BonusMinutes FROM AppBonusTime WHERE AppName = @app AND Date = @date;
+                """;
+            cmd.Parameters.AddWithValue("@app", appName);
+            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@minutes", minutes);
+            var result = await cmd.ExecuteScalarAsync();
+            return result is long l ? (int)l : minutes;
         }
         finally { _lock.Release(); }
     }
@@ -332,6 +421,116 @@ public class UsageDatabase : IDisposable
             cmd.Parameters.AddWithValue("@k", key);
             cmd.Parameters.AddWithValue("@v", value);
             await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<Dictionary<string, string>> GetAllSettingsAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var settings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT Key, Value FROM Settings ORDER BY Key";
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                settings[r.GetString(0)] = r.GetString(1);
+            return settings;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task ReplaceLimitRulesAsync(IEnumerable<AppLimitRule> rules)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            using (var clear = _connection.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = "DELETE FROM AppLimits";
+                await clear.ExecuteNonQueryAsync();
+            }
+
+            foreach (var rule in rules)
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO AppLimits (AppName, DailyMaxMinutes, Enabled)
+                    VALUES (@app, @max, @en);
+                    """;
+                cmd.Parameters.AddWithValue("@app", rule.AppName);
+                cmd.Parameters.AddWithValue("@max", rule.DailyMaxMinutes);
+                cmd.Parameters.AddWithValue("@en", rule.Enabled ? 1 : 0);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task ReplaceScheduleRulesAsync(IEnumerable<ScheduleRule> rules)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            using (var clear = _connection.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = "DELETE FROM ScheduleRules";
+                await clear.ExecuteNonQueryAsync();
+            }
+
+            foreach (var rule in rules)
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO ScheduleRules (AppName, DayOfWeek, StartTime, EndTime, Enabled)
+                    VALUES (@app, @day, @start, @end, @en);
+                    """;
+                cmd.Parameters.AddWithValue("@app", rule.AppName ?? "");
+                cmd.Parameters.AddWithValue("@day", rule.DayOfWeek);
+                cmd.Parameters.AddWithValue("@start", rule.StartTime);
+                cmd.Parameters.AddWithValue("@end", rule.EndTime);
+                cmd.Parameters.AddWithValue("@en", rule.Enabled ? 1 : 0);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task ReplaceAppMappingsAsync(IEnumerable<AppMapping> mappings)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            using (var clear = _connection.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = "DELETE FROM AppMappings";
+                await clear.ExecuteNonQueryAsync();
+            }
+
+            foreach (var mapping in mappings)
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = "INSERT INTO AppMappings (ProcessName, AppName) VALUES (@p, @a)";
+                cmd.Parameters.AddWithValue("@p", mapping.ProcessName);
+                cmd.Parameters.AddWithValue("@a", mapping.AppName);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            tx.Commit();
         }
         finally { _lock.Release(); }
     }

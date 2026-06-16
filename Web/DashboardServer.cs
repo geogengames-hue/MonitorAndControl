@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Security.Cryptography;
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,9 @@ public class DashboardServer
     public static int Port { get; set; } = 5000;
     private static string _adminToken = "";
     private static bool _adminPasswordSet;
+    private static readonly ConcurrentDictionary<string, AuthAttemptState> AuthAttempts = new(StringComparer.OrdinalIgnoreCase);
+    private const int MaxFailedLoginAttempts = 5;
+    private static readonly TimeSpan AuthLockoutDuration = TimeSpan.FromMinutes(5);
 
     public static async Task StartAsync(UsageDatabase db, WindowTracker tracker, LimitEnforcer enforcer,
         SchedulerService scheduler, EmailService emailService, AppConfig config)
@@ -101,6 +105,10 @@ public class DashboardServer
 
         app.MapPost("/api/auth/login", async (HttpContext ctx) =>
         {
+            var rateLimit = CheckLoginRateLimit(ctx);
+            if (rateLimit != null)
+                return rateLimit;
+
             string password = "";
             if (ctx.Request.ContentLength > 0)
             {
@@ -118,8 +126,12 @@ public class DashboardServer
             }
 
             if (!PasswordHasher.Verify(password, storedHash))
+            {
+                RegisterFailedLogin(ctx);
                 return Results.Json(new { error = "Invalid admin password." }, statusCode: StatusCodes.Status401Unauthorized);
+            }
 
+            ResetLoginRateLimit(ctx);
             return Results.Ok(new { token = _adminToken, passwordSet = true });
         });
 
@@ -163,6 +175,17 @@ public class DashboardServer
             await db.SetSettingAsync("DashboardAdminPasswordHash", PasswordHasher.Hash(newPassword));
             _adminPasswordSet = true;
             return Results.Ok(new { status = "password_set", token = _adminToken });
+        });
+
+        app.MapPost("/api/auth/token/rotate", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+
+            _adminToken = CreateAdminToken();
+            await db.SetSettingAsync("DashboardAdminToken", _adminToken);
+            Logger.Instance.Warn("Dashboard admin token rotated");
+            return Results.Ok(new { status = "rotated", token = _adminToken });
         });
 
         app.MapGet("/api/usage/today", async () =>
@@ -347,6 +370,39 @@ public class DashboardServer
 
         app.MapGet("/api/limits", async () =>
             Results.Json(await db.GetLimitRulesAsync(), JsonOpts));
+
+        app.MapGet("/api/bonus/today", async () =>
+            Results.Json(await db.GetTodayBonusTimeAsync(), JsonOpts));
+
+        app.MapPost("/api/bonus", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+
+            string appName = "";
+            var minutes = 0;
+            if (ctx.Request.ContentLength > 0)
+            {
+                using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("appName", out var app))
+                    appName = Clean(app.GetString());
+                if (root.TryGetProperty("minutes", out var mins))
+                    minutes = mins.GetInt32();
+            }
+
+            if (!IsValidAppName(appName) || minutes is < 1 or > 240)
+                return Results.BadRequest(new { error = "Bonus time requires a valid app name and 1-240 minutes." });
+
+            var limits = await db.GetLimitRulesAsync();
+            if (!limits.Any(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+                return Results.BadRequest(new { error = "Bonus time can only be granted to apps with a limit." });
+
+            var totalBonusMinutes = await db.AddTodayBonusMinutesAsync(appName, minutes);
+            enforcer.ClearExceeded(appName);
+            Logger.Instance.Warn($"Bonus time granted: {appName} +{minutes} min today ({totalBonusMinutes} min total)");
+            return Results.Ok(new { status = "granted", appName, bonusMinutes = totalBonusMinutes });
+        });
 
         app.MapPost("/api/limits", async (HttpContext ctx, AppLimitRule limit) =>
         {
@@ -560,6 +616,67 @@ public class DashboardServer
             return Results.Ok(new { status = "reset" });
         });
 
+        app.MapGet("/api/config/export", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+
+            var settings = await db.GetAllSettingsAsync();
+            var backup = new ConfigBackup
+            {
+                ExportedAt = DateTime.Now,
+                AppMappings = await db.GetAppMappingsAsync(),
+                Limits = await db.GetLimitRulesAsync(),
+                Schedules = await db.GetScheduleRulesAsync(),
+                Settings = settings
+                    .Where(kvp => ExportableSettings.Contains(kvp.Key))
+                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase)
+            };
+
+            return Results.Json(backup, JsonOpts);
+        });
+
+        app.MapPost("/api/config/import", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+
+            ConfigBackup? backup;
+            try
+            {
+                backup = await JsonSerializer.DeserializeAsync<ConfigBackup>(ctx.Request.Body, JsonOpts);
+            }
+            catch (JsonException)
+            {
+                return Results.BadRequest(new { error = "Invalid backup JSON." });
+            }
+
+            if (backup == null)
+                return Results.BadRequest(new { error = "Backup file is empty." });
+            if (backup.Version != 1)
+                return Results.BadRequest(new { error = "Unsupported backup version." });
+
+            var validationError = ValidateBackup(backup);
+            if (validationError != null)
+                return Results.BadRequest(new { error = validationError });
+
+            await db.ReplaceAppMappingsAsync(backup.AppMappings);
+            await db.ReplaceLimitRulesAsync(backup.Limits);
+            await db.ReplaceScheduleRulesAsync(backup.Schedules);
+            foreach (var setting in backup.Settings.Where(kvp => ExportableSettings.Contains(kvp.Key)))
+                await db.SetSettingAsync(setting.Key, setting.Value);
+
+            enforcer.ClearExceeded();
+            scheduler.InvalidateCache();
+            tracker.LoadKnownApps(Program.GetConfig().KnownApps);
+            foreach (var mapping in await db.GetAppMappingsAsync())
+                tracker.AddKnownApp(mapping.ProcessName, mapping.AppName);
+            await emailService.LoadSettingsAsync();
+            if (emailService.IsEnabled) emailService.StartPolling(); else emailService.StopPolling();
+
+            return Results.Ok(new { status = "imported" });
+        });
+
         app.MapGet("/api/logs", (HttpContext ctx, int count = 200) =>
         {
             count = Math.Clamp(count, 1, 1000);
@@ -638,10 +755,60 @@ public class DashboardServer
         if (!string.IsNullOrWhiteSpace(token))
             return token;
 
-        token = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+        token = CreateAdminToken();
         await db.SetSettingAsync("DashboardAdminToken", token);
         return token;
     }
+
+    private static string CreateAdminToken() =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+
+    private static IResult? CheckLoginRateLimit(HttpContext ctx)
+    {
+        var key = GetAuthAttemptKey(ctx);
+        if (!AuthAttempts.TryGetValue(key, out var state))
+            return null;
+
+        if (state.LockedUntil > DateTimeOffset.Now)
+        {
+            var seconds = Math.Max(1, (int)Math.Ceiling((state.LockedUntil - DateTimeOffset.Now).TotalSeconds));
+            ctx.Response.Headers.RetryAfter = seconds.ToString();
+            return Results.Json(
+                new { error = $"Too many failed login attempts. Try again in {seconds} seconds." },
+                statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
+        if (state.LockedUntil != default)
+            AuthAttempts.TryRemove(key, out _);
+
+        return null;
+    }
+
+    private static void RegisterFailedLogin(HttpContext ctx)
+    {
+        var key = GetAuthAttemptKey(ctx);
+        AuthAttempts.AddOrUpdate(
+            key,
+            _ => new AuthAttemptState { FailedCount = 1 },
+            (_, state) =>
+            {
+                state.FailedCount++;
+                if (state.FailedCount >= MaxFailedLoginAttempts)
+                {
+                    state.LockedUntil = DateTimeOffset.Now.Add(AuthLockoutDuration);
+                    Logger.Instance.Warn($"Dashboard login temporarily locked for {key}");
+                }
+                return state;
+            });
+    }
+
+    private static void ResetLoginRateLimit(HttpContext ctx)
+    {
+        AuthAttempts.TryRemove(GetAuthAttemptKey(ctx), out _);
+    }
+
+    private static string GetAuthAttemptKey(HttpContext ctx) =>
+        ctx.Connection.RemoteIpAddress?.ToString() ?? "local";
 
     private static IResult? RequireWriteAccess(HttpContext ctx)
     {
@@ -698,6 +865,93 @@ public class DashboardServer
         return emails.Length > 0 && emails.All(IsValidEmail);
     }
 
+    private static readonly HashSet<string> ExportableSettings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "KillDelaySeconds",
+        "ShowWarning",
+        "WarningMessage",
+        "WebhookUrl",
+        "EmailAddress",
+        "EmailAllowedSender",
+        "EmailNotifyEnabled",
+        "EmailStartNotifyEnabled",
+        "EmailControlEnabled"
+    };
+
+    private static string? ValidateBackup(ConfigBackup backup)
+    {
+        if (backup.AppMappings.Count > 500 || backup.Limits.Count > 500 || backup.Schedules.Count > 500)
+            return "Backup contains too many records.";
+
+        var cleanMappings = new List<AppMapping>();
+        foreach (var mapping in backup.AppMappings)
+        {
+            var processName = Clean(mapping.ProcessName);
+            var appName = Clean(mapping.AppName);
+            if (!IsValidProcessName(processName) || !IsValidAppName(appName))
+                return "Backup contains an invalid app mapping.";
+            cleanMappings.Add(new AppMapping(processName, appName));
+        }
+        backup.AppMappings = cleanMappings;
+
+        foreach (var limit in backup.Limits)
+        {
+            limit.AppName = Clean(limit.AppName);
+            if (!IsValidAppName(limit.AppName) || limit.DailyMaxMinutes is < 1 or > 1440)
+                return "Backup contains an invalid app limit.";
+        }
+
+        foreach (var rule in backup.Schedules)
+        {
+            if (!NormalizeScheduleRule(rule))
+                return "Backup contains an invalid schedule rule.";
+        }
+
+        var cleanSettings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in backup.Settings)
+        {
+            if (!ExportableSettings.Contains(key))
+                continue;
+
+            var cleanValue = Clean(value);
+            switch (key)
+            {
+                case "KillDelaySeconds":
+                    if (!int.TryParse(cleanValue, out var delay) || delay is < 5 or > 300)
+                        return "Backup contains an invalid kill delay.";
+                    break;
+                case "ShowWarning":
+                case "EmailNotifyEnabled":
+                case "EmailStartNotifyEnabled":
+                case "EmailControlEnabled":
+                    if (!bool.TryParse(cleanValue, out _))
+                        return $"Backup contains an invalid boolean setting: {key}.";
+                    break;
+                case "WebhookUrl":
+                    if (!string.IsNullOrEmpty(cleanValue) && !IsHttpUrl(cleanValue))
+                        return "Backup contains an invalid webhook URL.";
+                    break;
+                case "WarningMessage":
+                    if (cleanValue.Length > 200)
+                        return "Backup contains a warning message that is too long.";
+                    break;
+                case "EmailAddress":
+                    if (!string.IsNullOrEmpty(cleanValue) && !IsValidEmail(cleanValue))
+                        return "Backup contains an invalid email address.";
+                    break;
+                case "EmailAllowedSender":
+                    if (!string.IsNullOrEmpty(cleanValue) && !IsValidEmailList(cleanValue))
+                        return "Backup contains an invalid allowed sender list.";
+                    break;
+            }
+
+            cleanSettings[key] = cleanValue;
+        }
+
+        backup.Settings = cleanSettings;
+        return null;
+    }
+
     private static bool NormalizeScheduleRule(ScheduleRule rule)
     {
         rule.AppName = Clean(rule.AppName);
@@ -732,5 +986,11 @@ public class DashboardServer
     {
         if (_app != null)
             await _app.StopAsync();
+    }
+
+    private sealed class AuthAttemptState
+    {
+        public int FailedCount { get; set; }
+        public DateTimeOffset LockedUntil { get; set; }
     }
 }

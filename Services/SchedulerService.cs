@@ -98,4 +98,52 @@ public class SchedulerService
         var rules = await GetRulesAsync();
         return rules.Where(r => r.Enabled && IsOutsideAllowedHours(r)).ToList();
     }
+
+    public static DateTime? GetNextAllowedTime(IEnumerable<ScheduleRule> rules, DateTime now)
+    {
+        var enabled = rules.Where(r => r.Enabled).ToList();
+        if (enabled.Count == 0)
+            return null;
+
+        for (var dayOffset = 0; dayOffset <= 14; dayOffset++)
+        {
+            var date = now.Date.AddDays(dayOffset);
+            foreach (var rule in enabled)
+            {
+                if (!MatchesDay(rule, date.DayOfWeek))
+                    continue;
+                if (!TimeSpan.TryParse(rule.StartTime, out var start) ||
+                    !TimeSpan.TryParse(rule.EndTime, out var end))
+                    continue;
+
+                var candidate = date.Add(start);
+                if (end <= start && now.TimeOfDay < end && dayOffset == 0)
+                    return now;
+                if (candidate > now)
+                    return candidate;
+                if (dayOffset == 0 && end > start && now.TimeOfDay >= start && now.TimeOfDay < end)
+                    return now;
+                if (dayOffset == 0 && end <= start && now.TimeOfDay >= start)
+                    return now;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool MatchesDay(ScheduleRule rule, DayOfWeek today) =>
+        rule.DayOfWeek.ToLowerInvariant() switch
+        {
+            "weekday" => today >= DayOfWeek.Monday && today <= DayOfWeek.Friday,
+            "weekend" => today == DayOfWeek.Saturday || today == DayOfWeek.Sunday,
+            "monday" => today == DayOfWeek.Monday,
+            "tuesday" => today == DayOfWeek.Tuesday,
+            "wednesday" => today == DayOfWeek.Wednesday,
+            "thursday" => today == DayOfWeek.Thursday,
+            "friday" => today == DayOfWeek.Friday,
+            "saturday" => today == DayOfWeek.Saturday,
+            "sunday" => today == DayOfWeek.Sunday,
+            "everyday" => true,
+            _ => false
+        };
 }

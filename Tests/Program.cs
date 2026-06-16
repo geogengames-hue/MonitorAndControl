@@ -7,9 +7,12 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Scheduler allows time inside same-day window", TestSchedulerInsideSameDayWindow),
     ("Scheduler blocks time outside same-day window", TestSchedulerOutsideSameDayWindow),
     ("Scheduler handles overnight windows", TestSchedulerOvernightWindow),
+    ("Scheduler finds next allowed time", TestSchedulerNextAllowedTime),
     ("Usage database accumulates daily app usage", TestUsageDatabaseAccumulatesUsage),
     ("Usage database clears today's usage", TestUsageDatabaseClearsToday),
+    ("Usage database tracks and clears daily bonus time", TestUsageDatabaseTracksBonusTime),
     ("Usage database stores per-app schedule targets", TestUsageDatabaseStoresScheduleTarget),
+    ("Usage database replaces backup-managed config tables", TestUsageDatabaseReplacesConfigTables),
     ("Limit enforcer rehydrates exceeded apps", TestLimitEnforcerRehydratesExceededApps),
     ("Limit enforcer can pause and resume enforcement", TestLimitEnforcerPauseResume)
 };
@@ -74,6 +77,24 @@ static Task TestSchedulerOvernightWindow()
     return Task.CompletedTask;
 }
 
+static Task TestSchedulerNextAllowedTime()
+{
+    var rules = new[]
+    {
+        Rule("Everyday", "15:00", "21:00")
+    };
+    var now = new DateTime(2026, 6, 16, 12, 0, 0);
+    var next = SchedulerService.GetNextAllowedTime(rules, now);
+
+    AssertEqual(new DateTime(2026, 6, 16, 15, 0, 0), next, "Expected next allowed time today.");
+
+    now = new DateTime(2026, 6, 16, 22, 0, 0);
+    next = SchedulerService.GetNextAllowedTime(rules, now);
+    AssertEqual(new DateTime(2026, 6, 17, 15, 0, 0), next, "Expected next allowed time tomorrow.");
+
+    return Task.CompletedTask;
+}
+
 static async Task TestUsageDatabaseAccumulatesUsage()
 {
     using var db = CreateTempDatabase();
@@ -129,6 +150,30 @@ static async Task TestUsageDatabaseStoresScheduleTarget()
     AssertEqual("Chess", rule!.AppName, "Schedule target should round-trip.");
 }
 
+static async Task TestUsageDatabaseReplacesConfigTables()
+{
+    using var db = CreateTempDatabase();
+
+    await db.SaveAppMappingAsync("old.exe", "Old");
+    await db.SaveLimitRuleAsync(new AppLimitRule { AppName = "Old", DailyMaxMinutes = 30, Enabled = true });
+    await db.SaveScheduleRuleAsync(new ScheduleRule { AppName = "Old", DayOfWeek = "Everyday", StartTime = "10:00", EndTime = "11:00", Enabled = true });
+
+    await db.ReplaceAppMappingsAsync(new[] { new AppMapping("new.exe", "New") });
+    await db.ReplaceLimitRulesAsync(new[] { new AppLimitRule { AppName = "New", DailyMaxMinutes = 60, Enabled = false } });
+    await db.ReplaceScheduleRulesAsync(new[] { new ScheduleRule { AppName = "New", DayOfWeek = "Weekend", StartTime = "12:00", EndTime = "13:00", Enabled = true } });
+
+    var mappings = await db.GetAppMappingsAsync();
+    var limits = await db.GetLimitRulesAsync();
+    var schedules = await db.GetScheduleRulesAsync();
+
+    AssertEqual(1, mappings.Count, "Expected one mapping after replace.");
+    AssertEqual("New", mappings[0].AppName, "Expected replacement mapping.");
+    AssertEqual(1, limits.Count, "Expected one limit after replace.");
+    AssertEqual("New", limits[0].AppName, "Expected replacement limit.");
+    AssertEqual(1, schedules.Count, "Expected one schedule after replace.");
+    AssertEqual("New", schedules[0].AppName, "Expected replacement schedule.");
+}
+
 static async Task TestUsageDatabaseClearsToday()
 {
     using var db = CreateTempDatabase();
@@ -138,6 +183,24 @@ static async Task TestUsageDatabaseClearsToday()
 
     var today = await db.GetTodayUsageAsync();
     AssertFalse(today.Any(x => x.AppName == "Chess"), "Expected today's Chess usage to be cleared.");
+}
+
+static async Task TestUsageDatabaseTracksBonusTime()
+{
+    using var db = CreateTempDatabase();
+
+    var first = await db.AddTodayBonusMinutesAsync("Chess", 15);
+    var second = await db.AddTodayBonusMinutesAsync("Chess", 30);
+    var total = await db.GetTodayBonusMinutesAsync("Chess");
+    var all = await db.GetTodayBonusTimeAsync();
+
+    AssertEqual(15, first, "First bonus grant should return 15 minutes.");
+    AssertEqual(45, second, "Second bonus grant should accumulate.");
+    AssertEqual(45, total, "Bonus lookup should return accumulated minutes.");
+    AssertEqual(1, all.Count, "Expected one bonus record.");
+
+    await db.ClearTodayUsageAsync();
+    AssertEqual(0, await db.GetTodayBonusMinutesAsync("Chess"), "Reset today should clear bonus time.");
 }
 
 static Task TestLimitEnforcerPauseResume()

@@ -255,6 +255,7 @@ public class EmailService : IDisposable
                 return @"Commands:
   status                        - current limits, schedule, today's usage
   set [app] [minutes] min       - set daily limit (e.g. set aces 60 min)
+  bonus [app] [minutes] min     - add bonus time today (e.g. bonus aces 15 min)
   set schedule [day] [start]-[end] - set schedule (e.g. set schedule weekday 22:00-06:00)
   set kill-delay [seconds]      - set kill delay
   add [process.exe] [appname]   - register a known app (e.g. add aces.exe Aces)
@@ -272,7 +273,9 @@ Prefix commands with mc:, for example: mc: status";
                 foreach (var l in limits)
                 {
                     var u = usage.FirstOrDefault(x => x.AppName.Equals(l.AppName, StringComparison.OrdinalIgnoreCase));
-                    sb.AppendLine($"  {l.AppName}: {l.DailyMaxMinutes} min/day (used: {u?.DurationFormatted ?? "0m"})");
+                    var bonus = await _db.GetTodayBonusMinutesAsync(l.AppName);
+                    var bonusText = bonus > 0 ? $", bonus: +{bonus} min" : "";
+                    sb.AppendLine($"  {l.AppName}: {l.DailyMaxMinutes} min/day{bonusText} (used: {u?.DurationFormatted ?? "0m"})");
                 }
                 sb.AppendLine("\n=== Schedule ===");
                 foreach (var r in schedule)
@@ -301,6 +304,24 @@ Prefix commands with mc:, for example: mc: status";
                 });
                 _enforcer.ClearExceeded(appName);
                 return $"OK: Limit set: {appName} = {minutes} min/day";
+            }
+
+            // bonus [app] [minutes] min
+            var bonusMatch = Regex.Match(line, @"^(?:bonus|extend)\s+(.+?)\s+(\d+)\s*min", RegexOptions.IgnoreCase);
+            if (bonusMatch.Success)
+            {
+                var appName = bonusMatch.Groups[1].Value.Trim();
+                var minutes = int.Parse(bonusMatch.Groups[2].Value);
+                if (minutes is < 1 or > 240)
+                    return "Error: Bonus minutes must be between 1 and 240.";
+
+                var limits = await _db.GetLimitRulesAsync();
+                if (!limits.Any(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+                    return $"Error: No limit found for {appName}.";
+
+                var total = await _db.AddTodayBonusMinutesAsync(appName, minutes);
+                _enforcer.ClearExceeded(appName);
+                return $"OK: Bonus time added: {appName} +{minutes} min today ({total} min total).";
             }
 
             // set schedule [day] [start]-[end]

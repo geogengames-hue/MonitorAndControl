@@ -258,10 +258,11 @@ internal static class Program
         _scheduler.InvalidateCache();
 
         _enforcer = new LimitEnforcer(_db!, _tracker);
-        _enforcer.OnBreachAlert += ShowWarningPopup;
+        _enforcer.OnBreachAlert += ShowLimitWarningPopup;
         _enforcer.OnBreachAlert += (app, delay, proc) => Logger.Instance.Info($"Limit breach: {app} - closing in {delay}s");
         _enforcer.OnAppKilled += OnAppKilled;
         _enforcer.OnAppKilled += (app) => Logger.Instance.Warn($"App killed: {app}");
+        _enforcer.OnAppTerminatedBySchedule += ShowScheduleWarningPopup;
         _enforcer.OnAppTerminatedBySchedule += (app) => Logger.Instance.Warn($"Schedule kill: {app}");
 
         _notifier = new NotificationService(_db!);
@@ -327,34 +328,80 @@ internal static class Program
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SystemHelper", "popup");
         Directory.CreateDirectory(dir);
         var dest = Path.Combine(dir, "PopupHost.exe");
-        if (!File.Exists(dest))
+        var srcDir = AppContext.BaseDirectory;
+        var src = Path.Combine(srcDir, "PopupHost.exe");
+        if (!File.Exists(src))
+            src = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? srcDir, "PopupHost.exe");
+        if (File.Exists(src))
         {
-            var srcDir = AppContext.BaseDirectory;
-            var src = Path.Combine(srcDir, "PopupHost.exe");
-            if (!File.Exists(src))
-                src = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? srcDir, "PopupHost.exe");
-            if (File.Exists(src))
-            {
-                var srcTime = File.GetLastWriteTimeUtc(src);
-                var destTime = File.Exists(dest) ? File.GetLastWriteTimeUtc(dest) : DateTime.MinValue;
-                if (srcTime > destTime)
-                    File.Copy(src, dest, overwrite: true);
-            }
+            var srcTime = File.GetLastWriteTimeUtc(src);
+            var destTime = File.Exists(dest) ? File.GetLastWriteTimeUtc(dest) : DateTime.MinValue;
+            if (srcTime > destTime)
+                File.Copy(src, dest, overwrite: true);
         }
         return File.Exists(dest) ? dest : "";
     }
 
-    private static async void ShowWarningPopup(string appName, int delaySeconds, string processName)
+    private static async void ShowLimitWarningPopup(string appName, int delaySeconds, string processName)
     {
         try
         {
             var showWarning = await _db!.GetShowWarningAsync();
             if (!showWarning) return;
             var warningMsg = await _db!.GetWarningMessageAsync();
+            var detail = await GetLimitResetDetailAsync(appName);
+            ShowWarningPopup(
+                appName,
+                delaySeconds,
+                processName,
+                "Daily limit reached",
+                string.IsNullOrWhiteSpace(warningMsg) ? $"{appName} reached today's limit." : warningMsg,
+                detail);
+        }
+        catch { }
+    }
+
+    private static async void ShowScheduleWarningPopup(string appName)
+    {
+        try
+        {
+            var showWarning = await _db!.GetShowWarningAsync();
+            if (!showWarning) return;
+            var procName = _tracker?.GetProcessNameForApp(appName) ?? appName;
+            var detail = await GetScheduleResetDetailAsync(appName);
+            ShowWarningPopup(
+                appName,
+                0,
+                procName,
+                "Outside allowed hours",
+                $"{appName} is not allowed right now.",
+                detail);
+        }
+        catch { }
+    }
+
+    private static void ShowWarningPopup(
+        string appName,
+        int delaySeconds,
+        string processName,
+        string reason,
+        string message,
+        string detail)
+    {
+        try
+        {
             var popupPath = GetPopupHostPath();
             if (string.IsNullOrEmpty(popupPath)) return;
 
-            var json = System.Text.Json.JsonSerializer.Serialize(new { appName, delay = delaySeconds, message = warningMsg, proc = processName });
+            var json = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                appName,
+                delay = delaySeconds,
+                message,
+                proc = processName,
+                reason,
+                detail
+            });
             var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
             Process.Start(new ProcessStartInfo
             {
@@ -366,6 +413,51 @@ internal static class Program
             });
         }
         catch { }
+    }
+
+    private static async Task<string> GetLimitResetDetailAsync(string appName)
+    {
+        try
+        {
+            var limits = await _db!.GetLimitRulesAsync();
+            var limit = limits.FirstOrDefault(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
+            if (limit == null)
+                return "The app can be used again after the limit resets at midnight.";
+
+            var bonus = await _db.GetTodayBonusMinutesAsync(appName);
+            var total = limit.DailyMaxMinutes + bonus;
+            var reset = DateTime.Today.AddDays(1);
+            return $"Today's allowance: {total} min. Resets at {reset:t}.";
+        }
+        catch
+        {
+            return "The app can be used again after the limit resets at midnight.";
+        }
+    }
+
+    private static async Task<string> GetScheduleResetDetailAsync(string appName)
+    {
+        try
+        {
+            if (_scheduler == null)
+                return "Check the dashboard schedule for the next allowed time.";
+
+            var rules = await _scheduler.GetRulesAsync();
+            var matching = rules
+                .Where(r => r.Enabled &&
+                    (string.IsNullOrWhiteSpace(r.AppName) ||
+                     r.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            var next = SchedulerService.GetNextAllowedTime(matching, DateTime.Now);
+            return next.HasValue
+                ? $"Next allowed time: {next.Value:g}."
+                : "Check the dashboard schedule for the next allowed time.";
+        }
+        catch
+        {
+            return "Check the dashboard schedule for the next allowed time.";
+        }
     }
 
     private static void OnAppKilled(string appName)

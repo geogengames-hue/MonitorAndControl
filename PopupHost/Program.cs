@@ -20,8 +20,10 @@ static class Program
             var delay = root.GetProperty("delay").GetInt32();
             var message = root.GetProperty("message").GetString() ?? $"{appName} time limit reached!";
             var proc = root.TryGetProperty("proc", out var p) ? p.GetString() ?? "" : "";
+            var reason = root.TryGetProperty("reason", out var r) ? r.GetString() ?? "" : "";
+            var detail = root.TryGetProperty("detail", out var d) ? d.GetString() ?? "" : "";
 
-            Application.Run(new WarningPopup(appName, delay, message, proc));
+            Application.Run(new WarningPopup(appName, delay, message, proc, reason, detail));
         }
         catch
         {
