@@ -1,6 +1,6 @@
 # Monitor & Control
 
-A Windows desktop application that monitors application usage, enforces daily time limits, and provides a real‑time web dashboard. It runs silently in the system tray and can optionally be paired with a Windows service watchdog that auto‑restarts it if the process stops.
+A **parental control** Windows desktop application that monitors computer and application usage, enforces daily screen time limits per app, and provides a real‑time web dashboard. It runs silently in the system tray and can optionally be paired with a Windows service watchdog that auto‑restarts it if the process stops. Designed for parents who want to manage their children's gaming and app time without intrusive restrictions.
 
 ---
 
