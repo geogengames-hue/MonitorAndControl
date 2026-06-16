@@ -1001,19 +1001,18 @@ document.getElementById('settings-save').addEventListener('click', async () => {
 });
 
 document.getElementById('set-language').addEventListener('change', async e => {
-  await loadTranslations(e.target.value);
-  applyTranslations();
+  const newLang = e.target.value;
+  await loadTranslations(newLang);
   try {
     await api('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uiLanguage })
+      body: JSON.stringify({ uiLanguage: newLang })
     });
   } catch (err) {
     log(err);
   }
-  loadLive();
-  loadLiveToday();
+  location.reload();
 });
 
 document.getElementById('settings-webhook-test').addEventListener('click', async () => {
