@@ -1,8 +1,25 @@
-# Monitor & Control
+# 🖥️ Monitor & Control
+### Free Parental Control App for Windows
 
-A **parental control** Windows desktop application that monitors computer and application usage, enforces daily screen time limits per app, and provides a real‑time web dashboard. It runs silently in the system tray and can optionally be paired with a Windows service watchdog that auto‑restarts it if the process stops. Designed for parents who want to manage their children's gaming and app time without intrusive restrictions.
+**Track. Limit. Protect.**  
+Set daily screen time limits per app, enforce schedules,  
+and monitor usage — all from a beautiful web dashboard.
+
+## 💡 Why Monitor & Control?
+
+| Problem | Our Solution |
+|---------|-------------|
+| 😤 Kids play games all night | ⏰ Auto-close apps when time limit is reached |
+| 🎮 Hard to track which games they play | 📊 Real-time dashboard with usage charts |
+| 😴 Gaming during school hours | 📅 Schedule rules (e.g. only 15:00–21:00) |
+| 🏃 Kids close the app | 🛡️ Watchdog service auto-restarts it |
+| 📧 Not home to check | 📨 Email alerts & remote commands via Gmail |
+| 🌍 Language barrier | 🗣️ English, German, Spanish, French, Russian |
 
 ---
+
+> 👨‍👩‍👧 **For parents** who want to manage their children's gaming time  
+> without intrusive restrictions — runs silently in the background.
 
 ## Features
 
