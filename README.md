@@ -246,7 +246,29 @@ Once installed, the `GameHost` service runs under the SYSTEM account and automat
 1. Enable 2‑Factor Authentication on your Gmail account
 2. Generate an [App Password](https://support.google.com/accounts/answer/185833)
 3. Configure in **Settings** → **Email Notifications & Control**
-4. Reply to alerts with commands: `mc: status`, `mc: set [app] [min] min`, `mc: pause`, `mc: resume`
+4. Reply to any alert email with one of these commands (prefix with `mc:` or `monitor:`):
+
+| Command | Example | Description |
+|---------|---------|-------------|
+| `help` | `mc: help` | Shows all available commands |
+| `status` | `mc: status` | Current limits, schedule, and today's usage |
+| `set [app] [min] min` | `mc: set Fortnite 60 min` | Set daily limit for an app |
+| `bonus [app] [min] min` | `mc: bonus Fortnite 15 min` | Add bonus time today |
+| `extend [app] until bedtime` | `mc: extend Fortnite until bedtime` | Extend until end of allowed window |
+| `set schedule [day] [start]-[end]` | `mc: set schedule weekday 22:00-06:00` | Add a schedule rule |
+| `set kill-delay [sec]` | `mc: set kill-delay 60` | Change the kill delay |
+| `add [process.exe] [name]` | `mc: add aces.exe Aces` | Register a new app to track |
+
+Examples:
+```
+mc: status
+mc: set Fortnite 120 min
+mc: bonus Roblox 30 min
+mc: extend Minecraft until bedtime
+mc: set schedule weekend 09:00-22:00
+mc: set kill-delay 30
+mc: add chrome.exe Chrome
+```
 
 ### Uninstallation
 
