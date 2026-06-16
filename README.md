@@ -126,7 +126,7 @@ Opens the dashboard at `http://localhost:5000` and runs in the system tray.
 
 ### Quick start
 
-1. **Download** the latest release from the [Releases](https://github.com/YOUR_USER/MonitorAndControl/releases) page
+1. **Download** the latest release from the [Releases](https://github.com/geogengames-hue/MonitorAndControl/releases) page
 2. **Extract** the zip to a folder (e.g. `C:\MonitorAndControl`)
 3. **Run `DeviceMon.exe`** (no admin required for basic usage)
 4. **Open the dashboard** — press `Ctrl+Alt+H` or open `http://localhost:5000` in a browser
