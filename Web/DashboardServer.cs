@@ -204,6 +204,51 @@ public class DashboardServer
             return Results.Ok(new { status = "cleared" });
         });
 
+        app.MapPost("/api/actions/pause", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+
+            var minutes = 15;
+            if (ctx.Request.ContentLength > 0)
+            {
+                using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+                if (doc.RootElement.TryGetProperty("minutes", out var mins))
+                    minutes = mins.GetInt32();
+            }
+
+            if (minutes is < 1 or > 240)
+                return Results.BadRequest(new { error = "Pause duration must be between 1 and 240 minutes." });
+
+            var pausedUntil = enforcer.PauseFor(TimeSpan.FromMinutes(minutes));
+            return Results.Ok(new { status = "paused", pausedUntil });
+        });
+
+        app.MapPost("/api/actions/resume", (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            enforcer.Resume();
+            return Results.Ok(new { status = "resumed" });
+        });
+
+        app.MapPost("/api/actions/reset-today", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            await db.ClearTodayUsageAsync();
+            enforcer.ClearExceeded();
+            return Results.Ok(new { status = "today_reset" });
+        });
+
+        app.MapPost("/api/actions/block-all", (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            var killed = enforcer.KillRunningTrackedApps();
+            return Results.Ok(new { status = "blocked", killed });
+        });
+
         app.MapGet("/api/live", () =>
         {
             var countdownApps = new List<object>();
@@ -211,7 +256,9 @@ public class DashboardServer
             {
                 currentApp = tracker.CurrentAppName ?? "None",
                 currentProcess = tracker.CurrentProcessName ?? "None",
-                isTracking = tracker.CurrentAppName != null
+                isTracking = tracker.CurrentAppName != null,
+                enforcementPaused = enforcer.IsPaused,
+                pausedUntil = enforcer.PausedUntil
             }, JsonOpts);
         });
 
@@ -560,16 +607,28 @@ public class DashboardServer
                 catch { }
             }
 
-            enforcer.OnBreachAlert += (app, delay, proc) => SendAlert("breach", app, delay);
-            enforcer.OnCountdownTick += (app, secs) => SendAlert("countdown", app, secs);
-            enforcer.OnAppKilled += (app) => SendAlert("killed", app);
-            enforcer.OnAppTerminatedBySchedule += (app) => SendAlert("schedule_kill", app);
+            Action<string, int, string> breachHandler = (app, delay, proc) => SendAlert("breach", app, delay);
+            Action<string, int> countdownHandler = (app, secs) => SendAlert("countdown", app, secs);
+            Action<string> killedHandler = app => SendAlert("killed", app);
+            Action<string> scheduleKillHandler = app => SendAlert("schedule_kill", app);
+
+            enforcer.OnBreachAlert += breachHandler;
+            enforcer.OnCountdownTick += countdownHandler;
+            enforcer.OnAppKilled += killedHandler;
+            enforcer.OnAppTerminatedBySchedule += scheduleKillHandler;
 
             try
             {
                 await Task.Delay(Timeout.Infinite, ct);
             }
             catch (OperationCanceledException) { }
+            finally
+            {
+                enforcer.OnBreachAlert -= breachHandler;
+                enforcer.OnCountdownTick -= countdownHandler;
+                enforcer.OnAppKilled -= killedHandler;
+                enforcer.OnAppTerminatedBySchedule -= scheduleKillHandler;
+            }
         });
     }
 
@@ -641,10 +700,13 @@ public class DashboardServer
 
     private static bool NormalizeScheduleRule(ScheduleRule rule)
     {
+        rule.AppName = Clean(rule.AppName);
         rule.DayOfWeek = Clean(rule.DayOfWeek);
         rule.StartTime = Clean(rule.StartTime);
         rule.EndTime = Clean(rule.EndTime);
 
+        if (!string.IsNullOrEmpty(rule.AppName) && !IsValidAppName(rule.AppName))
+            return false;
         if (!AllowedDays.Contains(rule.DayOfWeek))
             return false;
         if (!TimeSpan.TryParse(rule.StartTime, out _) ||

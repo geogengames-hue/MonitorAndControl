@@ -43,12 +43,19 @@ public class UsageTracker : IDisposable
 
     private async void OnWindowChanged(string app, string proc)
     {
-        if (!_running) return;
-        await RecordSwitchAsync();
-        _lastApp = app;
-        _lastProc = proc;
-        _lastTick = Environment.TickCount64;
-        Logger.Instance.Info($"Tracking: {app} ({proc})");
+        try
+        {
+            if (!_running) return;
+            await RecordSwitchAsync();
+            _lastApp = app;
+            _lastProc = proc;
+            _lastTick = Environment.TickCount64;
+            Logger.Instance.Info($"Tracking: {app} ({proc})");
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Window change tracking failed: {ex.Message}");
+        }
     }
 
     private async Task RecordSwitchAsync()
@@ -77,8 +84,6 @@ public class UsageTracker : IDisposable
 
             var limits = await _db.GetLimitRulesAsync();
             var todayUsage = await _db.GetTodayUsageAsync();
-            var scheduleViolation = await _scheduler.IsInViolationPeriodAsync();
-
             var breached = new List<(string AppName, long UsedSecs, long MaxSecs)>();
 
             foreach (var limit in limits.Where(l => l.Enabled))
@@ -94,12 +99,13 @@ public class UsageTracker : IDisposable
             var knownAppNames = new HashSet<string>(
                 _windowTracker.KnownApps.Values,
                 StringComparer.OrdinalIgnoreCase);
+            var scheduleViolationApps = await _scheduler.GetViolatingAppNamesAsync(knownAppNames);
 
-            await _limitEnforcer.EnforceAsync(breached, scheduleViolation, knownAppNames);
+            await _limitEnforcer.EnforceAsync(breached, scheduleViolationApps, knownAppNames);
         }
-        catch
+        catch (Exception ex)
         {
-            // Silently ignore flush errors
+            Logger.Instance.Error($"Usage flush failed: {ex.Message}");
         }
     }
 

@@ -88,7 +88,7 @@ public class NotificationService : IDisposable
         {
             type = "test",
             app = "System",
-            message = "Monitor & Control webhook test — notification working!",
+            message = "Monitor & Control webhook test - notification working!",
             timestamp = DateTime.Now
         });
     }

@@ -36,6 +36,8 @@ h3 { font-size: 16px; margin: 15px 0 10px; color: #ccc; }
 .live-label { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
 .live-app { font-size: 28px; font-weight: 700; color: #fff; }
 .live-proc { font-size: 13px; color: #666; margin-top: 3px; }
+.live-status { font-size: 13px; color: #44bb44; margin-top: 10px; font-weight: 600; }
+.live-status.paused { color: #ffcc66; }
 .live-app-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #2a2a3e; }
 .live-app-item:last-child { border: none; }
 .live-app-item .name { color: #ccc; }
@@ -156,6 +158,8 @@ button.btn-secondary:hover { background: #4a4a6e; }
 button.btn-danger { background: #cc3333; }
 button.btn-danger:hover { background: #bb2222; }
 input[type="checkbox"] { width: 18px; height: 18px; margin: 0; }
+.quick-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.quick-actions button { margin: 0; }
 
 .settings-form label { display: block; margin-top: 15px; margin-bottom: 5px; color: #aaa; font-size: 13px; }
 .settings-form input, .settings-form select { width: 250px; }

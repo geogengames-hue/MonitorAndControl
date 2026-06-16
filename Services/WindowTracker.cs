@@ -7,6 +7,7 @@ public class WindowTracker : IDisposable
 {
     private readonly Dictionary<string, string> _knownApps;
     private readonly System.Threading.Timer _timer;
+    private DateTime _lastPollErrorLogUtc = DateTime.MinValue;
     private bool _running;
 
     public string? CurrentAppName { get; private set; }
@@ -82,12 +83,16 @@ public class WindowTracker : IDisposable
             CurrentProcessName = procName;
             CurrentWindowHandle = hWnd;
 
-            Logger.Instance.Info($"Window: {appName} ({procName}) — \"{title}\"");
+            Logger.Instance.Info($"Window: {appName} ({procName}) - \"{title}\"");
             OnActiveWindowChanged?.Invoke(appName, procName);
         }
-        catch
+        catch (Exception ex)
         {
-            // Silently ignore polling errors
+            if ((DateTime.UtcNow - _lastPollErrorLogUtc).TotalSeconds >= 30)
+            {
+                _lastPollErrorLogUtc = DateTime.UtcNow;
+                Logger.Instance.Error($"Window polling failed: {ex.Message}");
+            }
         }
     }
 

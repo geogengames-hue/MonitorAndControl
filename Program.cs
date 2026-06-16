@@ -38,7 +38,7 @@ internal static class Program
         _instanceMutex = new Mutex(true, "DeviceMon_SingleInstance", out var createdNew);
         if (!createdNew)
         {
-            Logger.Instance.Warn("Another instance already running — exiting");
+            Logger.Instance.Warn("Another instance already running - exiting");
             return;
         }
 
@@ -154,7 +154,7 @@ internal static class Program
 
             using var sc = new System.ServiceProcess.ServiceController(WatchdogServiceName);
             _ = sc.Status;
-            // Service exists — check if binPath matches current location
+            // Service exists - check if binPath matches current location.
             try
             {
                 using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
@@ -259,7 +259,7 @@ internal static class Program
 
         _enforcer = new LimitEnforcer(_db!, _tracker);
         _enforcer.OnBreachAlert += ShowWarningPopup;
-        _enforcer.OnBreachAlert += (app, delay, proc) => Logger.Instance.Info($"Limit breach: {app} — closing in {delay}s");
+        _enforcer.OnBreachAlert += (app, delay, proc) => Logger.Instance.Info($"Limit breach: {app} - closing in {delay}s");
         _enforcer.OnAppKilled += OnAppKilled;
         _enforcer.OnAppKilled += (app) => Logger.Instance.Warn($"App killed: {app}");
         _enforcer.OnAppTerminatedBySchedule += (app) => Logger.Instance.Warn($"Schedule kill: {app}");

@@ -31,6 +31,17 @@
         <div class="live-label">Currently Active</div>
         <div class="live-app" id="live-app">Waiting...</div>
         <div class="live-proc" id="live-proc"></div>
+        <div class="live-status" id="enforcement-status"></div>
+      </div>
+      <div class="live-card">
+        <div class="live-label">Quick Actions</div>
+        <div class="quick-actions">
+          <button id="action-pause-15" class="btn-secondary">Pause 15m</button>
+          <button id="action-pause-30" class="btn-secondary">Pause 30m</button>
+          <button id="action-resume" class="btn-secondary">Resume</button>
+          <button id="action-reset-today" class="btn-secondary">Reset Today</button>
+          <button id="action-block-all" class="btn-danger">Block All Now</button>
+        </div>
       </div>
       <div class="live-card">
         <div class="live-label">Today's Usage</div>
@@ -101,7 +112,7 @@
     <div id="view-discover" class="view">
       <h2>Discover Apps &amp; Games</h2>
       <p style="margin-bottom:15px">Scan your system for installed games and apps. Found items listed here can be added to the Known Apps list with one click.</p>
-      <button id="discover-scan" class="btn-secondary" style="margin-bottom:15px">🔍 Scan Now</button>
+      <button id="discover-scan" class="btn-secondary" style="margin-bottom:15px">Scan Now</button>
       <div id="discover-results" class="table-container">
         <p style="color:#666;text-align:center;padding:30px">Click "Scan Now" to discover installed apps and games.</p>
       </div>
@@ -111,6 +122,9 @@
       <div class="table-container" id="schedule-table"></div>
       <div class="add-form">
         <h3>Add Allowed Hours Rule</h3>
+        <select id="schedule-app">
+          <option value="">All apps</option>
+        </select>
         <select id="schedule-day">
           <option value="Weekday">Weekday (Mon-Fri)</option>
           <option value="Weekend">Weekend (Sat-Sun)</option>

@@ -8,13 +8,23 @@ public class UsageDatabase : IDisposable
     private readonly SqliteConnection _connection;
     private static readonly SemaphoreSlim _lock = new(1, 1);
 
-    public UsageDatabase()
+    public UsageDatabase(string? dbPath = null)
     {
-        var folder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SystemHelper");
-        Directory.CreateDirectory(folder);
-        var dbPath = Path.Combine(folder, "monitor.db");
+        if (string.IsNullOrWhiteSpace(dbPath))
+        {
+            var folder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "SystemHelper");
+            Directory.CreateDirectory(folder);
+            dbPath = Path.Combine(folder, "monitor.db");
+        }
+        else
+        {
+            var folder = Path.GetDirectoryName(Path.GetFullPath(dbPath));
+            if (!string.IsNullOrWhiteSpace(folder))
+                Directory.CreateDirectory(folder);
+        }
+
         _connection = new SqliteConnection($"Data Source={dbPath}");
         _connection.Open();
         Initialize();
@@ -42,6 +52,7 @@ public class UsageDatabase : IDisposable
 
             CREATE TABLE IF NOT EXISTS ScheduleRules (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                AppName TEXT NOT NULL DEFAULT '',
                 DayOfWeek TEXT NOT NULL,
                 StartTime TEXT NOT NULL,
                 EndTime TEXT NOT NULL,
@@ -60,6 +71,12 @@ public class UsageDatabase : IDisposable
             );
             """;
         cmd.ExecuteNonQuery();
+
+        using var migrate = _connection.CreateCommand();
+        migrate.CommandText = """
+            ALTER TABLE ScheduleRules ADD COLUMN AppName TEXT NOT NULL DEFAULT '';
+            """;
+        try { migrate.ExecuteNonQuery(); } catch (SqliteException ex) when (ex.SqliteErrorCode == 1) { }
     }
 
     public async Task RecordUsageAsync(string appName, string processName, int seconds)
@@ -125,6 +142,19 @@ public class UsageDatabase : IDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = "DELETE FROM UsageRecords";
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task ClearTodayUsageAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM UsageRecords WHERE Date = @date";
+            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
             await cmd.ExecuteNonQueryAsync();
         }
         finally { _lock.Release(); }
@@ -207,16 +237,17 @@ public class UsageDatabase : IDisposable
         {
             var list = new List<ScheduleRule>();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT Id, DayOfWeek, StartTime, EndTime, Enabled FROM ScheduleRules";
+            cmd.CommandText = "SELECT Id, AppName, DayOfWeek, StartTime, EndTime, Enabled FROM ScheduleRules";
             using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
                 list.Add(new ScheduleRule
                 {
                     Id = r.GetInt32(0),
-                    DayOfWeek = r.GetString(1),
-                    StartTime = r.GetString(2),
-                    EndTime = r.GetString(3),
-                    Enabled = r.GetBoolean(4)
+                    AppName = r.GetString(1),
+                    DayOfWeek = r.GetString(2),
+                    StartTime = r.GetString(3),
+                    EndTime = r.GetString(4),
+                    Enabled = r.GetBoolean(5)
                 });
             return list;
         }
@@ -230,9 +261,10 @@ public class UsageDatabase : IDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO ScheduleRules (DayOfWeek, StartTime, EndTime, Enabled)
-                VALUES (@day, @start, @end, @en);
+                INSERT INTO ScheduleRules (AppName, DayOfWeek, StartTime, EndTime, Enabled)
+                VALUES (@app, @day, @start, @end, @en);
                 """;
+            cmd.Parameters.AddWithValue("@app", rule.AppName ?? "");
             cmd.Parameters.AddWithValue("@day", rule.DayOfWeek);
             cmd.Parameters.AddWithValue("@start", rule.StartTime);
             cmd.Parameters.AddWithValue("@end", rule.EndTime);
@@ -249,10 +281,11 @@ public class UsageDatabase : IDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                UPDATE ScheduleRules SET DayOfWeek=@day, StartTime=@start, EndTime=@end, Enabled=@en
+                UPDATE ScheduleRules SET AppName=@app, DayOfWeek=@day, StartTime=@start, EndTime=@end, Enabled=@en
                 WHERE Id=@id;
                 """;
             cmd.Parameters.AddWithValue("@id", rule.Id);
+            cmd.Parameters.AddWithValue("@app", rule.AppName ?? "");
             cmd.Parameters.AddWithValue("@day", rule.DayOfWeek);
             cmd.Parameters.AddWithValue("@start", rule.StartTime);
             cmd.Parameters.AddWithValue("@end", rule.EndTime);

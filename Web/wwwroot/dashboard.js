@@ -43,7 +43,7 @@ async function loadDiscover() {
       html += '<h3 style="margin:15px 0 10px">Currently Running (untracked)</h3>';
       html += '<table><thead><tr><th>Process</th><th>Window Title</th><th>Actions</th></tr></thead><tbody>';
       processes.forEach(p => {
-        // Use process name (not window title) as the app name — avoids storing
+        // Use process name (not window title) as the app name - avoids storing
         // junk like "Loading..." or "War Thunder (DirectX 12, 64bit)" as the app name
         const appName = p.name.replace(/\.exe$/i, '');
         html += `<tr>
@@ -66,7 +66,7 @@ async function loadDiscover() {
 
 async function addDiscoveredApp(procName, displayName) {
   try {
-    // Register process→name mapping so tracker recognizes it
+    // Register process -> name mapping so tracker recognizes it
     await api('/api/apps', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -225,8 +225,45 @@ async function loadLive() {
     const data = await api('/api/live');
     document.getElementById('live-app').textContent = data.currentApp || '(idle)';
     document.getElementById('live-proc').textContent = data.currentProcess || '';
+    const status = document.getElementById('enforcement-status');
+    if (data.enforcementPaused) {
+      const until = data.pausedUntil ? new Date(data.pausedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      status.textContent = until ? `Enforcement paused until ${until}` : 'Enforcement paused';
+      status.classList.add('paused');
+    } else {
+      status.textContent = 'Enforcement active';
+      status.classList.remove('paused');
+    }
   } catch (e) { log(e); }
 }
+
+async function runQuickAction(action, payload, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  try {
+    await api(`/api/actions/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload ? JSON.stringify(payload) : undefined
+    });
+    loadLive();
+    loadLiveToday();
+    loadToday();
+  } catch (e) {
+    log(e);
+    alert('Action failed.');
+  }
+}
+
+document.getElementById('action-pause-15').addEventListener('click', () =>
+  runQuickAction('pause', { minutes: 15 }));
+document.getElementById('action-pause-30').addEventListener('click', () =>
+  runQuickAction('pause', { minutes: 30 }));
+document.getElementById('action-resume').addEventListener('click', () =>
+  runQuickAction('resume'));
+document.getElementById('action-reset-today').addEventListener('click', () =>
+  runQuickAction('reset-today', null, "Reset today's usage for all apps?"));
+document.getElementById('action-block-all').addEventListener('click', () =>
+  runQuickAction('block-all', null, 'Close all running tracked apps now?'));
 
 async function loadLiveToday() {
   try {
@@ -602,11 +639,17 @@ async function forgetApp(appName, procName) {
 // Schedule
 async function loadSchedule() {
   try {
-    const rules = await api('/api/schedule');
+    const [rules, known, limits] = await Promise.all([
+      api('/api/schedule'),
+      api('/api/apps'),
+      api('/api/limits')
+    ]);
+    syncScheduleAppOptions(known, limits);
     const table = document.getElementById('schedule-table');
-    let html = '<table><thead><tr><th>Day</th><th>Start</th><th>End</th><th>Enabled</th><th>Actions</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Applies To</th><th>Day</th><th>Start</th><th>End</th><th>Enabled</th><th>Actions</th></tr></thead><tbody>';
     rules.forEach(r => {
       html += `<tr>
+        <td>${r.appName ? esc(r.appName) : 'All apps'}</td>
         <td>${r.dayOfWeek}</td>
         <td>${r.startTime}</td>
         <td>${r.endTime}</td>
@@ -614,10 +657,23 @@ async function loadSchedule() {
         <td class="actions"><button class="btn-danger" onclick="deleteSchedule(${r.id})">Delete</button></td>
       </tr>`;
     });
-    if (rules.length === 0) html += '<tr><td colspan="5" style="color:#666;text-align:center">No schedule rules configured</td></tr>';
+    if (rules.length === 0) html += '<tr><td colspan="6" style="color:#666;text-align:center">No schedule rules configured</td></tr>';
     html += '</tbody></table>';
     table.innerHTML = html;
   } catch (e) { log(e); }
+}
+
+function syncScheduleAppOptions(known, limits) {
+  const select = document.getElementById('schedule-app');
+  const current = select.value;
+  const apps = [...new Set([
+    ...Object.keys(known).map(k => known[k]),
+    ...limits.map(l => l.appName)
+  ])].filter(Boolean).sort();
+
+  select.innerHTML = '<option value="">All apps</option>' +
+    apps.map(app => `<option value="${escAttr(app)}">${esc(app)}</option>`).join('');
+  if (apps.includes(current)) select.value = current;
 }
 
 async function toggleSchedule(id, enabled) {
@@ -637,11 +693,12 @@ async function deleteSchedule(id) {
 }
 
 document.getElementById('schedule-save').addEventListener('click', async () => {
+  const appName = document.getElementById('schedule-app').value;
   const day = document.getElementById('schedule-day').value;
   const start = document.getElementById('schedule-start').value;
   const end = document.getElementById('schedule-end').value;
   if (!day || !start || !end) return;
-  await api('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dayOfWeek: day, startTime: start, endTime: end, enabled: true }) });
+  await api('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appName, dayOfWeek: day, startTime: start, endTime: end, enabled: true }) });
   loadSchedule();
 });
 
@@ -755,10 +812,10 @@ document.getElementById('settings-webhook-test').addEventListener('click', async
   try {
     await api('/api/settings/webhook-test', { method: 'POST' });
     el.style.color = '#44bb44';
-    el.textContent = '✅ Test sent! Check your webhook endpoint.';
+    el.textContent = 'Test sent. Check your webhook endpoint.';
   } catch {
     el.style.color = '#ff4444';
-    el.textContent = '❌ Failed';
+    el.textContent = 'Failed';
   }
   setTimeout(() => el.textContent = '', 8000);
 });
@@ -776,14 +833,14 @@ document.getElementById('settings-email-test').addEventListener('click', async (
     });
     if (r.status === 'test_sent') {
       el.style.color = '#44bb44';
-      el.textContent = '✅ Test sent! Check your inbox.';
+      el.textContent = 'Test sent. Check your inbox.';
     } else {
       el.style.color = '#ff4444';
-      el.textContent = '❌ ' + (r.error || 'Failed');
+      el.textContent = (r.error || 'Failed');
     }
   } catch (e) {
     el.style.color = '#ff4444';
-    el.textContent = '❌ ' + (e.message || 'Failed');
+    el.textContent = (e.message || 'Failed');
   }
   setTimeout(() => el.textContent = '', 10000);
 });

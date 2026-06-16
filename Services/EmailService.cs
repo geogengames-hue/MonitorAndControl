@@ -86,7 +86,10 @@ public class EmailService : IDisposable
                 await NotifyTrackedAppStartedAsync(appName, processName);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"App-start email polling failed: {ex.Message}");
+        }
     }
 
     public async Task<string?> SendAlertAsync(string subject, string body)
@@ -115,7 +118,7 @@ public class EmailService : IDisposable
         }
         catch (Exception ex)
         {
-            Logger.Instance.Error($"Email send failed: {subject} — {ex.Message}");
+            Logger.Instance.Error($"Email send failed: {subject} - {ex.Message}");
             return ex.Message;
         }
     }
@@ -208,7 +211,10 @@ public class EmailService : IDisposable
 
             await client.DisconnectAsync(true);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Email command polling failed: {ex.Message}");
+        }
     }
 
     private string[] GetAllowedSenders()
@@ -270,7 +276,10 @@ Prefix commands with mc:, for example: mc: status";
                 }
                 sb.AppendLine("\n=== Schedule ===");
                 foreach (var r in schedule)
-                    sb.AppendLine($"  {r.DayOfWeek}: {r.StartTime}-{r.EndTime} ({(r.Enabled ? "on" : "off")})");
+                {
+                    var target = string.IsNullOrWhiteSpace(r.AppName) ? "All apps" : r.AppName;
+                    sb.AppendLine($"  {target}: {r.DayOfWeek} {r.StartTime}-{r.EndTime} ({(r.Enabled ? "on" : "off")})");
+                }
                 var delay = await _db.GetKillDelayAsync();
                 sb.AppendLine($"\nKill delay: {delay}s");
                 var tracking = await _db.GetSettingAsync("EmailNotifyEnabled", "false");
@@ -291,7 +300,7 @@ Prefix commands with mc:, for example: mc: status";
                     Enabled = true
                 });
                 _enforcer.ClearExceeded(appName);
-                return $"✅ Limit set: {appName} = {minutes} min/day";
+                return $"OK: Limit set: {appName} = {minutes} min/day";
             }
 
             // set schedule [day] [start]-[end]
@@ -310,9 +319,9 @@ Prefix commands with mc:, for example: mc: status";
                         Enabled = true
                     });
                     _scheduler.InvalidateCache();
-                    return $"✅ Schedule added: {day} {schedMatch.Groups[2].Value}-{schedMatch.Groups[3].Value}";
+                    return $"OK: Schedule added: {day} {schedMatch.Groups[2].Value}-{schedMatch.Groups[3].Value}";
                 }
-                return $"❌ Invalid day: {day}. Use: Weekday, Weekend, Everyday, or day name.";
+                return $"Error: Invalid day: {day}. Use: Weekday, Weekend, Everyday, or day name.";
             }
 
             // set kill-delay [seconds]
@@ -321,7 +330,7 @@ Prefix commands with mc:, for example: mc: status";
             {
                 var secs = int.Parse(delayMatch.Groups[1].Value);
                 await _db.SetKillDelayAsync(secs);
-                return $"✅ Kill delay set to {secs}s";
+                return $"OK: Kill delay set to {secs}s";
             }
 
             // add [process.exe] [appName]
@@ -332,7 +341,7 @@ Prefix commands with mc:, for example: mc: status";
                 var name = addMatch.Groups[2].Value.Trim();
                 await _db.SaveAppMappingAsync(proc, name);
                 _tracker.AddKnownApp(proc, name);
-                return $"✅ App added: {proc} → {name}";
+                return $"OK: App added: {proc} -> {name}";
             }
         }
         return null;
@@ -354,7 +363,10 @@ Prefix commands with mc:, for example: mc: status";
             await client.SendAsync(msg);
             await client.DisconnectAsync(true);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Email reply failed to {to}: {ex.Message}");
+        }
     }
 
     public async Task<string?> TestEmailAsync(string? emailOverride = null, string? passwordOverride = null)
@@ -370,7 +382,7 @@ Prefix commands with mc:, for example: mc: status";
             msg.From.Add(new MailboxAddress("Monitor", email));
             msg.To.Add(new MailboxAddress("Parent", email));
             msg.Subject = "Test from Monitor";
-            msg.Body = new TextPart("plain") { Text = "Email notification test — If you receive this, email is configured correctly." };
+            msg.Body = new TextPart("plain") { Text = "Email notification test - If you receive this, email is configured correctly." };
 
             using var client = new SmtpClient();
             await client.ConnectAsync(SmtpHost, SmtpPort, SecureSocketOptions.StartTls);

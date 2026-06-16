@@ -11,11 +11,15 @@ public class LimitEnforcer
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeCountdowns = new();
     private readonly ConcurrentDictionary<string, string> _exceededToday = new(StringComparer.OrdinalIgnoreCase);
     private string _todayDate = DateTime.Now.ToString("yyyy-MM-dd");
+    private DateTimeOffset? _pausedUntil;
 
     public event Action<string, int, string>? OnBreachAlert;
     public event Action<string, int>? OnCountdownTick;
     public event Action<string>? OnAppKilled;
     public event Action<string>? OnAppTerminatedBySchedule;
+
+    public DateTimeOffset? PausedUntil => _pausedUntil;
+    public bool IsPaused => _pausedUntil.HasValue && _pausedUntil.Value > DateTimeOffset.Now;
 
     public LimitEnforcer(UsageDatabase db, WindowTracker tracker)
     {
@@ -66,7 +70,7 @@ public class LimitEnforcer
             OnAppKilled?.Invoke(app);
         }
 
-        // Child closed and reopened app during countdown — kill immediately
+        // Child closed and reopened app during countdown - kill immediately.
         if (!_exceededToday.ContainsKey(app) && _activeCountdowns.ContainsKey(app.ToLowerInvariant()) && IsProcessRunning(proc))
         {
             CancelCountdown(app);
@@ -78,17 +82,26 @@ public class LimitEnforcer
 
     public async Task EnforceAsync(
         List<(string AppName, long UsedSecs, long MaxSecs)> breached,
-        bool scheduleViolation,
+        HashSet<string> scheduleViolationApps,
         HashSet<string> knownAppNames)
     {
-        if (scheduleViolation)
+        if (IsPaused)
+            return;
+
+        if (_pausedUntil.HasValue && _pausedUntil.Value <= DateTimeOffset.Now)
+            _pausedUntil = null;
+
+        if (scheduleViolationApps.Count > 0)
         {
-            Logger.Instance.Warn("Schedule violation — killing all tracked processes");
+            Logger.Instance.Warn("Schedule violation - killing matching tracked processes");
             var runningProcessNames = _tracker.GetRunningProcessNames();
             foreach (var procName in runningProcessNames)
             {
                 var appName = _tracker.KnownApps.TryGetValue(procName, out var friendly)
                     ? friendly : procName;
+                if (!scheduleViolationApps.Contains(appName))
+                    continue;
+
                 Logger.Instance.Warn($"Scheduled kill: {appName} ({procName})");
                 KillProcessByName(procName);
                 OnAppTerminatedBySchedule?.Invoke(appName);
@@ -123,7 +136,7 @@ public class LimitEnforcer
                 continue;
             }
 
-            // First breach — start countdown
+            // First breach - start countdown.
             if (!_activeCountdowns.ContainsKey(key))
                 _ = StartCountdownAsync(appName);
         }
@@ -185,6 +198,43 @@ public class LimitEnforcer
         return _activeCountdowns.ContainsKey(appName.ToLowerInvariant());
     }
 
+    public DateTimeOffset PauseFor(TimeSpan duration)
+    {
+        foreach (var key in _activeCountdowns.Keys)
+        {
+            if (_activeCountdowns.TryRemove(key, out var cts))
+                cts.Cancel();
+        }
+
+        _pausedUntil = DateTimeOffset.Now.Add(duration);
+        Logger.Instance.Warn($"Enforcement paused until {_pausedUntil.Value:yyyy-MM-dd HH:mm:ss zzz}");
+        return _pausedUntil.Value;
+    }
+
+    public void Resume()
+    {
+        _pausedUntil = null;
+        Logger.Instance.Warn("Enforcement resumed");
+    }
+
+    public int KillRunningTrackedApps()
+    {
+        var killed = 0;
+        var runningProcessNames = _tracker.GetRunningProcessNames();
+        foreach (var procName in runningProcessNames)
+        {
+            var appName = _tracker.KnownApps.TryGetValue(procName, out var friendly)
+                ? friendly
+                : procName;
+            KillProcessByName(procName);
+            OnAppTerminatedBySchedule?.Invoke(appName);
+            killed++;
+        }
+
+        Logger.Instance.Warn($"Block-now action closed {killed} tracked app(s)");
+        return killed;
+    }
+
     private void KillAppProcesses(string appName)
     {
         try
@@ -192,7 +242,10 @@ public class LimitEnforcer
             var procName = _tracker.GetProcessNameForApp(appName) ?? appName;
             KillProcessByName(procName);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to kill app processes for {appName}: {ex.Message}");
+        }
     }
 
     private void KillProcessByName(string processName)
@@ -208,10 +261,16 @@ public class LimitEnforcer
                     if (!proc.WaitForExit(5000))
                         proc.Kill(entireProcessTree: true);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Logger.Instance.Error($"Failed to close process {proc.ProcessName} ({proc.Id}): {ex.Message}");
+                }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to enumerate processes for {processName}: {ex.Message}");
+        }
     }
 
     private bool IsProcessRunning(string processName)

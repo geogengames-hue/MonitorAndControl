@@ -19,8 +19,10 @@
   <ItemGroup>
     <Compile Remove="Watchdog\**\*.cs" />
     <Compile Remove="PopupHost\**\*.cs" />
+    <Compile Remove="Tests\**\*.cs" />
     <None Remove="Watchdog\**\*" />
     <None Remove="PopupHost\**\*" />
+    <None Remove="Tests\**\*" />
   </ItemGroup>
 
   <ItemGroup>

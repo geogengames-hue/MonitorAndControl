@@ -31,7 +31,11 @@ public class SchedulerService
 
     public bool IsOutsideAllowedHours(ScheduleRule rule)
     {
-        var now = DateTime.Now;
+        return IsOutsideAllowedHours(rule, DateTime.Now);
+    }
+
+    public static bool IsOutsideAllowedHours(ScheduleRule rule, DateTime now)
+    {
         var today = now.DayOfWeek;
 
         bool matchesDay = rule.DayOfWeek.ToLowerInvariant() switch
@@ -68,6 +72,25 @@ public class SchedulerService
     {
         var rules = await GetRulesAsync();
         return rules.Any(r => r.Enabled && IsOutsideAllowedHours(r));
+    }
+
+    public async Task<HashSet<string>> GetViolatingAppNamesAsync(HashSet<string> knownAppNames)
+    {
+        var rules = await GetRulesAsync();
+        var violating = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rule in rules.Where(r => r.Enabled && IsOutsideAllowedHours(r)))
+        {
+            if (string.IsNullOrWhiteSpace(rule.AppName))
+            {
+                violating.UnionWith(knownAppNames);
+                continue;
+            }
+
+            violating.Add(rule.AppName);
+        }
+
+        return violating;
     }
 
     public async Task<List<ScheduleRule>> GetViolatingRulesAsync()
