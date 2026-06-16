@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms</value></resheader>
+  <data name="DailyLimitReached" xml:space="preserve"><value>Tageslimit erreicht</value></data>
+  <data name="OutsideAllowedHours" xml:space="preserve"><value>Außerhalb der erlaubten Zeiten</value></data>
+  <data name="LimitReachedMessage" xml:space="preserve"><value>{0} hat das heutige Limit erreicht.</value></data>
+  <data name="ScheduleBlockedMessage" xml:space="preserve"><value>{0} ist gerade nicht erlaubt.</value></data>
+  <data name="AllowanceResetsAt" xml:space="preserve"><value>Heutige Erlaubnis: {0} Min. Zurücksetzung um {1:t}.</value></data>
+  <data name="CanUseAgainAfterMidnight" xml:space="preserve"><value>Die App kann wieder verwendet werden, nachdem das Limit um Mitternacht zurückgesetzt wurde.</value></data>
+  <data name="CheckScheduleNextAllowed" xml:space="preserve"><value>Prüfe den Dashboard-Zeitplan für die nächste erlaubte Zeit.</value></data>
+  <data name="NextAllowedTime" xml:space="preserve"><value>Nächste erlaubte Zeit: {0:g}.</value></data>
+  <data name="ClosingInSeconds" xml:space="preserve"><value>{app} wird in {seconds} Sekunden geschlossen...</value></data>
+  <data name="WasClosed" xml:space="preserve"><value>{app} wurde geschlossen.</value></data>
+  <data name="ClosingNow" xml:space="preserve"><value>Schließen...</value></data>
+</root>

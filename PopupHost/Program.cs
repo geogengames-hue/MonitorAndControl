@@ -22,8 +22,26 @@ static class Program
             var proc = root.TryGetProperty("proc", out var p) ? p.GetString() ?? "" : "";
             var reason = root.TryGetProperty("reason", out var r) ? r.GetString() ?? "" : "";
             var detail = root.TryGetProperty("detail", out var d) ? d.GetString() ?? "" : "";
+            var closingTemplate = root.TryGetProperty("closingTemplate", out var ct)
+                ? ct.GetString() ?? "Closing {app} in {seconds} seconds..."
+                : "Closing {app} in {seconds} seconds...";
+            var closedTemplate = root.TryGetProperty("closedTemplate", out var cl)
+                ? cl.GetString() ?? "{app} was closed."
+                : "{app} was closed.";
+            var closingNowText = root.TryGetProperty("closingNowText", out var cn)
+                ? cn.GetString() ?? "Closing..."
+                : "Closing...";
 
-            Application.Run(new WarningPopup(appName, delay, message, proc, reason, detail));
+            Application.Run(new WarningPopup(
+                appName,
+                delay,
+                message,
+                proc,
+                reason,
+                detail,
+                closingTemplate,
+                closedTemplate,
+                closingNowText));
         }
         catch (Exception ex)
         {

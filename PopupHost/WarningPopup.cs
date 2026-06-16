@@ -34,12 +34,27 @@ public class WarningPopup : Form
     private readonly System.Windows.Forms.Timer _timer;
     private readonly System.Windows.Forms.Timer _checkTimer;
     private readonly string _processName;
+    private readonly string _appName;
+    private readonly string _closingTemplate;
+    private readonly string _closingNowText;
     private int _secondsRemaining;
 
-    public WarningPopup(string appName, int totalSeconds, string message, string processName, string reason = "", string detail = "")
+    public WarningPopup(
+        string appName,
+        int totalSeconds,
+        string message,
+        string processName,
+        string reason = "",
+        string detail = "",
+        string closingTemplate = "Closing {app} in {seconds} seconds...",
+        string closedTemplate = "{app} was closed.",
+        string closingNowText = "Closing...")
     {
         _secondsRemaining = totalSeconds;
         _processName = processName;
+        _appName = appName;
+        _closingTemplate = closingTemplate;
+        _closingNowText = closingNowText;
 
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.CenterScreen;
@@ -69,8 +84,8 @@ public class WarningPopup : Form
         _countdownLabel = new Label
         {
             Text = totalSeconds > 0
-                ? $"Closing {appName} in {totalSeconds} seconds..."
-                : $"{appName} was closed.",
+                ? FormatCountdown(totalSeconds)
+                : FormatTemplate(closedTemplate, 0),
             ForeColor = Color.White,
             Font = new Font("Segoe UI", 20, FontStyle.Bold),
             Dock = DockStyle.Fill,
@@ -112,14 +127,14 @@ public class WarningPopup : Form
             if (_secondsRemaining <= 0)
             {
                 _timer.Stop();
-                _countdownLabel.Text = "Closing...";
+                _countdownLabel.Text = _closingNowText;
                 var closeTimer = new System.Windows.Forms.Timer { Interval = 2000 };
                 closeTimer.Tick += (_, __) => { closeTimer.Stop(); Close(); };
                 closeTimer.Start();
             }
             else
             {
-                _countdownLabel.Text = $"Closing {appName} in {_secondsRemaining} seconds...";
+                _countdownLabel.Text = FormatCountdown(_secondsRemaining);
             }
         };
         if (totalSeconds > 0)
@@ -133,6 +148,13 @@ public class WarningPopup : Form
             closeTimer.Start();
         }
     }
+
+    private string FormatCountdown(int seconds) => FormatTemplate(_closingTemplate, seconds);
+
+    private string FormatTemplate(string template, int seconds) =>
+        template
+            .Replace("{app}", _appName)
+            .Replace("{seconds}", seconds.ToString());
 
     protected override void OnLoad(EventArgs e)
     {

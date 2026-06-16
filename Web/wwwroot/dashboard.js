@@ -1,4 +1,4 @@
-// State
+﻿// State
 let todayChart = null;
 let historyChart = null;
 let editingLimit = null;
@@ -8,13 +8,71 @@ let historyFiltered = [];
 let historyRange = { mode: 'days', days: 7, from: '', to: '' };
 let alertEventSource = null;
 let alertReconnectTimer = null;
+let uiLanguage = localStorage.getItem('uiLanguage') || 'en';
+
+let translations = {};
+
+async function loadTranslations(language) {
+  uiLanguage = language || localStorage.getItem('uiLanguage') || 'en';
+  if (uiLanguage === 'en') {
+    translations = {};
+    localStorage.setItem('uiLanguage', uiLanguage);
+    return;
+  }
+
+  try {
+    const response = await fetch(`/i18n/${encodeURIComponent(uiLanguage)}.json`, { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`Missing translation file: ${uiLanguage}`);
+    translations = await response.json();
+  } catch (e) {
+    console.error(e);
+    translations = {};
+    uiLanguage = 'en';
+  }
+  localStorage.setItem('uiLanguage', uiLanguage);
+}
+
+function t(key, vars) {
+  let value = translations[key] || key;
+  if (vars) Object.keys(vars).forEach(k => value = value.replace(`{${k}}`, vars[k]));
+  return value;
+}
+
+function translateHealthStatus(value) {
+  const raw = value || 'unknown';
+  return t(raw) === raw ? raw : t(raw);
+}
+
+function applyTranslations(root = document.body) {
+  document.title = t('Monitor & Control');
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach(node => {
+    node._i18nSource ??= node.nodeValue.trim();
+    const source = node._i18nSource;
+    if (!source) return;
+    const translated = t(source);
+    node.nodeValue = node.nodeValue.replace(node.nodeValue.trim(), translated);
+  });
+  root.querySelectorAll?.('[placeholder]').forEach(el => {
+    const source = el.dataset.i18nPlaceholder || el.getAttribute('placeholder');
+    el.dataset.i18nPlaceholder = source;
+    if (source) el.setAttribute('placeholder', t(source));
+  });
+  root.querySelectorAll?.('[title]').forEach(el => {
+    const source = el.dataset.i18nTitle || el.getAttribute('title');
+    el.dataset.i18nTitle = source;
+    if (source) el.setAttribute('title', t(source));
+  });
+}
 
 // Discover
 document.getElementById('discover-scan').addEventListener('click', loadDiscover);
 
 async function loadDiscover() {
   const el = document.getElementById('discover-results');
-  el.innerHTML = '<p style="color:#888;text-align:center;padding:20px">Scanning...</p>';
+  el.innerHTML = `<p style="color:#888;text-align:center;padding:20px">${t('Scanning...')}</p>`;
   try {
     const [apps, processes] = await Promise.all([
       api('/api/discover'),
@@ -22,12 +80,12 @@ async function loadDiscover() {
     ]);
 
     if (apps.length === 0 && processes.length === 0) {
-      el.innerHTML = '<p style="color:#888;text-align:center;padding:20px">No new apps found. Everything is already tracked.</p>';
+      el.innerHTML = `<p style="color:#888;text-align:center;padding:20px">${t('No new apps found. Everything is already tracked.')}</p>`;
       return;
     }
 
-    let html = '<h3 style="margin:10px 0">Installed Games & Apps</h3>';
-    html += '<table><thead><tr><th>App</th><th>Process</th><th>Source</th><th>Actions</th></tr></thead><tbody>';
+    let html = `<h3 style="margin:10px 0">${t('Installed Games & Apps')}</h3>`;
+    html += `<table><thead><tr><th>${t('App')}</th><th>${t('Process')}</th><th>${t('Source')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
     apps.forEach(a => {
       const displayName = a.displayName || a.processName.replace('.exe','');
       html += `<tr>
@@ -35,15 +93,15 @@ async function loadDiscover() {
         <td style="font-size:12px;color:#888">${esc(a.processName)}</td>
         <td style="font-size:12px">${esc(a.source)}</td>
         <td class="actions">
-          <button onclick="addDiscoveredApp('${escAttr(a.processName)}','${escAttr(displayName)}')">Add & Set Limit</button>
+          <button onclick="addDiscoveredApp('${escAttr(a.processName)}','${escAttr(displayName)}')">${t('Add & Set Limit')}</button>
         </td>
       </tr>`;
     });
     html += '</tbody></table>';
 
     if (processes.length > 0) {
-      html += '<h3 style="margin:15px 0 10px">Currently Running (untracked)</h3>';
-      html += '<table><thead><tr><th>Process</th><th>Window Title</th><th>Actions</th></tr></thead><tbody>';
+      html += `<h3 style="margin:15px 0 10px">${t('Currently Running (untracked)')}</h3>`;
+      html += `<table><thead><tr><th>${t('Process')}</th><th>${t('Window Title')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
       processes.forEach(p => {
         // Use process name (not window title) as the app name - avoids storing
         // junk like "Loading..." or "War Thunder (DirectX 12, 64bit)" as the app name
@@ -52,7 +110,7 @@ async function loadDiscover() {
           <td style="font-size:12px;color:#888">${esc(p.name)}</td>
           <td>${esc(p.title)}</td>
           <td class="actions">
-            <button onclick="addDiscoveredApp('${escAttr(p.name)}','${escAttr(appName)}')">Track</button>
+            <button onclick="addDiscoveredApp('${escAttr(p.name)}','${escAttr(appName)}')">${t('Track')}</button>
           </td>
         </tr>`;
       });
@@ -62,7 +120,7 @@ async function loadDiscover() {
     el.innerHTML = html;
   } catch (e) {
     log(e);
-    el.innerHTML = '<p style="color:#ff4444;text-align:center;padding:20px">Scan failed. Try again.</p>';
+    el.innerHTML = `<p style="color:#ff4444;text-align:center;padding:20px">${t('Scan failed. Try again.')}</p>`;
   }
 }
 
@@ -80,12 +138,12 @@ async function addDiscoveredApp(procName, displayName) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ appName: displayName, dailyMaxMinutes: 120, enabled: true })
     });
-    alert(`"${displayName}" is now tracked with 120 min daily limit.`);
+    alert(t('"{app}" is now tracked with 120 min daily limit.', { app: displayName }));
     loadDiscover();
     loadLimits();
   } catch (e) {
     log(e);
-    alert('Failed to add app. Try again.');
+    alert(t('Failed to add app. Try again.'));
   }
 }
 
@@ -156,16 +214,16 @@ function handleAlert(data) {
   bar.classList.remove('hidden', 'countdown', 'success');
   if (data.type === 'breach') {
     bar.className = 'alert-bar countdown';
-    bar.textContent = `${data.appName}: limit reached! Closing in ${data.value}s`;
+    bar.textContent = t('{app}: limit reached! Closing in {seconds}s', { app: data.appName, seconds: data.value });
   } else if (data.type === 'countdown') {
-    bar.textContent = `${bar.textContent.split(':')[0]}: ${data.value}s remaining`;
+    bar.textContent = t('{app}: {seconds}s remaining', { app: bar.textContent.split(':')[0], seconds: data.value });
   } else if (data.type === 'killed') {
     bar.className = 'alert-bar success';
-    bar.textContent = `${data.appName} was closed.`;
+    bar.textContent = t('{app} was closed.', { app: data.appName });
     setTimeout(() => bar.classList.add('hidden'), 5000);
   } else if (data.type === 'schedule_kill') {
     bar.className = 'alert-bar countdown';
-    bar.textContent = `${data.appName} closed by schedule rule.`;
+    bar.textContent = t('{app} closed by schedule rule.', { app: data.appName });
     setTimeout(() => bar.classList.add('hidden'), 5000);
   }
 }
@@ -177,7 +235,7 @@ async function api(url, opts) {
   if (token) opts.headers['X-Admin-Token'] = token;
   let r = await fetch(url, opts);
   if (r.status === 401) {
-    const password = prompt('Admin password required');
+    const password = prompt(t('Admin password required'));
     if (password) {
       const login = await fetch('/api/auth/login', {
         method: 'POST',
@@ -204,7 +262,7 @@ async function ensureAuthenticatedOnOpen() {
   if (sessionStorage.getItem('dashboardAdminToken')) return true;
 
   while (true) {
-    const password = prompt('Admin password required');
+    const password = prompt(t('Admin password required'));
     if (!password) return false;
     const login = await fetch('/api/auth/login', {
       method: 'POST',
@@ -216,7 +274,7 @@ async function ensureAuthenticatedOnOpen() {
       sessionStorage.setItem('dashboardAdminToken', auth.token);
       return true;
     }
-    alert('Invalid admin password.');
+    alert(t('Invalid admin password.'));
   }
 }
 
@@ -224,7 +282,7 @@ async function startApp() {
   const ok = await ensureAuthenticatedOnOpen();
   if (!ok) {
     document.getElementById('error-bar').classList.remove('hidden');
-    document.getElementById('error-bar').textContent = 'Admin password required.';
+    document.getElementById('error-bar').textContent = t('Admin password required');
     return;
   }
   if (!liveTimer) liveTimer = setInterval(loadLive, 2000);
@@ -244,10 +302,10 @@ async function loadLive() {
     const status = document.getElementById('enforcement-status');
     if (data.enforcementPaused) {
       const until = data.pausedUntil ? new Date(data.pausedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-      status.textContent = until ? `Enforcement paused until ${until}` : 'Enforcement paused';
+      status.textContent = until ? t('Enforcement paused until {time}', { time: until }) : t('Enforcement paused');
       status.classList.add('paused');
     } else {
-      status.textContent = 'Enforcement active';
+      status.textContent = t('Enforcement active');
       status.classList.remove('paused');
     }
   } catch (e) { log(e); }
@@ -266,7 +324,7 @@ async function runQuickAction(action, payload, confirmText) {
     loadToday();
   } catch (e) {
     log(e);
-    alert('Action failed.');
+    alert(t('Action failed.'));
   }
 }
 
@@ -277,9 +335,9 @@ document.getElementById('action-pause-30').addEventListener('click', () =>
 document.getElementById('action-resume').addEventListener('click', () =>
   runQuickAction('resume'));
 document.getElementById('action-reset-today').addEventListener('click', () =>
-  runQuickAction('reset-today', null, "Reset today's usage for all apps?"));
+  runQuickAction('reset-today', null, t("Reset today's usage for all apps?")));
 document.getElementById('action-block-all').addEventListener('click', () =>
-  runQuickAction('block-all', null, 'Close all running tracked apps now?'));
+  runQuickAction('block-all', null, t('Close all running tracked apps now?')));
 
 document.getElementById('quick-extend-15').addEventListener('click', () => quickExtend(15));
 document.getElementById('quick-extend-30').addEventListener('click', () => quickExtend(30));
@@ -288,7 +346,7 @@ document.getElementById('quick-extend-bedtime').addEventListener('click', quickE
 async function quickExtend(minutes) {
   const appName = document.getElementById('quick-extend-app').value;
   if (!appName) {
-    alert('Choose an app first.');
+    alert(t('Choose an app first.'));
     return;
   }
   await grantBonus(appName, minutes);
@@ -297,7 +355,7 @@ async function quickExtend(minutes) {
 async function quickExtendUntilBedtime() {
   const appName = document.getElementById('quick-extend-app').value;
   if (!appName) {
-    alert('Choose an app first.');
+    alert(t('Choose an app first.'));
     return;
   }
   try {
@@ -311,7 +369,7 @@ async function quickExtendUntilBedtime() {
     loadToday();
   } catch (e) {
     log(e);
-    alert('Failed to extend until bedtime.');
+    alert(t('Failed to extend until bedtime.'));
   }
 }
 
@@ -323,7 +381,7 @@ async function loadLiveToday() {
     const list = document.getElementById('live-today-list');
     list.innerHTML = '';
     if (usage.length === 0) {
-      list.innerHTML = '<div class="live-app-item"><span class="name" style="color:#666">No activity yet today</span></div>';
+      list.innerHTML = `<div class="live-app-item"><span class="name" style="color:#666">${t('No activity yet today')}</span></div>`;
       syncQuickExtendApps(limits, usage);
       return;
     }
@@ -340,7 +398,7 @@ async function loadLiveToday() {
       item.innerHTML = `
         <div>
           <div class="name">${esc(u.appName)}</div>
-          ${limit ? `<div class="remaining">${remaining > 0 ? Math.floor(remaining / 60) + 'm remaining' : 'Limit exceeded'}${bonus ? ` (+${bonus}m bonus)` : ''}</div>` : ''}
+          ${limit ? `<div class="remaining">${remaining > 0 ? Math.floor(remaining / 60) + ' ' + t('m remaining') : t('Limit exceeded')}${bonus ? ` (+${bonus}m ${t('bonus')})` : ''}</div>` : ''}
         </div>
         <div class="time">${esc(u.durationFormatted)}</div>`;
       list.appendChild(item);
@@ -366,7 +424,7 @@ async function loadToday() {
   try {
     const usage = await api('/api/usage/today');
     renderTodayChart(usage);
-    renderTable('today-table', usage, ['appName', 'durationFormatted'], ['App', 'Time']);
+    renderTable('today-table', usage, ['appName', 'durationFormatted'], [t('App'), t('Time')]);
   } catch (e) { log(e); }
 }
 
@@ -414,7 +472,7 @@ document.getElementById('history-apply').addEventListener('click', () => {
   const from = document.getElementById('history-from').value;
   const to = document.getElementById('history-to').value;
   if (!from || !to) {
-    alert('Pick both start and end dates.');
+    alert(t('Pick both start and end dates.'));
     return;
   }
   document.querySelectorAll('.history-range button').forEach(b => b.classList.remove('active'));
@@ -427,14 +485,14 @@ document.getElementById('history-day-filter').addEventListener('change', renderH
 document.getElementById('history-chart-mode').addEventListener('change', renderHistoryDashboard);
 
 document.getElementById('history-clear').addEventListener('click', async () => {
-  if (!confirm('Clear all usage history? Limits, schedules, app mappings, and settings will stay.')) return;
+  if (!confirm(t('Clear all usage history? Limits, schedules, app mappings, and settings will stay.'))) return;
   try {
     await api('/api/usage/history', { method: 'DELETE' });
     loadHistory(currentDays);
     loadLiveToday();
   } catch (e) {
     log(e);
-    alert('Failed to clear usage history.');
+    alert(t('Failed to clear usage history.'));
   }
 });
 
@@ -463,9 +521,9 @@ function syncHistoryFilters() {
   const apps = [...new Set(historyRaw.map(u => u.appName))].sort();
   const days = [...new Set(historyRaw.map(u => u.date))].sort().reverse();
 
-  appSelect.innerHTML = '<option value="">All apps</option>' +
+  appSelect.innerHTML = `<option value="">${t('All apps')}</option>` +
     apps.map(app => `<option value="${escAttr(app)}">${esc(app)}</option>`).join('');
-  daySelect.innerHTML = '<option value="">All days</option>' +
+  daySelect.innerHTML = `<option value="">${t('All days')}</option>` +
     days.map(day => `<option value="${escAttr(day)}">${esc(day)}</option>`).join('');
 
   if (apps.includes(currentApp)) appSelect.value = currentApp;
@@ -494,10 +552,10 @@ function renderHistoryStats(usage) {
   const top = Object.entries(byApp).sort((a, b) => b[1] - a[1])[0];
   const dailyAvg = activeDays ? Math.round(totalSeconds / activeDays) : 0;
   document.getElementById('history-stats').innerHTML = [
-    statCard('Total Time', formatDuration(totalSeconds), `${usage.length} records`),
-    statCard('Daily Avg', formatDuration(dailyAvg), `${activeDays || 0} active days`),
-    statCard('Top App', top ? esc(top[0]) : '-', top ? formatDuration(top[1]) : 'No usage'),
-    statCard('Apps', apps.toString(), 'in current filter')
+    statCard(t('Total Time'), formatDuration(totalSeconds), `${usage.length} ${t('records')}`),
+    statCard(t('Daily Avg'), formatDuration(dailyAvg), `${activeDays || 0} ${t('active days')}`),
+    statCard(t('Top App'), top ? esc(top[0]) : '-', top ? formatDuration(top[1]) : t('No usage')),
+    statCard(t('Apps'), apps.toString(), t('in current filter'))
   ].join('');
 }
 
@@ -511,7 +569,7 @@ function renderHistoryTopApps(usage) {
   const max = rows[0]?.[1] || 1;
   document.getElementById('history-top-apps').innerHTML = rows.length
     ? rows.map(([name, seconds]) => historyBarRow(name, seconds, max)).join('')
-    : '<p>No usage for this filter.</p>';
+    : `<p>${t('No usage for this filter.')}</p>`;
 }
 
 function renderHistoryDayDetail(allUsage, selectedDay) {
@@ -522,7 +580,7 @@ function renderHistoryDayDetail(allUsage, selectedDay) {
   const max = rows[0]?.totalSeconds || 1;
   document.getElementById('history-day-detail').innerHTML = rows.length
     ? `<p style="margin-top:0;color:#888">${esc(day)}</p>` + rows.slice(0, 8).map(u => historyBarRow(u.appName, u.totalSeconds, max)).join('')
-    : '<p>No day selected.</p>';
+    : `<p>${t('No day selected.')}</p>`;
 }
 
 function historyBarRow(name, seconds, max) {
@@ -603,13 +661,13 @@ async function loadLimits() {
 
     const table = document.getElementById('limits-table');
     if (!Array.isArray(mappings)) {
-      table.innerHTML = '<p style="color:#ff4444;text-align:center">Failed to load app mappings</p>';
+      table.innerHTML = `<p style="color:#ff4444;text-align:center">${t('Failed to load app mappings')}</p>`;
       return;
     }
     const reverseMap = {};
     mappings.forEach(m => reverseMap[m.appName] = m.processName);
 
-    let html = '<table><thead><tr><th>App</th><th>Process</th><th>Daily Max</th><th>Today Used</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+    let html = `<table><thead><tr><th>${t('App')}</th><th>${t('Process')}</th><th>${t('Daily Max')}</th><th>${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
     for (const app of allApps) {
       const limit = limits.find(l => l.appName === app);
       const usage = today.find(u => u.appName === app);
@@ -623,14 +681,14 @@ async function loadLimits() {
       html += `<tr>
         <td><strong>${esc(app)}</strong></td>
         <td style="font-size:11px;color:#666;max-width:250px;word-break:break-all">${esc(procName) || '-'}</td>
-        <td>${limit ? limit.dailyMaxMinutes + ' min' + (bonus ? ` <span style="color:#ffcc66">(+${bonus})</span>` : '') : '<span style="color:#666">No limit</span>'}</td>
+        <td>${limit ? limit.dailyMaxMinutes + ' min' + (bonus ? ` <span style="color:#ffcc66">(+${bonus})</span>` : '') : `<span style="color:#666">${t('No limit')}</span>`}</td>
         <td>${usage ? esc(usage.durationFormatted) : '0m'}</td>
-        <td>${enabled ? (exceeded ? '<span style="color:#ff4444">Exceeded</span>' : (pct > 80 ? '<span style="color:#ff8800">' + pct + '%</span>' : '<span style="color:#44bb44">' + pct + '%</span>')) : '<span style="color:#666">Disabled</span>'}</td>
+        <td>${enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : (pct > 80 ? '<span style="color:#ff8800">' + pct + '%</span>' : '<span style="color:#44bb44">' + pct + '%</span>')) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
         <td class="actions">
-          <button onclick="editLimit('${escAttr(app)}')">Edit</button>
+          <button onclick="editLimit('${escAttr(app)}')">${t('Edit')}</button>
           ${limit ? `<button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',15)">+15m</button><button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',30)">+30m</button>` : ''}
-          ${limit ? `<button class="btn-danger" onclick="deleteLimit('${escAttr(app)}')">Remove</button>` : `<button onclick="addLimit('${escAttr(app)}')">Add</button>`}
-          ${procName ? `<button class="btn-danger" onclick="forgetApp('${escAttr(app)}','${escAttr(procName)}')" title="Delete mapping &amp; all data" style="background:#882222">&times; Forget</button>` : ''}
+          ${limit ? `<button class="btn-danger" onclick="deleteLimit('${escAttr(app)}')">${t('Remove')}</button>` : `<button onclick="addLimit('${escAttr(app)}')">${t('Add')}</button>`}
+          ${procName ? `<button class="btn-danger" onclick="forgetApp('${escAttr(app)}','${escAttr(procName)}')" title="${t('Delete mapping & all data')}" style="background:#882222">&times; ${t('Forget')}</button>` : ''}
         </td>
       </tr>`;
     }
@@ -651,7 +709,7 @@ async function grantBonus(appName, minutes) {
     loadToday();
   } catch (e) {
     log(e);
-    alert('Failed to grant bonus time.');
+    alert(t('Failed to grant bonus time.'));
   }
 }
 
@@ -704,13 +762,13 @@ document.getElementById('limit-cancel').addEventListener('click', () => {
 });
 
 async function deleteLimit(appName) {
-  if (!confirm(`Remove limit for ${appName}?`)) return;
+  if (!confirm(t('Remove limit for {app}?', { app: appName }))) return;
   await api(`/api/limits/${encodeURIComponent(appName)}`, { method: 'DELETE' });
   loadLimits();
 }
 
 async function forgetApp(appName, procName) {
-  if (!confirm(`Remove all mapping & data for "${appName}" (${procName})?`)) return;
+  if (!confirm(t('Remove all mapping & data for "{app}" ({proc})?', { app: appName, proc: procName }))) return;
   try {
     await api(`/api/apps/${encodeURIComponent(procName)}`, { method: 'DELETE' });
     // Also remove limit if one exists
@@ -718,7 +776,7 @@ async function forgetApp(appName, procName) {
     loadLimits();
   } catch (e) {
     log(e);
-    alert('Failed to forget app.');
+    alert(t('Failed to forget app.'));
   }
 }
 
@@ -732,18 +790,18 @@ async function loadSchedule() {
     ]);
     syncScheduleAppOptions(known, limits);
     const table = document.getElementById('schedule-table');
-    let html = '<table><thead><tr><th>Applies To</th><th>Day</th><th>Start</th><th>End</th><th>Enabled</th><th>Actions</th></tr></thead><tbody>';
+    let html = `<table><thead><tr><th>${t('Applies To')}</th><th>${t('Day')}</th><th>${t('Start')}</th><th>${t('End')}</th><th>${t('Enabled')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
     rules.forEach(r => {
       html += `<tr>
-        <td>${r.appName ? esc(r.appName) : 'All apps'}</td>
+        <td>${r.appName ? esc(r.appName) : t('All apps')}</td>
         <td>${r.dayOfWeek}</td>
         <td>${r.startTime}</td>
         <td>${r.endTime}</td>
         <td><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleSchedule(${r.id}, this.checked)"></td>
-        <td class="actions"><button class="btn-danger" onclick="deleteSchedule(${r.id})">Delete</button></td>
+        <td class="actions"><button class="btn-danger" onclick="deleteSchedule(${r.id})">${t('Delete')}</button></td>
       </tr>`;
     });
-    if (rules.length === 0) html += '<tr><td colspan="6" style="color:#666;text-align:center">No schedule rules configured</td></tr>';
+    if (rules.length === 0) html += `<tr><td colspan="6" style="color:#666;text-align:center">${t('No schedule rules configured')}</td></tr>`;
     html += '</tbody></table>';
     table.innerHTML = html;
   } catch (e) { log(e); }
@@ -757,7 +815,7 @@ function syncScheduleAppOptions(known, limits) {
     ...limits.map(l => l.appName)
   ])].filter(Boolean).sort();
 
-  select.innerHTML = '<option value="">All apps</option>' +
+  select.innerHTML = `<option value="">${t('All apps')}</option>` +
     apps.map(app => `<option value="${escAttr(app)}">${esc(app)}</option>`).join('');
   if (apps.includes(current)) select.value = current;
 }
@@ -773,7 +831,7 @@ async function toggleSchedule(id, enabled) {
 }
 
 async function deleteSchedule(id) {
-  if (!confirm('Delete this schedule rule?')) return;
+  if (!confirm(t('Delete this schedule rule?'))) return;
   await api(`/api/schedule/${id}`, { method: 'DELETE' });
   loadSchedule();
 }
@@ -797,7 +855,7 @@ async function loadLogs() {
     if (filter) {
       lines = lines.filter(l => l.toLowerCase().includes(filter));
     }
-    document.getElementById('logs-stats').textContent = `${lines.length} events`;
+    document.getElementById('logs-stats').textContent = `${lines.length} ${t('events')}`;
     const out = document.getElementById('logs-output');
     out.innerHTML = lines.map(l => {
       let cls = 'log-info';
@@ -816,7 +874,7 @@ document.getElementById('logs-filter').addEventListener('input', () => {
   window._logFilterTimer = setTimeout(loadLogs, 300);
 });
 document.getElementById('logs-clear').addEventListener('click', async () => {
-  if (!confirm('Clear event log history file?')) return;
+  if (!confirm(t('Clear event log history file?'))) return;
   try {
     await api('/api/logs', { method: 'DELETE' });
     loadLogs();
@@ -827,6 +885,9 @@ document.getElementById('logs-clear').addEventListener('click', async () => {
 async function loadSettings() {
   try {
     const s = await api('/api/settings');
+    await loadTranslations(s.uiLanguage || localStorage.getItem('uiLanguage') || 'en');
+    document.getElementById('set-language').value = uiLanguage;
+    applyTranslations();
     document.getElementById('set-kill-delay').value = s.killDelay;
     document.getElementById('set-show-warning').value = s.showWarning.toString();
     document.getElementById('set-warning-msg').value = s.warningMessage || '';
@@ -841,12 +902,12 @@ async function loadSettings() {
     const viaHostname = s.hostname ? `http://${esc(s.hostname)}:${port}` : esc(window.location.href);
     const viaIps = s.localIps ? s.localIps.map(ip => `http://${esc(ip)}:${port}`).join('<br>') : viaHostname;
     document.getElementById('access-url').innerHTML = s.remoteDashboardEnabled
-      ? `<strong>Computer name:</strong> ${viaHostname}<br><strong>IP addresses:</strong><br>${viaIps}`
-      : 'Remote dashboard is disabled. Use this dashboard on the child PC, or enable remote access in appsettings.json.';
+      ? `<strong>${t('Computer name:')}</strong> ${viaHostname}<br><strong>${t('IP addresses:')}</strong><br>${viaIps}`
+      : t('Remote dashboard is disabled. Use this dashboard on the child PC, or enable remote access in appsettings.json.');
     const tokenNote = document.getElementById('admin-token-note');
     tokenNote.textContent = s.adminPasswordSet
-      ? 'Dashboard changes and shutdown require the admin password.'
-      : 'Set an admin password to protect dashboard changes and shutdown.';
+      ? t('Dashboard changes and shutdown require the admin password.')
+      : t('Set an admin password to protect dashboard changes and shutdown.');
     loadHealth();
   } catch (e) { log(e); }
 }
@@ -856,11 +917,11 @@ async function loadHealth() {
     const h = await api('/api/health');
     const r = h.runtime || {};
     const items = [
-      ['Watchdog', `${r.watchdog?.installed ? 'Installed' : 'Not installed'} (${r.watchdog?.status || 'unknown'})`],
-      ['Autostart', r.autoStart?.enabled ? 'Enabled' : 'Disabled'],
-      ['Dashboard', `${r.dashboard?.bindAddress || 'unknown'}:${r.dashboard?.port || ''}${r.dashboard?.remoteEnabled ? ' remote' : ' local'}`],
-      ['Email', r.email?.configured ? 'Configured' : 'Not configured'],
-      ['Database', `${r.database?.exists ? 'Found' : 'Missing'} - ${r.database?.path || ''}`]
+      [t('Watchdog'), `${r.watchdog?.installed ? t('Installed') : t('Not installed')} (${translateHealthStatus(r.watchdog?.status)})`],
+      [t('Autostart'), r.autoStart?.enabled ? t('Enabled') : t('Disabled')],
+      [t('Dashboard'), `${r.dashboard?.bindAddress || 'unknown'}:${r.dashboard?.port || ''} ${r.dashboard?.remoteEnabled ? t('remote') : t('local')}`],
+      [t('Email'), r.email?.configured ? t('Configured') : t('Not configured')],
+      [t('Database'), `${r.database?.exists ? t('Found') : t('Missing')} - ${r.database?.path || ''}`]
     ];
     document.getElementById('health-status').innerHTML = items.map(([label, value]) =>
       `<div class="health-item"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`
@@ -868,7 +929,7 @@ async function loadHealth() {
   } catch (e) {
     log(e);
     document.getElementById('health-status').innerHTML =
-      '<div class="health-item"><div class="label">Health</div><div class="value">Unable to load</div></div>';
+      `<div class="health-item"><div class="label">${t('Health')}</div><div class="value">${t('Unable to load')}</div></div>`;
   }
 }
 
@@ -878,7 +939,7 @@ document.getElementById('settings-admin-password').addEventListener('click', asy
   const el = document.getElementById('admin-password-result');
   const currentPassword = document.getElementById('set-admin-current-pw').value;
   const newPassword = document.getElementById('set-admin-pw').value;
-  el.textContent = 'Saving...';
+  el.textContent = t('Saving...');
   try {
     const r = await api('/api/auth/password', {
       method: 'POST',
@@ -889,10 +950,10 @@ document.getElementById('settings-admin-password').addEventListener('click', asy
     document.getElementById('set-admin-current-pw').value = '';
     document.getElementById('set-admin-pw').value = '';
     el.style.color = '#44bb44';
-    el.textContent = 'Saved';
+    el.textContent = t('Saved');
   } catch (e) {
     el.style.color = '#ff4444';
-    el.textContent = e.message || 'Failed';
+    el.textContent = e.message || t('Failed');
   }
   setTimeout(() => el.textContent = '', 8000);
 });
@@ -903,17 +964,17 @@ document.getElementById('settings-logout').addEventListener('click', () => {
 });
 
 document.getElementById('settings-rotate-token').addEventListener('click', async () => {
-  if (!confirm('Rotate the dashboard session token? Other open dashboard sessions will need to log in again.')) return;
+  if (!confirm(t('Rotate the dashboard session token? Other open dashboard sessions will need to log in again.'))) return;
   const el = document.getElementById('session-result');
-  el.textContent = 'Rotating...';
+  el.textContent = t('Rotating...');
   try {
     const r = await api('/api/auth/token/rotate', { method: 'POST' });
     if (r.token) sessionStorage.setItem('dashboardAdminToken', r.token);
     el.style.color = '#44bb44';
-    el.textContent = 'Token rotated';
+    el.textContent = t('Token rotated');
   } catch (e) {
     el.style.color = '#ff4444';
-    el.textContent = e.message || 'Failed';
+    el.textContent = e.message || t('Failed');
   }
   setTimeout(() => el.textContent = '', 8000);
 });
@@ -930,30 +991,48 @@ document.getElementById('settings-save').addEventListener('click', async () => {
   const emailStartNotifyEnabled = document.getElementById('set-email-start-notify').checked;
   const emailControlEnabled = document.getElementById('set-email-control').checked;
   const autoStart = document.getElementById('set-auto-start').checked;
-  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, autoStart, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled };
+  uiLanguage = document.getElementById('set-language').value;
+  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, autoStart, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled, uiLanguage };
   if (emailPassword) payload.emailPassword = emailPassword;
   await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   document.getElementById('set-email-pw').value = '';
-  alert('Settings saved.');
+  localStorage.setItem('uiLanguage', uiLanguage);
+  alert(t('Settings saved.'));
+});
+
+document.getElementById('set-language').addEventListener('change', async e => {
+  await loadTranslations(e.target.value);
+  applyTranslations();
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uiLanguage })
+    });
+  } catch (err) {
+    log(err);
+  }
+  loadLive();
+  loadLiveToday();
 });
 
 document.getElementById('settings-webhook-test').addEventListener('click', async () => {
   const el = document.getElementById('webhook-test-result');
-  el.textContent = 'Sending...';
+  el.textContent = t('Sending...');
   try {
     await api('/api/settings/webhook-test', { method: 'POST' });
     el.style.color = '#44bb44';
-    el.textContent = 'Test sent. Check your webhook endpoint.';
+    el.textContent = t('Test sent. Check your webhook endpoint.');
   } catch {
     el.style.color = '#ff4444';
-    el.textContent = 'Failed';
+    el.textContent = t('Failed');
   }
   setTimeout(() => el.textContent = '', 8000);
 });
 
 document.getElementById('settings-email-test').addEventListener('click', async () => {
   const el = document.getElementById('email-test-result');
-  el.textContent = 'Sending...';
+  el.textContent = t('Sending...');
   try {
     const emailAddress = document.getElementById('set-email-addr').value.trim();
     const emailPassword = document.getElementById('set-email-pw').value;
@@ -964,54 +1043,54 @@ document.getElementById('settings-email-test').addEventListener('click', async (
     });
     if (r.status === 'test_sent') {
       el.style.color = '#44bb44';
-      el.textContent = 'Test sent. Check your inbox.';
+      el.textContent = t('Test sent. Check your inbox.');
     } else {
       el.style.color = '#ff4444';
-      el.textContent = (r.error || 'Failed');
+      el.textContent = (r.error || t('Failed'));
     }
   } catch (e) {
     el.style.color = '#ff4444';
-    el.textContent = (e.message || 'Failed');
+    el.textContent = (e.message || t('Failed'));
   }
   setTimeout(() => el.textContent = '', 10000);
 });
 
 document.getElementById('settings-email-start-test').addEventListener('click', async () => {
   const el = document.getElementById('email-test-result');
-  el.textContent = 'Sending app-start test...';
+  el.textContent = t('Sending app-start test...');
   try {
     const r = await api('/api/settings/email-start-test', { method: 'POST' });
     if (r.status === 'test_sent') {
       el.style.color = '#44bb44';
-      el.textContent = 'App-start test sent.';
+      el.textContent = t('App-start test sent.');
     } else {
       el.style.color = '#ff4444';
-      el.textContent = r.error || 'Failed';
+      el.textContent = r.error || t('Failed');
     }
   } catch (e) {
     el.style.color = '#ff4444';
-    el.textContent = e.message || 'Failed';
+    el.textContent = e.message || t('Failed');
   }
   setTimeout(() => el.textContent = '', 10000);
 });
 
 document.getElementById('settings-email-start-reset').addEventListener('click', async () => {
   const el = document.getElementById('email-test-result');
-  el.textContent = 'Resetting...';
+  el.textContent = t('Resetting...');
   try {
     await api('/api/settings/email-start-reset', { method: 'POST' });
     el.style.color = '#44bb44';
-    el.textContent = 'App-start email markers reset.';
+    el.textContent = t('App-start email markers reset.');
   } catch (e) {
     el.style.color = '#ff4444';
-    el.textContent = e.message || 'Failed';
+    el.textContent = e.message || t('Failed');
   }
   setTimeout(() => el.textContent = '', 8000);
 });
 
 document.getElementById('settings-export-config').addEventListener('click', async () => {
   const el = document.getElementById('config-backup-result');
-  el.textContent = 'Exporting...';
+  el.textContent = t('Exporting...');
   try {
     const backup = await api('/api/config/export');
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
@@ -1025,10 +1104,10 @@ document.getElementById('settings-export-config').addEventListener('click', asyn
     a.remove();
     URL.revokeObjectURL(url);
     el.style.color = '#44bb44';
-    el.textContent = 'Exported';
+    el.textContent = t('Exported');
   } catch (e) {
     el.style.color = '#ff4444';
-    el.textContent = e.message || 'Export failed';
+    el.textContent = e.message || t('Export failed');
   }
   setTimeout(() => el.textContent = '', 8000);
 });
@@ -1038,12 +1117,12 @@ document.getElementById('settings-import-config').addEventListener('click', asyn
   const file = document.getElementById('settings-import-file').files[0];
   if (!file) {
     el.style.color = '#ff4444';
-    el.textContent = 'Choose a JSON backup first.';
+    el.textContent = t('Choose a JSON backup first.');
     return;
   }
-  if (!confirm('Import this config backup? Current limits, schedules, and app mappings will be replaced.')) return;
+  if (!confirm(t('Import this config backup? Current limits, schedules, and app mappings will be replaced.'))) return;
 
-  el.textContent = 'Importing...';
+  el.textContent = t('Importing...');
   try {
     const text = await file.text();
     JSON.parse(text);
@@ -1053,23 +1132,29 @@ document.getElementById('settings-import-config').addEventListener('click', asyn
       body: text
     });
     el.style.color = '#44bb44';
-    el.textContent = 'Imported';
+    el.textContent = t('Imported');
     loadSettings();
     loadLimits();
     loadSchedule();
     loadLiveToday();
   } catch (e) {
     el.style.color = '#ff4444';
-    el.textContent = e.message || 'Import failed';
+    el.textContent = e.message || t('Import failed');
   }
   setTimeout(() => el.textContent = '', 10000);
+});
+
+document.getElementById('settings-import-file').addEventListener('change', e => {
+  const file = e.target.files[0];
+  const label = document.getElementById('settings-import-file-label');
+  if (label) label.textContent = file ? file.name : t('No file chosen');
 });
 
 function renderTable(id, data, props, headers) {
   const el = document.getElementById(id);
   let html = '<table><thead><tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
   if (data.length === 0) {
-    html += '<tr><td colspan="' + headers.length + '" style="color:#666;text-align:center">No data</td></tr>';
+    html += `<tr><td colspan="${headers.length}" style="color:#666;text-align:center">${t('No data')}</td></tr>`;
   } else {
     data.forEach(item => {
       html += '<tr>' + props.map(p => `<td>${esc(String(item[p] || '-'))}</td>`).join('') + '</tr>';
@@ -1080,4 +1165,9 @@ function renderTable(id, data, props, headers) {
 }
 
 // Init
-startApp();
+(async function init() {
+  await loadTranslations(uiLanguage);
+  applyTranslations();
+  startApp();
+})();
+

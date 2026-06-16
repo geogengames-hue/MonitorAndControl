@@ -37,7 +37,7 @@
 
   <ItemGroup>
     <None Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Include="Web/wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Web/wwwroot/**" CopyToOutputDirectory="PreserveNewest" TargetPath="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
   <Target Name="CopyAssetsAfterPublish" AfterTargets="Publish">
     <Copy SourceFiles="appsettings.json" DestinationFiles="$(PublishDir)appsettings.json" />

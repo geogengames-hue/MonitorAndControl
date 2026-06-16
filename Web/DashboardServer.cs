@@ -535,6 +535,7 @@ public class DashboardServer
             var emailNotifyEnabled = await db.GetSettingAsync("EmailNotifyEnabled", "false");
             var emailStartNotifyEnabled = await db.GetSettingAsync("EmailStartNotifyEnabled", "false");
             var emailControlEnabled = await db.GetSettingAsync("EmailControlEnabled", "false");
+            var uiLanguage = await db.GetSettingAsync("UiLanguage", "en");
             var config = Program.GetConfig();
             var hostname = Environment.MachineName;
             var localIps = System.Net.Dns.GetHostEntry(hostname).AddressList
@@ -555,6 +556,7 @@ public class DashboardServer
                 emailNotifyEnabled = emailNotifyEnabled == "true",
                 emailStartNotifyEnabled = emailStartNotifyEnabled == "true",
                 emailControlEnabled = emailControlEnabled == "true",
+                uiLanguage,
                 remoteDashboardEnabled = config.EnableRemoteDashboard,
                 adminPasswordSet = _adminPasswordSet,
                 dashboardTokenRequired = _adminPasswordSet || !IsLocalRequest(ctx)
@@ -618,6 +620,13 @@ public class DashboardServer
                 await db.SetSettingAsync("EmailStartNotifyEnabled", esn.GetBoolean() ? "true" : "false");
             if (root.TryGetProperty("emailControlEnabled", out var ec))
                 await db.SetSettingAsync("EmailControlEnabled", ec.GetBoolean() ? "true" : "false");
+            if (root.TryGetProperty("uiLanguage", out var lang))
+            {
+                var language = Clean(lang.GetString()).ToLowerInvariant();
+                if (!AllowedLanguages.Contains(language))
+                    return Results.BadRequest(new { error = "Unsupported language." });
+                await db.SetSettingAsync("UiLanguage", language);
+            }
             if (root.TryGetProperty("autoStart", out var asv))
                 Program.SetAutoStart(asv.GetBoolean());
             // Always reload email config after save
@@ -938,7 +947,13 @@ public class DashboardServer
         "EmailAllowedSender",
         "EmailNotifyEnabled",
         "EmailStartNotifyEnabled",
-        "EmailControlEnabled"
+        "EmailControlEnabled",
+        "UiLanguage"
+    };
+
+    private static readonly HashSet<string> AllowedLanguages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "en", "de", "es", "ru", "fr"
     };
 
     private static string? ValidateBackup(ConfigBackup backup)
@@ -989,6 +1004,10 @@ public class DashboardServer
                 case "EmailControlEnabled":
                     if (!bool.TryParse(cleanValue, out _))
                         return $"Backup contains an invalid boolean setting: {key}.";
+                    break;
+                case "UiLanguage":
+                    if (!AllowedLanguages.Contains(cleanValue))
+                        return "Backup contains an unsupported language.";
                     break;
                 case "WebhookUrl":
                     if (!string.IsNullOrEmpty(cleanValue) && !IsHttpUrl(cleanValue))

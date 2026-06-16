@@ -410,15 +410,17 @@ internal static class Program
         {
             var showWarning = await _db!.GetShowWarningAsync();
             if (!showWarning) return;
+            var language = await _db.GetSettingAsync("UiLanguage", "en");
             var warningMsg = await _db!.GetWarningMessageAsync();
-            var detail = await GetLimitResetDetailAsync(appName);
+            var detail = await GetLimitResetDetailAsync(appName, language);
             ShowWarningPopup(
                 appName,
                 delaySeconds,
                 processName,
-                "Daily limit reached",
-                string.IsNullOrWhiteSpace(warningMsg) ? $"{appName} reached today's limit." : warningMsg,
-                detail);
+                Localization.Text("DailyLimitReached", language),
+                string.IsNullOrWhiteSpace(warningMsg) ? Localization.Text("LimitReachedMessage", language, appName) : warningMsg,
+                detail,
+                language);
         }
         catch (Exception ex)
         {
@@ -432,15 +434,17 @@ internal static class Program
         {
             var showWarning = await _db!.GetShowWarningAsync();
             if (!showWarning) return;
+            var language = await _db.GetSettingAsync("UiLanguage", "en");
             var procName = _tracker?.GetProcessNameForApp(appName) ?? appName;
-            var detail = await GetScheduleResetDetailAsync(appName);
+            var detail = await GetScheduleResetDetailAsync(appName, language);
             ShowWarningPopup(
                 appName,
                 0,
                 procName,
-                "Outside allowed hours",
-                $"{appName} is not allowed right now.",
-                detail);
+                Localization.Text("OutsideAllowedHours", language),
+                Localization.Text("ScheduleBlockedMessage", language, appName),
+                detail,
+                language);
         }
         catch (Exception ex)
         {
@@ -454,7 +458,8 @@ internal static class Program
         string processName,
         string reason,
         string message,
-        string detail)
+        string detail,
+        string language)
     {
         try
         {
@@ -468,7 +473,10 @@ internal static class Program
                 message,
                 proc = processName,
                 reason,
-                detail
+                detail,
+                closingTemplate = Localization.Text("ClosingInSeconds", language),
+                closedTemplate = Localization.Text("WasClosed", language),
+                closingNowText = Localization.Text("ClosingNow", language)
             });
             var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
             Process.Start(new ProcessStartInfo
@@ -486,33 +494,33 @@ internal static class Program
         }
     }
 
-    private static async Task<string> GetLimitResetDetailAsync(string appName)
+    private static async Task<string> GetLimitResetDetailAsync(string appName, string language)
     {
         try
         {
             var limits = await _db!.GetLimitRulesAsync();
             var limit = limits.FirstOrDefault(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
             if (limit == null)
-                return "The app can be used again after the limit resets at midnight.";
+                return Localization.Text("CanUseAgainAfterMidnight", language);
 
             var bonus = await _db.GetTodayBonusMinutesAsync(appName);
             var total = limit.DailyMaxMinutes + bonus;
             var reset = DateTime.Today.AddDays(1);
-            return $"Today's allowance: {total} min. Resets at {reset:t}.";
+            return Localization.Text("AllowanceResetsAt", language, total, reset);
         }
         catch (Exception ex)
         {
             Logger.Instance.Error($"Failed to calculate limit reset detail for {appName}: {ex.Message}");
-            return "The app can be used again after the limit resets at midnight.";
+            return Localization.Text("CanUseAgainAfterMidnight", language);
         }
     }
 
-    private static async Task<string> GetScheduleResetDetailAsync(string appName)
+    private static async Task<string> GetScheduleResetDetailAsync(string appName, string language)
     {
         try
         {
             if (_scheduler == null)
-                return "Check the dashboard schedule for the next allowed time.";
+                return Localization.Text("CheckScheduleNextAllowed", language);
 
             var rules = await _scheduler.GetRulesAsync();
             var matching = rules
@@ -523,13 +531,13 @@ internal static class Program
 
             var next = SchedulerService.GetNextAllowedTime(matching, DateTime.Now);
             return next.HasValue
-                ? $"Next allowed time: {next.Value:g}."
-                : "Check the dashboard schedule for the next allowed time.";
+                ? Localization.Text("NextAllowedTime", language, next.Value)
+                : Localization.Text("CheckScheduleNextAllowed", language);
         }
         catch (Exception ex)
         {
             Logger.Instance.Error($"Failed to calculate schedule reset detail for {appName}: {ex.Message}");
-            return "Check the dashboard schedule for the next allowed time.";
+            return Localization.Text("CheckScheduleNextAllowed", language);
         }
     }
 

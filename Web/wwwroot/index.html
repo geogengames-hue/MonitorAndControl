@@ -178,6 +178,14 @@
       <form class="settings-form" autocomplete="off" onsubmit="return false">
         <label>Kill Delay (seconds)</label>
         <input type="number" id="set-kill-delay" min="5" max="300">
+        <label>Language</label>
+        <select id="set-language">
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+          <option value="es">Español</option>
+          <option value="ru">Русский</option>
+          <option value="fr">Français</option>
+        </select>
         <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
           <input type="checkbox" id="set-auto-start" style="width:auto"> Auto-start with Windows
         </label>
@@ -227,6 +235,7 @@
         <p style="font-size:12px;color:#888">Exports app mappings, limits, schedules, and non-sensitive settings. Admin passwords and email app passwords are not included.</p>
         <button id="settings-export-config" class="btn-secondary">Export Config</button>
         <input type="file" id="settings-import-file" accept="application/json,.json" style="width:350px">
+        <span id="settings-import-file-label" style="font-size:12px;color:#888">No file chosen</span>
         <button id="settings-import-config" class="btn-secondary">Import Config</button>
         <span id="config-backup-result" style="margin-left:10px;font-size:13px"></span>
         <hr>
