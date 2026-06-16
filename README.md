@@ -25,7 +25,12 @@ A **parental control** Windows desktop application that monitors computer and ap
 
 ## Screenshots
 
-*(Add screenshots here before publishing)*
+![Dashboard](screenshots/dashboard.png)
+![Usage](screenshots/usage.png)
+![History](screenshots/history.png)
+![Limits](screenshots/limits.png)
+![Schedule](screenshots/schedule.png)
+![Log](screenshots/log.png)
 
 ---
 
