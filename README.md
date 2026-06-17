@@ -340,6 +340,42 @@ A: `%LOCALAPPDATA%\SystemHelper\monitor.log` for the main app, and `C:\ProgramDa
 **Q: Can I run it without the web dashboard?**
 A: No. The web dashboard is the primary UI.
 
+**Q: DeviceMon.exe crashes on startup or won't launch.**
+A: Make sure the .NET 8 Runtime is installed (see [Releases](https://github.com/geogengames-hue/MonitorAndControl/releases) for the link). Check `%LOCALAPPDATA%\SystemHelper\monitor.log` for errors. Try deleting the database file if it's corrupt.
+
+**Q: The app runs but the dashboard won't load in my browser.**
+A: Confirm nothing else is using port 5000. Run `netstat -aon | findstr :5000` in a terminal. If another process owns it, change the `DashboardPort` in `appsettings.json` and restart DeviceMon.exe.
+
+**Q: Port 5000 is already in use. How do I change it?**
+A: Add `"DashboardPort": 5001` (or any free port) to `appsettings.json` and restart DeviceMon. Then open `http://localhost:5001`.
+
+**Q: How do I update to a newer version?**
+A: Download the latest release ZIP, extract it to a folder. Go to **Settings → App Update** on the dashboard, point to the folder/UNC path/HTTP zip URL, and click Update. The app will close itself, copy the new files, and restart. See [App update](#using-the-dashboard) for details.
+
+**Q: Some games/apps show as "Unknown App" even though they're running.**
+A: The app only recognizes processes it has seen before. Add the unknown process from the **Discover** tab (auto-detect) or manually via **Limits → Add App**. You can also pre-map them in `appsettings.json` under `KnownApps`.
+
+**Q: How do I set up email notifications?**
+A: Enable 2FA on your Gmail account, generate an [App Password](https://support.google.com/accounts/answer/185833), and enter your Gmail address and the app password in **Settings → Email Notifications & Control**. See the [Email control](#email-control-optional) section for all commands.
+
+**Q: Can I monitor multiple children on different PCs?**
+A: Yes. Install the app on each child's PC and give each a unique **Device ID** in **Settings**. Emails include the device name, and you can target a specific PC with `mc: @bedroom status`. Each PC needs its own Gmail address or you can forward to a single inbox.
+
+**Q: Does it work with Windows Store / UWP apps (e.g. Minecraft from the Store)?**
+A: Yes. UWP apps appear as the background process that owns the window. The Discover tab should detect them. If not, manually add the executable name (e.g. `Minecraft.Windows.exe`) via **Limits → Add App**.
+
+**Q: My child renamed DeviceMon.exe to bypass limits.**
+A: The **watchdog service** (`GameHost.exe`) runs under SYSTEM account and tracks the monitor regardless of its filename. You can also set an **admin password** in Settings to prevent dashboard tampering. Physical access to the PC is ultimately controlled by the Windows user account permissions.
+
+**Q: Can I pause monitoring temporarily without stopping the app?**
+A: Yes. Click the **Pause** button on the dashboard **Live** tab or from the system tray icon context menu. Click **Resume** to continue tracking.
+
+**Q: What happens when I close DeviceMon.exe?**
+A: If the watchdog is installed, it restarts DeviceMon.exe within 15 seconds. To fully stop, uninstall the watchdog first (`GameHost.exe --uninstall` as Admin), then close DeviceMon.
+
+**Q: Does the app work offline / without internet?**
+A: Yes. The dashboard and all monitoring features work entirely locally. Only email notifications/control require internet access.
+
 ---
 
 ## License
