@@ -193,6 +193,15 @@
         <select id="set-show-warning"><option value="true">Yes</option><option value="false">No</option></select>
         <label>Warning message on child's PC</label>
         <input type="text" id="set-warning-msg" placeholder="Time's up! This app will close soon." style="width:400px">
+        <label>Dashboard hotkey</label>
+        <div class="settings-row hotkey-row">
+          <label><input type="checkbox" id="hotkey-ctrl" style="width:auto"> Ctrl</label>
+          <label><input type="checkbox" id="hotkey-alt" style="width:auto"> Alt</label>
+          <label><input type="checkbox" id="hotkey-shift" style="width:auto"> Shift</label>
+          <label><input type="checkbox" id="hotkey-win" style="width:auto"> Win</label>
+          <select id="set-hotkey-key" style="width:120px"></select>
+        </div>
+        <p style="font-size:12px;color:#888">Changes apply immediately on the child's PC.</p>
         <label>Admin password</label>
         <input type="password" id="set-admin-pw" placeholder="Set or change admin password" autocomplete="new-password" style="width:350px">
         <label>Current admin password</label>
@@ -239,6 +248,17 @@
         <button id="settings-import-config" class="btn-secondary">Import Config</button>
         <span id="config-backup-result" style="margin-left:10px;font-size:13px"></span>
         <hr>
+        <h3>App Update</h3>
+        <label>Update source</label>
+        <input type="text" id="set-update-source" placeholder="C:\Deploy\MonitorAndControl\publish, \\server\share\publish, or https://example.com/update.zip" style="width:620px">
+        <label>SMB username (optional)</label>
+        <input type="text" id="set-update-username" placeholder="PCNAME\username or user@example.com" autocomplete="username" style="width:350px">
+        <label>SMB password (optional)</label>
+        <input type="password" id="set-update-password" placeholder="Password for the update share" autocomplete="current-password" style="width:350px">
+        <p style="font-size:12px;color:#888">The package must contain DeviceMon.exe. The app will close, copy files, restart, and update the watchdog when permissions allow.</p>
+        <button id="settings-run-update" class="btn-danger">Update App Now</button>
+        <span id="update-result" style="margin-left:10px;font-size:13px"></span>
+        <hr>
         <button id="settings-save">Save Settings</button>
         <button id="settings-webhook-test" class="btn-secondary">Test Webhook</button>
         <span id="webhook-test-result" style="margin-left:10px;font-size:13px"></span>
@@ -251,7 +271,7 @@
         <h3>Health</h3>
         <button id="settings-health-refresh" class="btn-secondary">Refresh Health</button>
         <div id="health-status" class="health-grid"></div>
-        <p>On the child's PC, press <strong>Ctrl+Alt+H</strong> to open this dashboard.</p>
+        <p>On the child's PC, press <strong id="current-hotkey">Ctrl+Alt+H</strong> to open this dashboard.</p>
       </form>
     </div>
   </main>

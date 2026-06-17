@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 
 namespace MonitorAndControl.Services;
 
@@ -27,6 +28,12 @@ public static class HotKeyService
             NativeMethods.UnregisterHotKey(_hwnd, _hotKeyId);
     }
 
+    public static void Unregister(IntPtr windowHandle, int id)
+    {
+        if (windowHandle != IntPtr.Zero)
+            NativeMethods.UnregisterHotKey(windowHandle, id);
+    }
+
     public static void HandleHotKey()
     {
         _callback?.Invoke();
@@ -37,22 +44,114 @@ public static class HotKeyService
     /// </summary>
     public static (uint Modifiers, uint Key) ParseHotKey(string modifiers, string key)
     {
-        uint modFlags = NativeMethods.MOD_NOREPEAT;
+        if (!TryParseHotKey(modifiers, key, out var modFlags, out var vk, out _, out _, out var error))
+            throw new ArgumentException(error);
+        return (modFlags, vk);
+    }
 
-        foreach (var part in modifiers.Split('+', StringSplitOptions.RemoveEmptyEntries))
+    public static bool TryParseHotKey(string modifiers, string key, out uint modFlags, out uint vk,
+        out string normalizedModifiers, out string normalizedKey, out string error)
+    {
+        modFlags = NativeMethods.MOD_NOREPEAT;
+        vk = 0;
+        normalizedModifiers = "";
+        normalizedKey = "";
+        error = "";
+
+        var parts = modifiers.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var normalizedParts = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var part in parts)
         {
-            modFlags |= part.Trim().ToLowerInvariant() switch
+            var normalized = part.Trim().ToLowerInvariant() switch
             {
-                "control" or "ctrl" => NativeMethods.MOD_CONTROL,
-                "alt" => NativeMethods.MOD_ALT,
-                "shift" => NativeMethods.MOD_SHIFT,
-                "win" or "windows" => NativeMethods.MOD_WIN,
+                "control" or "ctrl" => "Control",
+                "alt" => "Alt",
+                "shift" => "Shift",
+                "win" or "windows" => "Win",
+                _ => ""
+            };
+
+            if (normalized.Length == 0)
+            {
+                error = $"Unsupported hotkey modifier: {part}.";
+                return false;
+            }
+
+            if (!seen.Add(normalized))
+                continue;
+
+            normalizedParts.Add(normalized);
+            modFlags |= normalized switch
+            {
+                "Control" => NativeMethods.MOD_CONTROL,
+                "Alt" => NativeMethods.MOD_ALT,
+                "Shift" => NativeMethods.MOD_SHIFT,
+                "Win" => NativeMethods.MOD_WIN,
                 _ => 0
             };
         }
 
-        uint vk = (uint)(key.ToUpperInvariant()[0]);
-        return (modFlags, vk);
+        if (normalizedParts.Count == 0)
+        {
+            error = "Choose at least one hotkey modifier.";
+            return false;
+        }
+
+        if (!TryParseVirtualKey(key, out vk, out normalizedKey))
+        {
+            error = "Unsupported hotkey key.";
+            return false;
+        }
+
+        normalizedModifiers = string.Join("+", normalizedParts);
+        return true;
+    }
+
+    private static bool TryParseVirtualKey(string key, out uint vk, out string normalizedKey)
+    {
+        vk = 0;
+        normalizedKey = "";
+        var clean = (key ?? "").Trim();
+        if (clean.Length == 1 && char.IsLetterOrDigit(clean[0]))
+        {
+            normalizedKey = clean.ToUpperInvariant();
+            vk = normalizedKey[0];
+            return true;
+        }
+
+        if (clean.Length is 2 or 3 &&
+            clean.StartsWith("F", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(clean[1..], out var fKey) &&
+            fKey is >= 1 and <= 24)
+        {
+            normalizedKey = $"F{fKey}";
+            vk = (uint)((int)Keys.F1 + fKey - 1);
+            return true;
+        }
+
+        var namedKeys = new Dictionary<string, Keys>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Insert"] = Keys.Insert,
+            ["Delete"] = Keys.Delete,
+            ["Home"] = Keys.Home,
+            ["End"] = Keys.End,
+            ["PageUp"] = Keys.PageUp,
+            ["PageDown"] = Keys.PageDown,
+            ["Up"] = Keys.Up,
+            ["Down"] = Keys.Down,
+            ["Left"] = Keys.Left,
+            ["Right"] = Keys.Right,
+            ["Space"] = Keys.Space
+        };
+
+        if (!namedKeys.TryGetValue(clean.Replace(" ", ""), out var parsed))
+            return false;
+
+        normalizedKey = namedKeys.Keys.First(k => k.Equals(clean.Replace(" ", ""), StringComparison.OrdinalIgnoreCase));
+        vk = (uint)parsed;
+        return true;
     }
 
     public static void OpenDashboard(string url)

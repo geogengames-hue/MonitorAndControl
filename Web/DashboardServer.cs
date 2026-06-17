@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -167,10 +168,6 @@ public class DashboardServer
                 var auth = RequireWriteAccess(ctx);
                 if (auth != null && !PasswordHasher.Verify(currentPassword, storedHash))
                     return auth;
-            }
-            else if (!IsLocalRequest(ctx))
-            {
-                return Results.Json(new { error = "Initial admin password must be set on the child PC." }, statusCode: StatusCodes.Status403Forbidden);
             }
 
             await db.SetSettingAsync("DashboardAdminPasswordHash", PasswordHasher.Hash(newPassword));
@@ -537,6 +534,7 @@ public class DashboardServer
             var emailControlEnabled = await db.GetSettingAsync("EmailControlEnabled", "false");
             var uiLanguage = await db.GetSettingAsync("UiLanguage", "en");
             var config = Program.GetConfig();
+            var (hotKeyModifiers, hotKeyKey) = await Program.GetDashboardHotKeySettings(config);
             var hostname = Environment.MachineName;
             var localIps = System.Net.Dns.GetHostEntry(hostname).AddressList
                 .Where(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
@@ -557,6 +555,9 @@ public class DashboardServer
                 emailStartNotifyEnabled = emailStartNotifyEnabled == "true",
                 emailControlEnabled = emailControlEnabled == "true",
                 uiLanguage,
+                hotKeyModifiers,
+                hotKeyKey,
+                hotKey = $"{hotKeyModifiers}+{hotKeyKey}",
                 remoteDashboardEnabled = config.EnableRemoteDashboard,
                 adminPasswordSet = _adminPasswordSet,
                 dashboardTokenRequired = _adminPasswordSet || !IsLocalRequest(ctx)
@@ -627,6 +628,26 @@ public class DashboardServer
                     return Results.BadRequest(new { error = "Unsupported language." });
                 await db.SetSettingAsync("UiLanguage", language);
             }
+            if (root.TryGetProperty("hotKeyModifiers", out var hkm) || root.TryGetProperty("hotKeyKey", out var hkk))
+            {
+                var config = Program.GetConfig();
+                var currentHotKey = await Program.GetDashboardHotKeySettings(config);
+                var modifiers = root.TryGetProperty("hotKeyModifiers", out hkm)
+                    ? Clean(hkm.GetString())
+                    : currentHotKey.Modifiers;
+                var key = root.TryGetProperty("hotKeyKey", out hkk)
+                    ? Clean(hkk.GetString())
+                    : currentHotKey.Key;
+
+                if (!HotKeyService.TryParseHotKey(modifiers, key, out _, out _, out var normalizedModifiers, out var normalizedKey, out var hotKeyError))
+                    return Results.BadRequest(new { error = hotKeyError });
+
+                if (!await Program.UpdateDashboardHotKeyAsync(normalizedModifiers, normalizedKey))
+                    return Results.BadRequest(new { error = "Could not register that hotkey. It may already be used by Windows or another app." });
+
+                await db.SetSettingAsync("HotKeyModifiers", normalizedModifiers);
+                await db.SetSettingAsync("HotKeyKey", normalizedKey);
+            }
             if (root.TryGetProperty("autoStart", out var asv))
                 Program.SetAutoStart(asv.GetBoolean());
             // Always reload email config after save
@@ -685,6 +706,66 @@ public class DashboardServer
             return Results.Ok(new { status = "reset" });
         });
 
+        app.MapPost("/api/settings/update", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+
+            string source = "";
+            string username = "";
+            string password = "";
+            if (ctx.Request.ContentLength > 0)
+            {
+                using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+                if (doc.RootElement.TryGetProperty("source", out var src))
+                    source = Clean(src.GetString());
+                if (doc.RootElement.TryGetProperty("username", out var user))
+                    username = Clean(user.GetString());
+                if (doc.RootElement.TryGetProperty("password", out var pw))
+                    password = pw.GetString() ?? "";
+            }
+
+            if (!IsValidUpdateSource(source, username, out var updateSourceError))
+                return Results.BadRequest(new { error = updateSourceError });
+
+            var updaterPath = Path.Combine(AppContext.BaseDirectory, "UpdateAgent.exe");
+            if (!File.Exists(updaterPath))
+                return Results.Json(new { error = "UpdateAgent.exe is missing from the app folder. Publish the app again with the updater included." }, statusCode: StatusCodes.Status500InternalServerError);
+
+            var tempDir = Path.Combine(Path.GetTempPath(), "DeviceMonUpdateAgent", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            var tempUpdaterPath = Path.Combine(tempDir, "UpdateAgent.exe");
+            File.Copy(updaterPath, tempUpdaterPath, overwrite: true);
+
+            var monitorPath = Program.CurrentExecutablePath;
+            var targetDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var pid = Environment.ProcessId;
+            var requestPath = Path.Combine(tempDir, "update-request.json");
+            await File.WriteAllTextAsync(requestPath, JsonSerializer.Serialize(new
+            {
+                source,
+                targetDirectory = targetDir,
+                monitorPath,
+                monitorPid = pid,
+                restart = true,
+                username = string.IsNullOrWhiteSpace(username) ? null : username,
+                password = string.IsNullOrWhiteSpace(password) ? null : password
+            }, JsonOpts));
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = tempUpdaterPath,
+                Arguments = $"--request \"{requestPath}\"",
+                WorkingDirectory = tempDir,
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+
+            Logger.Instance.Warn($"Dashboard update started from source: {source}");
+            Program.ShutdownSoon(1000);
+            return Results.Ok(new { status = "update_started" });
+        });
+
         app.MapGet("/api/config/export", async (HttpContext ctx) =>
         {
             var auth = RequireWriteAccess(ctx);
@@ -734,6 +815,15 @@ public class DashboardServer
             await db.ReplaceScheduleRulesAsync(backup.Schedules);
             foreach (var setting in backup.Settings.Where(kvp => ExportableSettings.Contains(kvp.Key)))
                 await db.SetSettingAsync(setting.Key, setting.Value);
+
+            var importedConfig = Program.GetConfig();
+            var importedHotKey = await Program.GetDashboardHotKeySettings(importedConfig);
+            if (HotKeyService.TryParseHotKey(importedHotKey.Modifiers, importedHotKey.Key, out _, out _, out var normalizedModifiers, out var normalizedKey, out _) &&
+                await Program.UpdateDashboardHotKeyAsync(normalizedModifiers, normalizedKey))
+            {
+                await db.SetSettingAsync("HotKeyModifiers", normalizedModifiers);
+                await db.SetSettingAsync("HotKeyKey", normalizedKey);
+            }
 
             enforcer.ClearExceeded();
             scheduler.InvalidateCache();
@@ -928,6 +1018,39 @@ public class DashboardServer
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
+    private static bool IsValidUpdateSource(string source, string username, out string error)
+    {
+        error = "";
+        if (string.IsNullOrWhiteSpace(source) || source.Length > 2048 || source.Any(char.IsControl))
+        {
+            error = "Update source is required.";
+            return false;
+        }
+
+        if (IsHttpUrl(source))
+            return true;
+
+        if (source.StartsWith(@"\\", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(username))
+            return true;
+
+        try
+        {
+            var fullPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(source));
+            if (!Directory.Exists(fullPath))
+            {
+                error = "Update source folder does not exist on the child PC.";
+                return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            error = "Update source must be a folder path, UNC path, or http/https ZIP URL.";
+            return false;
+        }
+    }
+
     private static bool IsValidEmail(string value) =>
         MimeKit.MailboxAddress.TryParse(value, out _);
 
@@ -948,7 +1071,9 @@ public class DashboardServer
         "EmailNotifyEnabled",
         "EmailStartNotifyEnabled",
         "EmailControlEnabled",
-        "UiLanguage"
+        "UiLanguage",
+        "HotKeyModifiers",
+        "HotKeyKey"
     };
 
     private static readonly HashSet<string> AllowedLanguages = new(StringComparer.OrdinalIgnoreCase)
@@ -1008,6 +1133,14 @@ public class DashboardServer
                 case "UiLanguage":
                     if (!AllowedLanguages.Contains(cleanValue))
                         return "Backup contains an unsupported language.";
+                    break;
+                case "HotKeyModifiers":
+                    if (!HotKeyService.TryParseHotKey(cleanValue, backup.Settings.GetValueOrDefault("HotKeyKey", "H"), out _, out _, out _, out _, out _))
+                        return "Backup contains an invalid hotkey modifier.";
+                    break;
+                case "HotKeyKey":
+                    if (!HotKeyService.TryParseHotKey(backup.Settings.GetValueOrDefault("HotKeyModifiers", "Control+Alt"), cleanValue, out _, out _, out _, out _, out _))
+                        return "Backup contains an invalid hotkey key.";
                     break;
                 case "WebhookUrl":
                     if (!string.IsNullOrEmpty(cleanValue) && !IsHttpUrl(cleanValue))

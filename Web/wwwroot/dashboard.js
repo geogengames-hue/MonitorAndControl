@@ -882,6 +882,41 @@ document.getElementById('logs-clear').addEventListener('click', async () => {
 });
 
 // Settings
+const hotkeyKeyOptions = [
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
+  ...'0123456789'.split(''),
+  ...Array.from({ length: 24 }, (_, i) => `F${i + 1}`),
+  'Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'Up', 'Down', 'Left', 'Right', 'Space'
+];
+
+function initHotkeyKeyOptions() {
+  const select = document.getElementById('set-hotkey-key');
+  if (!select || select.options.length > 0) return;
+  select.innerHTML = hotkeyKeyOptions.map(k => `<option value="${escAttr(k)}">${esc(k)}</option>`).join('');
+}
+
+function setHotkeyControls(modifiers, key) {
+  const parts = String(modifiers || 'Control+Alt').split('+').map(x => x.trim().toLowerCase());
+  document.getElementById('hotkey-ctrl').checked = parts.includes('control') || parts.includes('ctrl');
+  document.getElementById('hotkey-alt').checked = parts.includes('alt');
+  document.getElementById('hotkey-shift').checked = parts.includes('shift');
+  document.getElementById('hotkey-win').checked = parts.includes('win') || parts.includes('windows');
+  const normalizedKey = key || 'H';
+  const select = document.getElementById('set-hotkey-key');
+  if ([...select.options].some(o => o.value.toLowerCase() === normalizedKey.toLowerCase())) {
+    select.value = [...select.options].find(o => o.value.toLowerCase() === normalizedKey.toLowerCase()).value;
+  }
+}
+
+function getHotkeyModifiers() {
+  const parts = [];
+  if (document.getElementById('hotkey-ctrl').checked) parts.push('Control');
+  if (document.getElementById('hotkey-alt').checked) parts.push('Alt');
+  if (document.getElementById('hotkey-shift').checked) parts.push('Shift');
+  if (document.getElementById('hotkey-win').checked) parts.push('Win');
+  return parts.join('+');
+}
+
 async function loadSettings() {
   try {
     const s = await api('/api/settings');
@@ -898,6 +933,9 @@ async function loadSettings() {
     document.getElementById('set-email-notify').checked = s.emailNotifyEnabled;
     document.getElementById('set-email-start-notify').checked = s.emailStartNotifyEnabled;
     document.getElementById('set-email-control').checked = s.emailControlEnabled;
+    initHotkeyKeyOptions();
+    setHotkeyControls(s.hotKeyModifiers, s.hotKeyKey);
+    document.getElementById('current-hotkey').textContent = s.hotKey || `${s.hotKeyModifiers || 'Control+Alt'}+${s.hotKeyKey || 'H'}`;
     const port = window.location.port || '5000';
     const viaHostname = s.hostname ? `http://${esc(s.hostname)}:${port}` : esc(window.location.href);
     const viaIps = s.localIps ? s.localIps.map(ip => `http://${esc(ip)}:${port}`).join('<br>') : viaHostname;
@@ -991,12 +1029,15 @@ document.getElementById('settings-save').addEventListener('click', async () => {
   const emailStartNotifyEnabled = document.getElementById('set-email-start-notify').checked;
   const emailControlEnabled = document.getElementById('set-email-control').checked;
   const autoStart = document.getElementById('set-auto-start').checked;
+  const hotKeyModifiers = getHotkeyModifiers();
+  const hotKeyKey = document.getElementById('set-hotkey-key').value;
   uiLanguage = document.getElementById('set-language').value;
-  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, autoStart, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled, uiLanguage };
+  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, autoStart, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled, uiLanguage, hotKeyModifiers, hotKeyKey };
   if (emailPassword) payload.emailPassword = emailPassword;
   await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   document.getElementById('set-email-pw').value = '';
   localStorage.setItem('uiLanguage', uiLanguage);
+  document.getElementById('current-hotkey').textContent = `${hotKeyModifiers}+${hotKeyKey}`;
   alert(t('Settings saved.'));
 });
 
@@ -1149,6 +1190,36 @@ document.getElementById('settings-import-file').addEventListener('change', e => 
   if (label) label.textContent = file ? file.name : t('No file chosen');
 });
 
+document.getElementById('settings-run-update').addEventListener('click', async () => {
+  const el = document.getElementById('update-result');
+  const source = document.getElementById('set-update-source').value.trim();
+  const username = document.getElementById('set-update-username').value.trim();
+  const password = document.getElementById('set-update-password').value;
+  if (!source) {
+    el.style.color = '#ff4444';
+    el.textContent = t('Enter an update source first.');
+    return;
+  }
+
+  if (!confirm(t('Update the app now? The dashboard will disconnect while DeviceMon restarts.'))) return;
+
+  el.style.color = '#ffaa44';
+  el.textContent = t('Starting update...');
+  try {
+    await api('/api/settings/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, username, password })
+    });
+    document.getElementById('set-update-password').value = '';
+    el.style.color = '#44bb44';
+    el.textContent = t('Update started. Reopen the dashboard after the app restarts.');
+  } catch (e) {
+    el.style.color = '#ff4444';
+    el.textContent = e.message || t('Update failed');
+  }
+});
+
 function renderTable(id, data, props, headers) {
   const el = document.getElementById(id);
   let html = '<table><thead><tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
@@ -1166,6 +1237,7 @@ function renderTable(id, data, props, headers) {
 // Init
 (async function init() {
   await loadTranslations(uiLanguage);
+  initHotkeyKeyOptions();
   applyTranslations();
   startApp();
 })();

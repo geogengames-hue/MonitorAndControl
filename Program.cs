@@ -54,7 +54,8 @@ internal static class Program
             EnsureWatchdogInstalled();
             StartServices(config);
 
-            var (mods, key) = HotKeyService.ParseHotKey(config.HotKeyModifiers, config.HotKeyKey);
+            var (hotKeyModifiers, hotKeyKey) = GetDashboardHotKeySettings(config).GetAwaiter().GetResult();
+            var (mods, key) = HotKeyService.ParseHotKey(hotKeyModifiers, hotKeyKey);
 
             _hiddenForm = new HiddenForm(1, mods, key, () =>
             {
@@ -291,6 +292,20 @@ internal static class Program
         try { Environment.Exit(0); } catch (Exception ex) { Logger.Instance.Error($"Failed to exit process: {ex.Message}"); }
     }
 
+    public static void ShutdownSoon(int delayMs = 500)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(Math.Clamp(delayMs, 100, 10000));
+            Shutdown();
+        });
+    }
+
+    public static string CurrentExecutablePath =>
+        System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
+        ?? Environment.ProcessPath
+        ?? Path.Combine(AppContext.BaseDirectory, "DeviceMon.exe");
+
     private static async Task Initialize(AppConfig config)
     {
         _db = new UsageDatabase();
@@ -300,6 +315,31 @@ internal static class Program
             await _db.SetKillDelayAsync(config.KillDelaySeconds);
         if (string.IsNullOrEmpty(await _db.GetSettingAsync("ShowWarning", "")))
             await _db.SetShowWarningAsync(config.ShowWarningOnChildPc);
+        if (string.IsNullOrEmpty(await _db.GetSettingAsync("HotKeyModifiers", "")))
+            await _db.SetSettingAsync("HotKeyModifiers", config.HotKeyModifiers);
+        if (string.IsNullOrEmpty(await _db.GetSettingAsync("HotKeyKey", "")))
+            await _db.SetSettingAsync("HotKeyKey", config.HotKeyKey);
+    }
+
+    public static async Task<(string Modifiers, string Key)> GetDashboardHotKeySettings(AppConfig config)
+    {
+        if (_db == null)
+            return (config.HotKeyModifiers, config.HotKeyKey);
+
+        var modifiers = await _db.GetSettingAsync("HotKeyModifiers", config.HotKeyModifiers);
+        var key = await _db.GetSettingAsync("HotKeyKey", config.HotKeyKey);
+        return (modifiers, key);
+    }
+
+    public static async Task<bool> UpdateDashboardHotKeyAsync(string modifiers, string key)
+    {
+        if (!HotKeyService.TryParseHotKey(modifiers, key, out var mods, out var vk, out _, out _, out _))
+            return false;
+
+        if (_hiddenForm == null)
+            return true;
+
+        return await _hiddenForm.UpdateHotKeyAsync(mods, vk);
     }
 
     private static void StartServices(AppConfig config)

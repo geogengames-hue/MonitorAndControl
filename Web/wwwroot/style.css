@@ -166,6 +166,8 @@ input[type="checkbox"] { width: 18px; height: 18px; margin: 0; }
 .settings-form hr { border: none; border-top: 1px solid #2a2a3e; margin: 25px 0; }
 .settings-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
 .settings-row button { margin: 0; }
+.settings-row label { display: flex; align-items: center; gap: 5px; margin: 0; color: #aaa; font-size: 13px; }
+.hotkey-row select { margin-left: 4px; }
 .health-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(180px, 1fr));

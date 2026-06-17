@@ -1,0 +1,430 @@
+using System.Diagnostics;
+using System.IO.Compression;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+
+namespace MonitorAndControl.UpdateAgent;
+
+internal static class Program
+{
+    private const string MonitorExeName = "DeviceMon.exe";
+    private const string WatchdogExeName = "GameHost.exe";
+    private const string ServiceName = "GameHost";
+
+    public static async Task<int> Main(string[] args)
+    {
+        var options = UpdateOptions.Parse(args);
+        if (options == null)
+        {
+            Console.Error.WriteLine("Usage: UpdateAgent --source <folder-or-zip-url> --target <install-folder> --monitor <DeviceMon.exe> [--pid <pid>] [--restart]");
+            return 2;
+        }
+
+        var logPath = Path.Combine(options.TargetDirectory, "update.log");
+        void Log(string message)
+        {
+            try
+            {
+                Directory.CreateDirectory(options.TargetDirectory);
+                File.AppendAllText(logPath, $"{DateTime.Now:O} {message}{Environment.NewLine}");
+            }
+            catch
+            {
+            }
+        }
+
+        try
+        {
+            Log($"Update started. Source={options.Source}");
+            ConnectNetworkShare(options, Log);
+            StopWatchdog(Log);
+            await WaitForMonitorExitAsync(options.MonitorPid, options.MonitorPath, Log);
+
+            var preparedSource = await PrepareSourceAsync(options.Source, Log);
+            ValidateSource(preparedSource);
+            CopyDirectory(preparedSource, options.TargetDirectory, Log);
+
+            RepairWatchdog(options.TargetDirectory, options.MonitorPath, Log);
+            if (options.Restart)
+                StartMonitor(options.MonitorPath, Log);
+
+            Log("Update completed.");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Log("Update failed: " + ex);
+            return 1;
+        }
+        finally
+        {
+            options.DeleteRequestFile();
+        }
+    }
+
+    private static void ConnectNetworkShare(UpdateOptions options, Action<string> log)
+    {
+        if (string.IsNullOrWhiteSpace(options.Username) || !TryGetUncRoot(options.Source, out var uncRoot))
+            return;
+
+        var resource = new NativeMethods.NETRESOURCE
+        {
+            dwType = NativeMethods.RESOURCETYPE_DISK,
+            lpRemoteName = uncRoot
+        };
+
+        var result = NativeMethods.WNetAddConnection2(ref resource, options.Password ?? "", options.Username, 0);
+        if (result == 0)
+        {
+            log($"Connected to update share {uncRoot} as {options.Username}.");
+            return;
+        }
+
+        if (result == 1219)
+        {
+            NativeMethods.WNetCancelConnection2(uncRoot, 0, true);
+            result = NativeMethods.WNetAddConnection2(ref resource, options.Password ?? "", options.Username, 0);
+            if (result == 0)
+            {
+                log($"Reconnected to update share {uncRoot} as {options.Username}.");
+                return;
+            }
+        }
+
+        throw new InvalidOperationException($"Could not connect to update share {uncRoot}. Windows error {result}.");
+    }
+
+    private static bool TryGetUncRoot(string source, out string uncRoot)
+    {
+        uncRoot = "";
+        if (!source.StartsWith(@"\\", StringComparison.Ordinal))
+            return false;
+
+        var parts = source.TrimStart('\\').Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+            return false;
+
+        uncRoot = $@"\\{parts[0]}\{parts[1]}";
+        return true;
+    }
+
+    private static async Task<string> PrepareSourceAsync(string source, Action<string> log)
+    {
+        if (Uri.TryCreate(source, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            var tempRoot = Path.Combine(Path.GetTempPath(), "DeviceMonUpdate", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempRoot);
+            var zipPath = Path.Combine(tempRoot, "update.zip");
+            log($"Downloading update ZIP from {uri}");
+            using var http = new HttpClient();
+            using var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+            await using (var input = await response.Content.ReadAsStreamAsync())
+            await using (var output = File.Create(zipPath))
+                await input.CopyToAsync(output);
+
+            var extractPath = Path.Combine(tempRoot, "extract");
+            ZipFile.ExtractToDirectory(zipPath, extractPath);
+            return FindPackageRoot(extractPath);
+        }
+
+        var fullPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(source));
+        if (!Directory.Exists(fullPath))
+            throw new DirectoryNotFoundException($"Update source folder not found: {fullPath}");
+
+        return FindPackageRoot(fullPath);
+    }
+
+    private static string FindPackageRoot(string path)
+    {
+        if (File.Exists(Path.Combine(path, MonitorExeName)))
+            return path;
+
+        var candidates = Directory.GetFiles(path, MonitorExeName, SearchOption.AllDirectories)
+            .Select(Path.GetDirectoryName)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return candidates.Count == 1
+            ? candidates[0]!
+            : path;
+    }
+
+    private static void ValidateSource(string sourceDirectory)
+    {
+        if (!File.Exists(Path.Combine(sourceDirectory, MonitorExeName)))
+            throw new InvalidOperationException($"Update package must contain {MonitorExeName}.");
+    }
+
+    private static async Task WaitForMonitorExitAsync(int? pid, string monitorPath, Action<string> log)
+    {
+        if (pid.HasValue)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(pid.Value);
+                log($"Waiting for monitor process {pid.Value} to exit.");
+                if (!process.WaitForExit(45000))
+                {
+                    log("Monitor did not exit in time; killing it.");
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync();
+                }
+                return;
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+        }
+
+        var processName = Path.GetFileNameWithoutExtension(monitorPath);
+        foreach (var process in Process.GetProcessesByName(processName))
+        {
+            try
+            {
+                if (process.MainModule?.FileName?.Equals(monitorPath, StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    log($"Waiting for monitor process {process.Id} to exit.");
+                    if (!process.WaitForExit(45000))
+                        process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        await Task.Delay(1000);
+    }
+
+    private static void CopyDirectory(string sourceDirectory, string targetDirectory, Action<string> log)
+    {
+        Directory.CreateDirectory(targetDirectory);
+        foreach (var directory in Directory.GetDirectories(sourceDirectory, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(sourceDirectory, directory);
+            Directory.CreateDirectory(Path.Combine(targetDirectory, relative));
+        }
+
+        foreach (var file in Directory.GetFiles(sourceDirectory, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(sourceDirectory, file);
+            var target = Path.Combine(targetDirectory, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+
+            for (var attempt = 1; attempt <= 8; attempt++)
+            {
+                try
+                {
+                    File.Copy(file, target, overwrite: true);
+                    break;
+                }
+                catch (IOException) when (attempt < 8)
+                {
+                    Thread.Sleep(1000);
+                }
+                catch (UnauthorizedAccessException) when (attempt < 8)
+                {
+                    Thread.Sleep(1000);
+                }
+            }
+        }
+
+        log($"Copied files from {sourceDirectory} to {targetDirectory}.");
+    }
+
+    private static void StopWatchdog(Action<string> log)
+    {
+        RunProcess("sc.exe", $"stop {ServiceName}", TimeSpan.FromSeconds(20), log);
+    }
+
+    private static void RepairWatchdog(string targetDirectory, string monitorPath, Action<string> log)
+    {
+        var watchdogPath = Path.Combine(targetDirectory, WatchdogExeName);
+        if (!File.Exists(watchdogPath))
+        {
+            log("Watchdog executable not found after update; skipping service repair.");
+            return;
+        }
+
+        RunProcess(watchdogPath, $"--update --monitor \"{monitorPath}\"", TimeSpan.FromSeconds(45), log);
+    }
+
+    private static void StartMonitor(string monitorPath, Action<string> log)
+    {
+        if (!File.Exists(monitorPath))
+            throw new FileNotFoundException("Monitor executable not found after update.", monitorPath);
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = monitorPath,
+            WorkingDirectory = Path.GetDirectoryName(monitorPath) ?? AppContext.BaseDirectory,
+            UseShellExecute = true
+        });
+        log("Monitor restarted.");
+    }
+
+    private static void RunProcess(string fileName, string arguments, TimeSpan timeout, Action<string> log)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(fileName, arguments)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            using var process = Process.Start(psi);
+            if (process == null) return;
+            if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+            {
+                log($"{fileName} timed out.");
+                return;
+            }
+
+            if (process.ExitCode != 0)
+                log($"{fileName} exited with {process.ExitCode}: {process.StandardError.ReadToEnd()}");
+        }
+        catch (Exception ex)
+        {
+            log($"{fileName} failed: {ex.Message}");
+        }
+    }
+}
+
+internal sealed record UpdateOptions(
+    string Source,
+    string TargetDirectory,
+    string MonitorPath,
+    int? MonitorPid,
+    bool Restart,
+    string? Username,
+    string? Password,
+    string? RequestFile)
+{
+    public static UpdateOptions? Parse(string[] args)
+    {
+        var requestFile = GetArg(args, "--request");
+        if (!string.IsNullOrWhiteSpace(requestFile))
+            return ParseRequestFile(requestFile);
+
+        string? source = null;
+        string? target = null;
+        string? monitor = null;
+        int? pid = null;
+        var restart = false;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i].Equals("--source", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                source = args[++i];
+            else if (args[i].Equals("--target", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                target = args[++i];
+            else if (args[i].Equals("--monitor", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                monitor = args[++i];
+            else if (args[i].Equals("--pid", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length && int.TryParse(args[++i], out var parsedPid))
+                pid = parsedPid;
+            else if (args[i].Equals("--restart", StringComparison.OrdinalIgnoreCase))
+                restart = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(target))
+            return null;
+
+        target = Path.GetFullPath(Environment.ExpandEnvironmentVariables(target));
+        monitor = string.IsNullOrWhiteSpace(monitor)
+            ? Path.Combine(target, "DeviceMon.exe")
+            : Path.GetFullPath(Environment.ExpandEnvironmentVariables(monitor));
+
+        return new UpdateOptions(source, target, monitor, pid, restart, null, null, null);
+    }
+
+    public void DeleteRequestFile()
+    {
+        if (string.IsNullOrWhiteSpace(RequestFile))
+            return;
+
+        try { File.Delete(RequestFile); } catch { }
+    }
+
+    private static string? GetArg(string[] args, string name)
+    {
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i].Equals(name, StringComparison.OrdinalIgnoreCase))
+                return args[i + 1];
+        }
+
+        return null;
+    }
+
+    private static UpdateOptions? ParseRequestFile(string requestFile)
+    {
+        var json = File.ReadAllText(requestFile);
+        var request = JsonSerializer.Deserialize<UpdateRequest>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+
+        if (request == null || string.IsNullOrWhiteSpace(request.Source) || string.IsNullOrWhiteSpace(request.TargetDirectory))
+            return null;
+
+        var target = Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.TargetDirectory));
+        var monitor = string.IsNullOrWhiteSpace(request.MonitorPath)
+            ? Path.Combine(target, "DeviceMon.exe")
+            : Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.MonitorPath));
+
+        return new UpdateOptions(
+            request.Source,
+            target,
+            monitor,
+            request.MonitorPid,
+            request.Restart,
+            request.Username,
+            request.Password,
+            requestFile);
+    }
+}
+
+internal sealed class UpdateRequest
+{
+    public string Source { get; set; } = "";
+    public string TargetDirectory { get; set; } = "";
+    public string MonitorPath { get; set; } = "";
+    public int? MonitorPid { get; set; }
+    public bool Restart { get; set; }
+    public string? Username { get; set; }
+    public string? Password { get; set; }
+}
+
+internal static class NativeMethods
+{
+    internal const int RESOURCETYPE_DISK = 1;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct NETRESOURCE
+    {
+        public int dwScope;
+        public int dwType;
+        public int dwDisplayType;
+        public int dwUsage;
+        public string? lpLocalName;
+        public string? lpRemoteName;
+        public string? lpComment;
+        public string? lpProvider;
+    }
+
+    [DllImport("mpr.dll", CharSet = CharSet.Unicode)]
+    internal static extern int WNetAddConnection2(ref NETRESOURCE lpNetResource, string? lpPassword, string? lpUsername, int dwFlags);
+
+    [DllImport("mpr.dll", CharSet = CharSet.Unicode)]
+    internal static extern int WNetCancelConnection2(string lpName, int dwFlags, bool fForce);
+}

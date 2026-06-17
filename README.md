@@ -19,7 +19,7 @@ A **parental control** Windows desktop application that monitors computer and ap
 - **Watchdog service** — optional Windows service that restarts the monitor if it crashes
 - **Admin password** — protect dashboard changes and shutdown
 - **Config export/import** — backup and restore limits, schedules, and app mappings
-- **Hotkey** — `Ctrl+Alt+H` opens the dashboard
+- **Hotkey** — `Ctrl+Alt+H` opens the dashboard by default and can be changed in Settings
 
 ---
 
@@ -115,7 +115,7 @@ MonitorAndControl/
 │   ├── SchedulerService.cs # Time‑based schedule enforcement
 │   ├── NotificationService.cs  # Webhook notifications
 │   ├── EmailService.cs     # Gmail SMTP/IMAP integration
-│   ├── HotKeyService.cs    # Global hotkey (Ctrl+Alt+H)
+│   ├── HotKeyService.cs    # Global dashboard hotkey
 │   ├── PasswordHasher.cs   # PBKDF2 password hashing
 │   ├── SecretProtector.cs  # DPAPI credential protection
 │   └── DiscoveryService.cs # Scans for installed games/apps
@@ -148,7 +148,7 @@ Opens the dashboard at `http://localhost:5000` and runs in the system tray.
 2. **Extract** the zip to a folder (e.g. `C:\MonitorAndControl`)
 3. **Run `DeviceMon.exe`** (no admin required for basic usage)
    - On first run, it will detect `GameHost.exe` and ask for **administrator elevation** via a UAC prompt to install the watchdog service. This is optional — click **Yes** to enable auto-restart on crash, or **No** to skip (the app will still run normally)
-4. **Open the dashboard** — press `Ctrl+Alt+H` or open `http://localhost:5000` in a browser
+4. **Open the dashboard** — press `Ctrl+Alt+H` by default or open `http://localhost:5000` in a browser
 5. **Set limits** — navigate to **Limits** tab, add apps and set daily max minutes
 6. **Configure schedule** (optional) — navigate to **Schedule** tab, set allowed hours
 
@@ -195,13 +195,13 @@ Place this file alongside `DeviceMon.exe`. All settings are optional — default
 | `ShowWarningOnChildPc` | `true` | Show full‑screen popup before killing an app |
 | `PollIntervalMs` | `1000` | Foreground window check interval (ms) |
 | `FlushIntervalSec` | `30` | How often usage data is written to the database |
-| `HotKeyModifiers` | `Control+Alt` | Modifier keys for the dashboard hotkey |
-| `HotKeyKey` | `H` | Key for the dashboard hotkey |
+| `HotKeyModifiers` | `Control+Alt` | Default modifier keys for the dashboard hotkey. Can also be changed in dashboard Settings. |
+| `HotKeyKey` | `H` | Default key for the dashboard hotkey. Can also be changed in dashboard Settings. |
 | `KnownApps` | `{}` | Map of process names → friendly app names |
 | `DefaultLimits` | `[]` | Default daily limits for known apps |
 | `Schedule` | `[]` | Default allowed hours schedule |
 
-> **Security note:** When `EnableRemoteDashboard` is `true`, anyone on your local network can access the dashboard. Set an admin password in the dashboard **Settings** tab to protect changes.
+> **Security note:** When `EnableRemoteDashboard` is `true`, anyone on your local network can access the dashboard until an admin password is set. Set the admin password from the local or remote dashboard **Settings** tab as soon as remote access is enabled.
 
 ### Installing the Watchdog (optional, requires admin)
 
@@ -242,7 +242,9 @@ Once installed, the `GameHost` service runs under the SYSTEM account and automat
 | **Logs** | Real‑time event log with filtering |
 | **Settings** | Kill delay, language, auto‑start, webhook, email, admin password, backup/restore, health |
 
-**Admin password:** Set one in **Settings** to protect dashboard changes (pause, resume, reset, kill, settings edits) and shutdown.
+**Admin password:** Set one in **Settings** from the child PC or a remote dashboard to protect dashboard changes (pause, resume, reset, kill, settings edits) and shutdown.
+
+**App update:** Put a freshly published package on a local folder, UNC share, or HTTP/HTTPS ZIP URL, then use **Settings -> App Update**. The package must contain `DeviceMon.exe`. The dashboard starts `UpdateAgent.exe`, closes DeviceMon, copies the package over the install folder, restarts DeviceMon, and repairs/restarts the watchdog when permissions allow. Check `update.log` in the install folder if an update fails.
 
 **Remote access:** Settings show the computer name and IP addresses. From another PC, open `http://CHILD_PC_NAME:5000` or `http://192.168.x.x:5000`.
 
