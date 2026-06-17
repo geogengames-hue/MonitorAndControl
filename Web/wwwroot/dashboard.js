@@ -929,6 +929,7 @@ async function loadSettings() {
     document.getElementById('set-webhook-url').value = s.webhookUrl || '';
     document.getElementById('set-email-addr').value = s.emailAddress || '';
     document.getElementById('set-email-allowed-sender').value = s.emailAllowedSender || s.emailAddress || '';
+    document.getElementById('set-email-device-id').value = s.emailDeviceId || s.hostname || '';
     document.getElementById('set-auto-start').checked = s.autoStart;
     document.getElementById('set-email-notify').checked = s.emailNotifyEnabled;
     document.getElementById('set-email-start-notify').checked = s.emailStartNotifyEnabled;
@@ -1025,6 +1026,7 @@ document.getElementById('settings-save').addEventListener('click', async () => {
   const emailAddress = document.getElementById('set-email-addr').value.trim();
   const emailPassword = document.getElementById('set-email-pw').value;
   const emailAllowedSender = document.getElementById('set-email-allowed-sender').value.trim();
+  const emailDeviceId = document.getElementById('set-email-device-id').value.trim();
   const emailNotifyEnabled = document.getElementById('set-email-notify').checked;
   const emailStartNotifyEnabled = document.getElementById('set-email-start-notify').checked;
   const emailControlEnabled = document.getElementById('set-email-control').checked;
@@ -1032,7 +1034,7 @@ document.getElementById('settings-save').addEventListener('click', async () => {
   const hotKeyModifiers = getHotkeyModifiers();
   const hotKeyKey = document.getElementById('set-hotkey-key').value;
   uiLanguage = document.getElementById('set-language').value;
-  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, autoStart, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled, uiLanguage, hotKeyModifiers, hotKeyKey };
+  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, emailDeviceId, autoStart, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled, uiLanguage, hotKeyModifiers, hotKeyKey };
   if (emailPassword) payload.emailPassword = emailPassword;
   await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   document.getElementById('set-email-pw').value = '';

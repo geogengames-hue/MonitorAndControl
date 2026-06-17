@@ -26,6 +26,7 @@ public class EmailService : IDisposable
     private string _email = "";
     private string _password = "";
     private string _allowedSender = "";
+    private string _deviceId = Environment.MachineName;
     private string _startAlertDate = DateTime.Now.ToString("yyyy-MM-dd");
     private const string SmtpHost = "smtp.gmail.com";
     private const int SmtpPort = 587;
@@ -50,6 +51,9 @@ public class EmailService : IDisposable
         if (!string.IsNullOrEmpty(storedPassword) && !storedPassword.StartsWith("dpapi:", StringComparison.Ordinal))
             await _db.SetSettingAsync("EmailPassword", SecretProtector.Protect(_password));
         _allowedSender = await _db.GetSettingAsync("EmailAllowedSender", _email);
+        _deviceId = NormalizeDeviceId(await _db.GetSettingAsync("EmailDeviceId", Environment.MachineName));
+        if (string.IsNullOrWhiteSpace(_deviceId))
+            _deviceId = NormalizeDeviceId(Environment.MachineName);
         _notifyEnabled = !string.IsNullOrEmpty(_email) && !string.IsNullOrEmpty(_password)
             && (await _db.GetSettingAsync("EmailNotifyEnabled", "false")) == "true";
         _startNotifyEnabled = !string.IsNullOrEmpty(_email) && !string.IsNullOrEmpty(_password)
@@ -105,8 +109,8 @@ public class EmailService : IDisposable
             var msg = new MimeMessage();
             msg.From.Add(new MailboxAddress("Monitor", _email));
             msg.To.Add(new MailboxAddress("Parent", to));
-            msg.Subject = subject;
-            msg.Body = new TextPart("plain") { Text = body };
+            msg.Subject = $"[{_deviceId}] {subject}";
+            msg.Body = new TextPart("plain") { Text = WithDeviceHeader(body) };
 
             using var client = new SmtpClient();
             await client.ConnectAsync(SmtpHost, SmtpPort, SecureSocketOptions.StartTls);
@@ -146,7 +150,7 @@ public class EmailService : IDisposable
         }
 
         var subject = $"App Started: {appName}";
-        var body = $"{appName} was opened on {Environment.MachineName}.\nProcess: {processName}\nTime: {DateTime.Now:g}";
+        var body = $"{appName} was opened.\nProcess: {processName}\nTime: {DateTime.Now:g}";
         return await SendMailAsync(subject, body, _email);
     }
 
@@ -157,7 +161,7 @@ public class EmailService : IDisposable
 
         return await SendMailAsync(
             "App Started: Test",
-            $"This is a test app-start email from {Environment.MachineName} at {DateTime.Now:g}.",
+            $"This is a test app-start email at {DateTime.Now:g}.",
             _email);
     }
 
@@ -197,9 +201,14 @@ public class EmailService : IDisposable
                 var commandText = ExtractCommandText(subject, body);
                 if (commandText == null)
                     continue;
+                if (!IsCommandForThisDevice(commandText, out var effectiveCommand))
+                {
+                    Logger.Instance.Info($"Email command ignored on {_deviceId}; target does not match: \"{commandText}\"");
+                    continue;
+                }
 
-                Logger.Instance.Info($"Email command from {from}: \"{commandText}\"");
-                var reply = await ProcessCommandAsync(commandText);
+                Logger.Instance.Info($"Email command from {from}: \"{effectiveCommand}\"");
+                var reply = await ProcessCommandAsync(effectiveCommand);
                 if (reply != null)
                 {
                     Logger.Instance.Info($"Email reply to {from}: \"{reply}\"");
@@ -243,6 +252,24 @@ public class EmailService : IDisposable
         return null;
     }
 
+    private bool IsCommandForThisDevice(string commandText, out string effectiveCommand)
+    {
+        effectiveCommand = commandText.Trim();
+        var match = Regex.Match(effectiveCommand, @"^@(?<id>[A-Za-z0-9_.-]+)\s+(?<cmd>.+)$", RegexOptions.IgnoreCase);
+        if (!match.Success)
+            match = Regex.Match(effectiveCommand, @"^to\s+(?<id>[A-Za-z0-9_.-]+)\s+(?<cmd>.+)$", RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+            return true;
+
+        var target = NormalizeDeviceId(match.Groups["id"].Value);
+        if (!target.Equals(_deviceId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        effectiveCommand = match.Groups["cmd"].Value.Trim();
+        return effectiveCommand.Length > 0;
+    }
+
     private async Task<string?> ProcessCommandAsync(string text)
     {
         var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -253,6 +280,7 @@ public class EmailService : IDisposable
             // help
             if (lower.StartsWith("help"))
                 return @"Commands:
+  @device status                - run command only on one PC
   status                        - current limits, schedule, today's usage
   set [app] [minutes] min       - set daily limit (e.g. set aces 60 min)
   bonus [app] [minutes] min     - add bonus time today (e.g. bonus aces 15 min)
@@ -261,7 +289,7 @@ public class EmailService : IDisposable
   set kill-delay [seconds]      - set kill delay
   add [process.exe] [appname]   - register a known app (e.g. add aces.exe Aces)
 
-Prefix commands with mc:, for example: mc: status";
+Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " status";
 
             // status
             if (lower.StartsWith("status"))
@@ -270,6 +298,9 @@ Prefix commands with mc:, for example: mc: status";
                 var usage = await _db.GetTodayUsageAsync();
                 var schedule = await _db.GetScheduleRulesAsync();
                 var sb = new System.Text.StringBuilder();
+                sb.AppendLine($"Device: {_deviceId}");
+                sb.AppendLine($"Computer: {Environment.MachineName}");
+                sb.AppendLine();
                 sb.AppendLine("=== Limits ===");
                 foreach (var l in limits)
                 {
@@ -402,8 +433,8 @@ Prefix commands with mc:, for example: mc: status";
             var msg = new MimeMessage();
             msg.From.Add(new MailboxAddress("Monitor", _email));
             msg.To.Add(new MailboxAddress("", to));
-            msg.Subject = "Re: " + subject;
-            msg.Body = new TextPart("plain") { Text = body };
+            msg.Subject = $"Re: [{_deviceId}] " + subject;
+            msg.Body = new TextPart("plain") { Text = WithDeviceHeader(body) };
 
             using var client = new SmtpClient();
             await client.ConnectAsync(SmtpHost, SmtpPort, SecureSocketOptions.StartTls);
@@ -429,8 +460,8 @@ Prefix commands with mc:, for example: mc: status";
             var msg = new MimeMessage();
             msg.From.Add(new MailboxAddress("Monitor", email));
             msg.To.Add(new MailboxAddress("Parent", email));
-            msg.Subject = "Test from Monitor";
-            msg.Body = new TextPart("plain") { Text = "Email notification test - If you receive this, email is configured correctly." };
+            msg.Subject = $"[{_deviceId}] Test from Monitor";
+            msg.Body = new TextPart("plain") { Text = WithDeviceHeader("Email notification test - If you receive this, email is configured correctly.") };
 
             using var client = new SmtpClient();
             await client.ConnectAsync(SmtpHost, SmtpPort, SecureSocketOptions.StartTls);
@@ -448,5 +479,14 @@ Prefix commands with mc:, for example: mc: status";
         _startAlertTimer?.Change(Timeout.Infinite, Timeout.Infinite);
         _pollTimer?.Dispose();
         _startAlertTimer?.Dispose();
+    }
+
+    private string WithDeviceHeader(string body) =>
+        $"Device: {_deviceId}\nComputer: {Environment.MachineName}\n\n{body}";
+
+    public static string NormalizeDeviceId(string value)
+    {
+        var normalized = Regex.Replace((value ?? "").Trim(), @"[^A-Za-z0-9_.-]+", "-").Trim('-');
+        return normalized.Length > 40 ? normalized[..40] : normalized;
     }
 }

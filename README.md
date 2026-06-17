@@ -97,10 +97,11 @@ When you run `DeviceMon.exe`, it automatically looks for `GameHost.exe` in the s
 # Output goes to: bin\Release\net8.0-windows\win-x64\publish\
 ```
 
-The script publishes three projects:
+The script publishes four projects:
 1. `MonitorAndControl.csproj` → `DeviceMon.exe`
 2. `Watchdog\SystemHelperWatchdog.csproj` → `GameHost.exe`
-3. `PopupHost\PopupHost.csproj` → `PopupHost.exe`
+3. `PopupHost\PopupHost.csproj` -> `PopupHost.exe`
+4. `UpdateAgent\UpdateAgent.csproj` -> `UpdateAgent.exe`
 
 It also copies `appsettings.json`, the `wwwroot/` folder, and PowerShell helper scripts.
 
@@ -143,6 +144,7 @@ MonitorAndControl/
 │   └── wwwroot/            # SPA dashboard (HTML, JS, CSS, i18n JSON)
 ├── Resources/              # .resx localization files
 ├── PopupHost/              # Warning popup child process
+|-- UpdateAgent/            # Self-update helper launched from dashboard
 ├── Watchdog/               # Windows service watchdog
 └── Tests/                  # Unit tests
 ```
@@ -257,11 +259,11 @@ Once installed, the `GameHost` service runs under the SYSTEM account and automat
 | **Discover** | Scan system for installed games/apps, add them with default limit |
 | **Schedule** | Time‑based allowed hours rules per app |
 | **Logs** | Real‑time event log with filtering |
-| **Settings** | Kill delay, language, auto‑start, webhook, email, admin password, backup/restore, health |
+| **Settings** | Kill delay, language, dashboard hotkey, auto-start, webhook, email, app update, admin password, backup/restore, health |
 
 **Admin password:** Set one in **Settings** from the child PC or a remote dashboard to protect dashboard changes (pause, resume, reset, kill, settings edits) and shutdown.
 
-**App update:** Put a freshly published package on a local folder, UNC share, or HTTP/HTTPS ZIP URL, then use **Settings -> App Update**. The package must contain `DeviceMon.exe`. The dashboard starts `UpdateAgent.exe`, closes DeviceMon, copies the package over the install folder, restarts DeviceMon, and repairs/restarts the watchdog when permissions allow. Check `update.log` in the install folder if an update fails.
+**App update:** Put a freshly published package on a local folder, UNC share, or HTTP/HTTPS ZIP URL, then use **Settings -> App Update**. The package must contain `DeviceMon.exe`. For Windows 11 SMB shares, enter the optional SMB username/password. The dashboard starts `UpdateAgent.exe`, writes an update marker, closes DeviceMon, copies the package over the install folder, restarts DeviceMon, and repairs/restarts the watchdog when permissions allow. The updated watchdog pauses auto-restart while the update marker is fresh. Check `update.log` in the install folder if an update fails.
 
 **Remote access:** Settings show the computer name and IP addresses. From another PC, open `http://CHILD_PC_NAME:5000` or `http://192.168.x.x:5000`.
 
@@ -276,6 +278,7 @@ Once installed, the `GameHost` service runs under the SYSTEM account and automat
 |---------|---------|-------------|
 | `help` | `mc: help` | Shows all available commands |
 | `status` | `mc: status` | Current limits, schedule, and today's usage |
+| `@device command` | `mc: @bedroom status` | Run a command only on the PC with that Device ID |
 | `set [app] [min] min` | `mc: set Fortnite 60 min` | Set daily limit for an app |
 | `bonus [app] [min] min` | `mc: bonus Fortnite 15 min` | Add bonus time today |
 | `extend [app] until bedtime` | `mc: extend Fortnite until bedtime` | Extend until end of allowed window |

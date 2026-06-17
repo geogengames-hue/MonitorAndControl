@@ -37,6 +37,7 @@ internal static class Program
         {
             Log($"Update started. Source={options.Source}");
             ConnectNetworkShare(options, Log);
+            WriteUpdateMarker(Log);
             StopWatchdog(Log);
             await WaitForMonitorExitAsync(options.MonitorPid, options.MonitorPath, Log);
 
@@ -58,8 +59,34 @@ internal static class Program
         }
         finally
         {
+            ClearUpdateMarker();
             options.DeleteRequestFile();
         }
+    }
+
+    private static string DataDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "SystemHelper");
+
+    private static string UpdateMarkerPath => Path.Combine(DataDirectory, "update-in-progress.marker");
+
+    private static void WriteUpdateMarker(Action<string> log)
+    {
+        try
+        {
+            Directory.CreateDirectory(DataDirectory);
+            File.WriteAllText(UpdateMarkerPath, $"{DateTimeOffset.Now:O}|UpdateAgent");
+            log($"Wrote update marker: {UpdateMarkerPath}");
+        }
+        catch (Exception ex)
+        {
+            log($"Failed to write update marker: {ex.Message}");
+        }
+    }
+
+    private static void ClearUpdateMarker()
+    {
+        try { File.Delete(UpdateMarkerPath); } catch { }
     }
 
     private static void ConnectNetworkShare(UpdateOptions options, Action<string> log)
@@ -82,7 +109,8 @@ internal static class Program
 
         if (result == 1219)
         {
-            NativeMethods.WNetCancelConnection2(uncRoot, 0, true);
+            log($"Existing SMB connection conflicts with {uncRoot}; clearing connections to that server.");
+            DisconnectExistingConnections(options.Source, uncRoot, log);
             result = NativeMethods.WNetAddConnection2(ref resource, options.Password ?? "", options.Username, 0);
             if (result == 0)
             {
@@ -92,6 +120,17 @@ internal static class Program
         }
 
         throw new InvalidOperationException($"Could not connect to update share {uncRoot}. Windows error {result}.");
+    }
+
+    private static void DisconnectExistingConnections(string source, string uncRoot, Action<string> log)
+    {
+        NativeMethods.WNetCancelConnection2(uncRoot, 0, true);
+        if (!TryGetUncServer(source, out var uncServer))
+            return;
+
+        RunProcess("net.exe", $"use {uncRoot} /delete /y", TimeSpan.FromSeconds(10), log);
+        RunProcess("net.exe", $"use {uncServer}\\IPC$ /delete /y", TimeSpan.FromSeconds(10), log);
+        RunProcess("net.exe", $"use {uncServer}\\* /delete /y", TimeSpan.FromSeconds(10), log);
     }
 
     private static bool TryGetUncRoot(string source, out string uncRoot)
@@ -105,6 +144,20 @@ internal static class Program
             return false;
 
         uncRoot = $@"\\{parts[0]}\{parts[1]}";
+        return true;
+    }
+
+    private static bool TryGetUncServer(string source, out string uncServer)
+    {
+        uncServer = "";
+        if (!source.StartsWith(@"\\", StringComparison.Ordinal))
+            return false;
+
+        var parts = source.TrimStart('\\').Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 1)
+            return false;
+
+        uncServer = $@"\\{parts[0]}";
         return true;
     }
 
@@ -207,13 +260,24 @@ internal static class Program
     private static void CopyDirectory(string sourceDirectory, string targetDirectory, Action<string> log)
     {
         Directory.CreateDirectory(targetDirectory);
-        foreach (var directory in Directory.GetDirectories(sourceDirectory, "*", SearchOption.AllDirectories))
+        var sourceWwwroot = Path.Combine(sourceDirectory, "wwwroot");
+        var targetWwwroot = Path.Combine(targetDirectory, "wwwroot");
+        if (Directory.Exists(sourceWwwroot) && Directory.Exists(targetWwwroot))
+        {
+            log("Replacing wwwroot web assets.");
+            Directory.Delete(targetWwwroot, recursive: true);
+        }
+
+        var directories = Directory.GetDirectories(sourceDirectory, "*", SearchOption.AllDirectories);
+        foreach (var directory in directories)
         {
             var relative = Path.GetRelativePath(sourceDirectory, directory);
             Directory.CreateDirectory(Path.Combine(targetDirectory, relative));
         }
 
-        foreach (var file in Directory.GetFiles(sourceDirectory, "*", SearchOption.AllDirectories))
+        var copied = 0;
+        var files = Directory.GetFiles(sourceDirectory, "*", SearchOption.AllDirectories);
+        foreach (var file in files)
         {
             var relative = Path.GetRelativePath(sourceDirectory, file);
             var target = Path.Combine(targetDirectory, relative);
@@ -224,6 +288,13 @@ internal static class Program
                 try
                 {
                     File.Copy(file, target, overwrite: true);
+                    copied++;
+                    log($"Copied: {relative}");
+                    break;
+                }
+                catch (Exception ex) when (IsSkippableLockedWatchdogFile(relative, ex))
+                {
+                    log($"Skipped locked watchdog file: {relative} ({ex.Message})");
                     break;
                 }
                 catch (IOException) when (attempt < 8)
@@ -237,7 +308,14 @@ internal static class Program
             }
         }
 
-        log($"Copied files from {sourceDirectory} to {targetDirectory}.");
+        log($"Copied {copied}/{files.Length} files and {directories.Length} directories from {sourceDirectory} to {targetDirectory}.");
+    }
+
+    private static bool IsSkippableLockedWatchdogFile(string relativePath, Exception ex)
+    {
+        var fileName = Path.GetFileName(relativePath);
+        return (ex is IOException or UnauthorizedAccessException) &&
+               fileName.StartsWith("GameHost.", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void StopWatchdog(Action<string> log)
@@ -254,7 +332,7 @@ internal static class Program
             return;
         }
 
-        RunProcess(watchdogPath, $"--update --monitor \"{monitorPath}\"", TimeSpan.FromSeconds(45), log);
+        RunProcess(watchdogPath, $"--update --no-elevate --monitor \"{monitorPath}\"", TimeSpan.FromSeconds(45), log);
     }
 
     private static void StartMonitor(string monitorPath, Action<string> log)
@@ -262,12 +340,14 @@ internal static class Program
         if (!File.Exists(monitorPath))
             throw new FileNotFoundException("Monitor executable not found after update.", monitorPath);
 
-        Process.Start(new ProcessStartInfo
+        var startInfo = new ProcessStartInfo
         {
             FileName = monitorPath,
             WorkingDirectory = Path.GetDirectoryName(monitorPath) ?? AppContext.BaseDirectory,
-            UseShellExecute = true
-        });
+            UseShellExecute = false
+        };
+        startInfo.Environment["DEVICEMON_SUPPRESS_WATCHDOG_UAC"] = "1";
+        Process.Start(startInfo);
         log("Monitor restarted.");
     }
 

@@ -175,6 +175,12 @@ internal static class Program
                 }
 
                 Logger.Instance.Info("Watchdog path changed, updating service...");
+                if (SuppressWatchdogElevation())
+                {
+                    Logger.Instance.Warn("Skipping elevated watchdog service path update because elevation is disabled for this run.");
+                    return;
+                }
+
                 var psi = new ProcessStartInfo
                 {
                     FileName = watchdogPath,
@@ -205,6 +211,12 @@ internal static class Program
             if (exePath == null) return;
 
             Logger.Instance.Info("Installing watchdog service...");
+            if (SuppressWatchdogElevation())
+            {
+                Logger.Instance.Warn("Skipping elevated watchdog service installation because elevation is disabled for this run.");
+                return;
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = watchdogPath,
@@ -221,6 +233,11 @@ internal static class Program
         {
             Logger.Instance.Error($"Failed to install watchdog: {ex.Message}");
         }
+    }
+
+    private static bool SuppressWatchdogElevation()
+    {
+        return string.Equals(Environment.GetEnvironmentVariable("DEVICEMON_SUPPRESS_WATCHDOG_UAC"), "1", StringComparison.Ordinal);
     }
 
     private static void StartWatchdogServiceIfNeeded(System.ServiceProcess.ServiceController sc, string watchdogPath, string monitorPath)
@@ -250,6 +267,12 @@ internal static class Program
         {
             if (string.IsNullOrWhiteSpace(watchdogPath) || !File.Exists(watchdogPath))
                 return;
+
+            if (SuppressWatchdogElevation())
+            {
+                Logger.Instance.Warn("Skipping elevated watchdog service repair/start because elevation is disabled for this run.");
+                return;
+            }
 
             Logger.Instance.Warn("Requesting elevated watchdog service repair/start...");
             var psi = new ProcessStartInfo

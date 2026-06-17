@@ -532,6 +532,7 @@ public class DashboardServer
             var emailNotifyEnabled = await db.GetSettingAsync("EmailNotifyEnabled", "false");
             var emailStartNotifyEnabled = await db.GetSettingAsync("EmailStartNotifyEnabled", "false");
             var emailControlEnabled = await db.GetSettingAsync("EmailControlEnabled", "false");
+            var emailDeviceId = await db.GetSettingAsync("EmailDeviceId", Environment.MachineName);
             var uiLanguage = await db.GetSettingAsync("UiLanguage", "en");
             var config = Program.GetConfig();
             var (hotKeyModifiers, hotKeyKey) = await Program.GetDashboardHotKeySettings(config);
@@ -554,6 +555,7 @@ public class DashboardServer
                 emailNotifyEnabled = emailNotifyEnabled == "true",
                 emailStartNotifyEnabled = emailStartNotifyEnabled == "true",
                 emailControlEnabled = emailControlEnabled == "true",
+                emailDeviceId = EmailService.NormalizeDeviceId(emailDeviceId),
                 uiLanguage,
                 hotKeyModifiers,
                 hotKeyKey,
@@ -621,6 +623,13 @@ public class DashboardServer
                 await db.SetSettingAsync("EmailStartNotifyEnabled", esn.GetBoolean() ? "true" : "false");
             if (root.TryGetProperty("emailControlEnabled", out var ec))
                 await db.SetSettingAsync("EmailControlEnabled", ec.GetBoolean() ? "true" : "false");
+            if (root.TryGetProperty("emailDeviceId", out var edi))
+            {
+                var deviceId = EmailService.NormalizeDeviceId(Clean(edi.GetString()));
+                if (deviceId.Length is < 1 or > 40)
+                    return Results.BadRequest(new { error = "Email device ID must be 1-40 letters, numbers, dots, dashes, or underscores." });
+                await db.SetSettingAsync("EmailDeviceId", deviceId);
+            }
             if (root.TryGetProperty("uiLanguage", out var lang))
             {
                 var language = Clean(lang.GetString()).ToLowerInvariant();
@@ -1071,6 +1080,7 @@ public class DashboardServer
         "EmailNotifyEnabled",
         "EmailStartNotifyEnabled",
         "EmailControlEnabled",
+        "EmailDeviceId",
         "UiLanguage",
         "HotKeyModifiers",
         "HotKeyKey"
@@ -1129,6 +1139,12 @@ public class DashboardServer
                 case "EmailControlEnabled":
                     if (!bool.TryParse(cleanValue, out _))
                         return $"Backup contains an invalid boolean setting: {key}.";
+                    break;
+                case "EmailDeviceId":
+                    var normalizedDeviceId = EmailService.NormalizeDeviceId(cleanValue);
+                    if (normalizedDeviceId.Length is < 1 or > 40)
+                        return "Backup contains an invalid email device ID.";
+                    cleanValue = normalizedDeviceId;
                     break;
                 case "UiLanguage":
                     if (!AllowedLanguages.Contains(cleanValue))

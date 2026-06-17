@@ -225,6 +225,8 @@
         <input type="password" id="set-email-pw" placeholder="16-char app password" autocomplete="new-password" style="width:350px">
         <label>Allowed command senders</label>
         <input type="text" id="set-email-allowed-sender" placeholder="parent@gmail.com, other@gmail.com" style="width:350px">
+        <label>Device ID for email commands</label>
+        <input type="text" id="set-email-device-id" placeholder="bedroom-pc" style="width:250px">
         <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
           <input type="checkbox" id="set-email-notify" style="width:auto"> Send email alerts on breach/kill
         </label>
@@ -234,7 +236,7 @@
         <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
           <input type="checkbox" id="set-email-control" style="width:auto"> Control via email (reply with commands)
         </label>
-        <p style="font-size:12px;color:#888">Email commands must start with <code style="font-size:11px">mc:</code>, for example <code style="font-size:11px">mc: status</code>, <code style="font-size:11px">mc: set [app] [min] min</code>, <code style="font-size:11px">mc: set schedule [day] [start]-[end]</code>, <code style="font-size:11px">mc: set kill-delay [sec]</code>, <code style="font-size:11px">mc: add [proc.exe] [name]</code></p>
+        <p style="font-size:12px;color:#888">Email commands must start with <code style="font-size:11px">mc:</code>. Use <code style="font-size:11px">mc: @device status</code> to target one PC, or <code style="font-size:11px">mc: status</code> for any PC using this inbox.</p>
         <button id="settings-email-test" class="btn-secondary">Test Email</button>
         <button id="settings-email-start-test" class="btn-secondary">Test App Start Email</button>
         <button id="settings-email-start-reset" class="btn-secondary">Reset App Start Emails</button>

@@ -59,10 +59,23 @@ internal static class Program
         return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
     }
 
+    private static bool SuppressElevation(string[] args)
+    {
+        return args.Contains("--no-elevate", StringComparer.OrdinalIgnoreCase) ||
+               string.Equals(Environment.GetEnvironmentVariable("DEVICEMON_SUPPRESS_WATCHDOG_UAC"), "1", StringComparison.Ordinal);
+    }
+
     private static void InstallService(string[] args)
     {
         if (!IsElevated())
         {
+            if (SuppressElevation(args))
+            {
+                Console.Error.WriteLine("Watchdog install skipped because elevation is disabled for this run.");
+                Environment.ExitCode = 5;
+                return;
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = Environment.ProcessPath!,
@@ -104,6 +117,13 @@ internal static class Program
     {
         if (!IsElevated())
         {
+            if (SuppressElevation(args))
+            {
+                Console.Error.WriteLine("Watchdog update skipped because elevation is disabled for this run.");
+                Environment.ExitCode = 5;
+                return;
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = Environment.ProcessPath!,
@@ -136,6 +156,13 @@ internal static class Program
     {
         if (!IsElevated())
         {
+            if (string.Equals(Environment.GetEnvironmentVariable("DEVICEMON_SUPPRESS_WATCHDOG_UAC"), "1", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Watchdog uninstall skipped because elevation is disabled for this run.");
+                Environment.ExitCode = 5;
+                return;
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = Environment.ProcessPath!,
@@ -242,6 +269,12 @@ internal sealed class WatchdogService : ServiceBase
         _checking = true;
         try
         {
+            if (IsUpdateInProgress())
+            {
+                Log("Update marker present; monitor restart paused.");
+                return;
+            }
+
             if (IsMonitorRunning())
             {
                 _hadSeenMonitor = true;
@@ -261,6 +294,28 @@ internal sealed class WatchdogService : ServiceBase
         finally
         {
             _checking = false;
+        }
+    }
+
+    private bool IsUpdateInProgress()
+    {
+        try
+        {
+            if (!File.Exists(_options.UpdateMarkerPath))
+                return false;
+
+            var age = DateTimeOffset.Now - File.GetLastWriteTime(_options.UpdateMarkerPath);
+            if (age <= TimeSpan.FromMinutes(15))
+                return true;
+
+            File.Delete(_options.UpdateMarkerPath);
+            Log("Removed stale update marker.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Log("Failed to inspect update marker: " + ex.Message);
+            return false;
         }
     }
 
@@ -398,6 +453,7 @@ internal sealed record WatchdogOptions(string MonitorPath, int IntervalSeconds, 
 {
     public string LogPath => Path.Combine(DataDirectory, "watchdog.log");
     public string RestartMarkerPath => Path.Combine(DataDirectory, "watchdog-restart.marker");
+    public string UpdateMarkerPath => Path.Combine(DataDirectory, "update-in-progress.marker");
 
     public static WatchdogOptions Parse(string[] args)
     {
