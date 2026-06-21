@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using MonitorAndControl.Data;
 using MonitorAndControl.Models;
 using MonitorAndControl.Services;
@@ -10,9 +11,14 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Scheduler finds next allowed time", TestSchedulerNextAllowedTime),
     ("Scheduler finds current allowed window end", TestSchedulerCurrentAllowedWindowEnd),
     ("Usage database accumulates daily app usage", TestUsageDatabaseAccumulatesUsage),
+    ("Usage database separates foreground and background time", TestUsageDatabaseTracksUsageSources),
+    ("Usage database preserves legacy unclassified totals", TestUsageDatabasePreservesLegacyTotals),
     ("Usage database clears today's usage", TestUsageDatabaseClearsToday),
     ("Usage database tracks and clears daily bonus time", TestUsageDatabaseTracksBonusTime),
     ("Usage database stores per-app schedule targets", TestUsageDatabaseStoresScheduleTarget),
+    ("Usage database stores app tracking policies", TestUsageDatabaseStoresTrackingPolicy),
+    ("Defaults are imported only on first database creation", TestDefaultsImportedOnlyOnce),
+    ("Existing empty databases do not reimport defaults", TestExistingDatabaseDoesNotReimportDefaults),
     ("Usage database replaces backup-managed config tables", TestUsageDatabaseReplacesConfigTables),
     ("Limit enforcer rehydrates exceeded apps", TestLimitEnforcerRehydratesExceededApps),
     ("Limit enforcer can pause and resume enforcement", TestLimitEnforcerPauseResume)
@@ -131,6 +137,55 @@ static async Task TestUsageDatabaseAccumulatesUsage()
 
     AssertTrue(record != null, "Expected a usage record for Chess.");
     AssertEqual(75L, record!.TotalSeconds, "Usage seconds should accumulate.");
+    AssertEqual(75L, record.ForegroundSeconds, "Existing recording API should classify usage as foreground.");
+    AssertEqual(0L, record.BackgroundSeconds, "Existing recording API should not add background time.");
+    AssertEqual(0L, record.UnclassifiedSeconds, "New usage should be fully classified.");
+}
+
+static async Task TestUsageDatabaseTracksUsageSources()
+{
+    using var db = CreateTempDatabase();
+
+    await db.RecordUsageAsync("Discord", "discord.exe", 15, 45);
+    await db.RecordUsageAsync("Discord", "discord.exe", 5, 10);
+
+    var record = (await db.GetTodayUsageAsync()).Single();
+    AssertEqual(75L, record.TotalSeconds, "Total should include foreground and background time.");
+    AssertEqual(20L, record.ForegroundSeconds, "Foreground time should accumulate separately.");
+    AssertEqual(55L, record.BackgroundSeconds, "Background time should accumulate separately.");
+    AssertEqual(0L, record.UnclassifiedSeconds, "Source-aware usage should be fully classified.");
+}
+
+static async Task TestUsageDatabasePreservesLegacyTotals()
+{
+    var path = Path.Combine(Path.GetTempPath(), "MonitorAndControlTests", $"{Guid.NewGuid():N}.db");
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    await using (var connection = new SqliteConnection($"Data Source={path}"))
+    {
+        await connection.OpenAsync();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE UsageRecords (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                AppName TEXT NOT NULL,
+                ProcessName TEXT NOT NULL,
+                Date TEXT NOT NULL,
+                TotalSeconds INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(AppName, Date)
+            );
+            INSERT INTO UsageRecords (AppName, ProcessName, Date, TotalSeconds)
+            VALUES ('Legacy App', 'legacy.exe', @date, 90);
+            """;
+        command.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+        await command.ExecuteNonQueryAsync();
+    }
+
+    using var db = new UsageDatabase(path);
+    var record = (await db.GetTodayUsageAsync()).Single();
+    AssertEqual(90L, record.TotalSeconds, "Migration must preserve the legacy total.");
+    AssertEqual(0L, record.ForegroundSeconds, "Legacy time must not be mislabeled as foreground.");
+    AssertEqual(0L, record.BackgroundSeconds, "Legacy time must not be mislabeled as background.");
+    AssertEqual(90L, record.UnclassifiedSeconds, "Legacy time should be exposed as unclassified.");
 }
 
 static async Task TestLimitEnforcerRehydratesExceededApps()
@@ -174,6 +229,54 @@ static async Task TestUsageDatabaseStoresScheduleTarget()
     AssertEqual("Chess", rule!.AppName, "Schedule target should round-trip.");
 }
 
+static async Task TestUsageDatabaseStoresTrackingPolicy()
+{
+    using var db = CreateTempDatabase();
+
+    await db.SaveAppMappingAsync("discord.exe", "Discord", true, true);
+
+    var mapping = (await db.GetAppMappingsAsync()).Single();
+    AssertEqual("discord.exe", mapping.ProcessName, "Process name should round-trip.");
+    AssertTrue(mapping.CountInBackground, "Background tracking should round-trip.");
+    AssertTrue(mapping.IgnoreOverlayFocus, "Overlay focus filtering should round-trip.");
+
+    await db.SaveAppMappingAsync("discord.exe", "Discord", false, false);
+    mapping = (await db.GetAppMappingsAsync()).Single();
+    AssertFalse(mapping.CountInBackground, "Background tracking should be updateable.");
+    AssertFalse(mapping.IgnoreOverlayFocus, "Overlay focus filtering should be updateable.");
+}
+
+static async Task TestDefaultsImportedOnlyOnce()
+{
+    using var db = CreateTempDatabase();
+    var config = ConfigWithDefaults();
+
+    await db.InitializeDefaults(config);
+    AssertEqual(1, (await db.GetLimitRulesAsync()).Count, "First start should import default limits.");
+    var schedule = await db.GetScheduleRulesAsync();
+    AssertEqual(1, schedule.Count, "First start should import default schedules.");
+
+    await db.DeleteLimitRuleAsync("Chess");
+    await db.DeleteScheduleRuleAsync(schedule[0].Id);
+    await db.InitializeDefaults(config);
+
+    AssertEqual(0, (await db.GetLimitRulesAsync()).Count, "Deleted limits must remain deleted after restart.");
+    AssertEqual(0, (await db.GetScheduleRulesAsync()).Count, "Deleted schedules must remain deleted after restart.");
+}
+
+static async Task TestExistingDatabaseDoesNotReimportDefaults()
+{
+    var path = Path.Combine(Path.GetTempPath(), "MonitorAndControlTests", $"{Guid.NewGuid():N}.db");
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    File.WriteAllBytes(path, Array.Empty<byte>());
+
+    using var db = new UsageDatabase(path);
+    await db.InitializeDefaults(ConfigWithDefaults());
+
+    AssertEqual(0, (await db.GetLimitRulesAsync()).Count, "An existing empty database must stay empty during upgrade.");
+    AssertEqual(0, (await db.GetScheduleRulesAsync()).Count, "Existing schedules must not be recreated during upgrade.");
+}
+
 static async Task TestUsageDatabaseReplacesConfigTables()
 {
     using var db = CreateTempDatabase();
@@ -182,7 +285,7 @@ static async Task TestUsageDatabaseReplacesConfigTables()
     await db.SaveLimitRuleAsync(new AppLimitRule { AppName = "Old", DailyMaxMinutes = 30, Enabled = true });
     await db.SaveScheduleRuleAsync(new ScheduleRule { AppName = "Old", DayOfWeek = "Everyday", StartTime = "10:00", EndTime = "11:00", Enabled = true });
 
-    await db.ReplaceAppMappingsAsync(new[] { new AppMapping("new.exe", "New") });
+    await db.ReplaceAppMappingsAsync(new[] { new AppMapping("new.exe", "New", true, true) });
     await db.ReplaceLimitRulesAsync(new[] { new AppLimitRule { AppName = "New", DailyMaxMinutes = 60, Enabled = false } });
     await db.ReplaceScheduleRulesAsync(new[] { new ScheduleRule { AppName = "New", DayOfWeek = "Weekend", StartTime = "12:00", EndTime = "13:00", Enabled = true } });
 
@@ -192,6 +295,8 @@ static async Task TestUsageDatabaseReplacesConfigTables()
 
     AssertEqual(1, mappings.Count, "Expected one mapping after replace.");
     AssertEqual("New", mappings[0].AppName, "Expected replacement mapping.");
+    AssertTrue(mappings[0].CountInBackground, "Expected replacement background policy.");
+    AssertTrue(mappings[0].IgnoreOverlayFocus, "Expected replacement overlay policy.");
     AssertEqual(1, limits.Count, "Expected one limit after replace.");
     AssertEqual("New", limits[0].AppName, "Expected replacement limit.");
     AssertEqual(1, schedules.Count, "Expected one schedule after replace.");
@@ -250,6 +355,18 @@ static ScheduleRule Rule(string day, string start, string end) => new()
     StartTime = start,
     EndTime = end,
     Enabled = true
+};
+
+static AppConfig ConfigWithDefaults() => new()
+{
+    DefaultLimits = new List<AppLimitRule>
+    {
+        new() { AppName = "Chess", DailyMaxMinutes = 60, Enabled = true }
+    },
+    Schedule = new List<ScheduleRule>
+    {
+        new() { DayOfWeek = "Everyday", StartTime = "15:00", EndTime = "21:00", Enabled = true }
+    }
 };
 
 static UsageDatabase CreateTempDatabase()

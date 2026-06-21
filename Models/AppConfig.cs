@@ -1,6 +1,10 @@
 namespace MonitorAndControl.Models;
 
-public record AppMapping(string ProcessName, string AppName);
+public record AppMapping(
+    string ProcessName,
+    string AppName,
+    bool CountInBackground = false,
+    bool IgnoreOverlayFocus = false);
 
 public class AppConfig
 {

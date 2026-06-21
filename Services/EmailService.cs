@@ -300,6 +300,21 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
                 var sb = new System.Text.StringBuilder();
                 sb.AppendLine($"Device: {_deviceId}");
                 sb.AppendLine($"Computer: {Environment.MachineName}");
+                sb.AppendLine($"Current app: {_tracker.CurrentAppName ?? "None"} ({_tracker.CurrentProcessName ?? "idle"})");
+                sb.AppendLine();
+                sb.AppendLine("=== Top Apps Today ===");
+                if (usage.Count == 0)
+                {
+                    sb.AppendLine("  No activity yet today.");
+                }
+                else
+                {
+                    foreach (var u in usage.Take(8))
+                    {
+                        var processText = string.IsNullOrWhiteSpace(u.ProcessName) ? "" : $" ({u.ProcessName})";
+                        sb.AppendLine($"  {u.AppName}{processText}: {u.DurationFormatted}");
+                    }
+                }
                 sb.AppendLine();
                 sb.AppendLine("=== Limits ===");
                 foreach (var l in limits)
@@ -418,8 +433,12 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
             {
                 var proc = addMatch.Groups[1].Value;
                 var name = addMatch.Groups[2].Value.Trim();
-                await _db.SaveAppMappingAsync(proc, name);
-                _tracker.AddKnownApp(proc, name);
+                var existing = (await _db.GetAppMappingsAsync()).FirstOrDefault(mapping =>
+                    mapping.ProcessName.Equals(proc, StringComparison.OrdinalIgnoreCase));
+                var countInBackground = existing?.CountInBackground ?? false;
+                var ignoreOverlayFocus = existing?.IgnoreOverlayFocus ?? false;
+                await _db.SaveAppMappingAsync(proc, name, countInBackground, ignoreOverlayFocus);
+                _tracker.AddKnownApp(proc, name, countInBackground, ignoreOverlayFocus);
                 return $"OK: App added: {proc} -> {name}";
             }
         }

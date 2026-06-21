@@ -372,7 +372,7 @@ internal static class Program
         // Load dynamic app mappings from database
         var mappings = _db!.GetAppMappingsAsync().GetAwaiter().GetResult();
         foreach (var m in mappings)
-            _tracker.AddKnownApp(m.ProcessName, m.AppName);
+            _tracker.AddKnownApp(m.ProcessName, m.AppName, m.CountInBackground, m.IgnoreOverlayFocus);
         _tracker.Start(config.PollIntervalMs);
 
         // Copy PopupHost to hidden appdata location

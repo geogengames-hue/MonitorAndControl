@@ -30,6 +30,7 @@ public class DashboardServer
     private static readonly ConcurrentDictionary<string, AuthAttemptState> AuthAttempts = new(StringComparer.OrdinalIgnoreCase);
     private const int MaxFailedLoginAttempts = 5;
     private static readonly TimeSpan AuthLockoutDuration = TimeSpan.FromMinutes(5);
+    private const string AdminCookieName = "DeviceMonAdminToken";
 
     public static async Task StartAsync(UsageDatabase db, WindowTracker tracker, LimitEnforcer enforcer,
         SchedulerService scheduler, EmailService emailService, AppConfig config)
@@ -82,6 +83,17 @@ public class DashboardServer
             await next();
         });
 
+        _app.Use(async (ctx, next) =>
+        {
+            if (ShouldGateDashboardAsset(ctx))
+            {
+                ctx.Response.Redirect("/login.html");
+                return;
+            }
+
+            await next();
+        });
+
         var fileOpts = new StaticFileOptions
         {
             FileProvider = new PhysicalFileProvider(wwwroot)
@@ -121,8 +133,9 @@ public class DashboardServer
             var storedHash = await db.GetSettingAsync("DashboardAdminPasswordHash", "");
             if (string.IsNullOrEmpty(storedHash))
             {
-                if (!IsLocalRequest(ctx))
+                if (!IsLocalSetupAllowed(ctx))
                     return Results.Json(new { error = "Admin password has not been set locally yet." }, statusCode: StatusCodes.Status403Forbidden);
+                SetAdminCookie(ctx);
                 return Results.Ok(new { token = _adminToken, passwordSet = false });
             }
 
@@ -133,11 +146,18 @@ public class DashboardServer
             }
 
             ResetLoginRateLimit(ctx);
+            SetAdminCookie(ctx);
             return Results.Ok(new { token = _adminToken, passwordSet = true });
         });
 
         app.MapGet("/api/auth/status", () =>
             Results.Ok(new { passwordSet = _adminPasswordSet }));
+
+        app.MapPost("/api/auth/logout", (HttpContext ctx) =>
+        {
+            ClearAdminCookie(ctx);
+            return Results.Ok(new { status = "logged_out" });
+        });
 
         app.MapGet("/api/health", () =>
             Results.Ok(new
@@ -169,9 +189,16 @@ public class DashboardServer
                 if (auth != null && !PasswordHasher.Verify(currentPassword, storedHash))
                     return auth;
             }
+            else if (!IsLocalSetupAllowed(ctx))
+            {
+                return Results.Json(
+                    new { error = "Initial admin password must be set from a trusted local dashboard before remote access is enabled." },
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
 
             await db.SetSettingAsync("DashboardAdminPasswordHash", PasswordHasher.Hash(newPassword));
             _adminPasswordSet = true;
+            SetAdminCookie(ctx);
             return Results.Ok(new { status = "password_set", token = _adminToken });
         });
 
@@ -182,6 +209,7 @@ public class DashboardServer
 
             _adminToken = CreateAdminToken();
             await db.SetSettingAsync("DashboardAdminToken", _adminToken);
+            SetAdminCookie(ctx);
             Logger.Instance.Warn("Dashboard admin token rotated");
             return Results.Ok(new { status = "rotated", token = _adminToken });
         });
@@ -295,10 +323,14 @@ public class DashboardServer
             var root = doc.RootElement;
             var procName = Clean(root.GetProperty("processName").GetString());
             var appName = Clean(root.GetProperty("appName").GetString());
+            var countInBackground = root.TryGetProperty("countInBackground", out var backgroundElement) &&
+                backgroundElement.ValueKind is JsonValueKind.True;
+            var ignoreOverlayFocus = root.TryGetProperty("ignoreOverlayFocus", out var overlayElement) &&
+                overlayElement.ValueKind is JsonValueKind.True;
             if (!IsValidProcessName(procName) || !IsValidAppName(appName))
                 return Results.BadRequest(new { error = "Invalid process or app name." });
-            tracker.AddKnownApp(procName, appName);
-            await db.SaveAppMappingAsync(procName, appName);
+            tracker.AddKnownApp(procName, appName, countInBackground, ignoreOverlayFocus);
+            await db.SaveAppMappingAsync(procName, appName, countInBackground, ignoreOverlayFocus);
             return Results.Ok();
         });
 
@@ -322,7 +354,7 @@ public class DashboardServer
             tracker.LoadKnownApps(config.KnownApps);
             var mappings = await db.GetAppMappingsAsync();
             foreach (var m in mappings)
-                tracker.AddKnownApp(m.ProcessName, m.AppName);
+                tracker.AddKnownApp(m.ProcessName, m.AppName, m.CountInBackground, m.IgnoreOverlayFocus);
             return Results.Ok();
         });
 
@@ -838,7 +870,7 @@ public class DashboardServer
             scheduler.InvalidateCache();
             tracker.LoadKnownApps(Program.GetConfig().KnownApps);
             foreach (var mapping in await db.GetAppMappingsAsync())
-                tracker.AddKnownApp(mapping.ProcessName, mapping.AppName);
+                tracker.AddKnownApp(mapping.ProcessName, mapping.AppName, mapping.CountInBackground, mapping.IgnoreOverlayFocus);
             await emailService.LoadSettingsAsync();
             if (emailService.IsEnabled) emailService.StartPolling(); else emailService.StopPolling();
 
@@ -983,28 +1015,93 @@ public class DashboardServer
 
     private static IResult? RequireWriteAccess(HttpContext ctx)
     {
-        if (!_adminPasswordSet && IsLocalRequest(ctx))
+        if (!_adminPasswordSet && IsLocalSetupAllowed(ctx))
             return null;
 
-        if (IsLocalRequest(ctx))
+        if (IsLocalSetupAllowed(ctx))
         {
             var setupToken = ctx.Request.Headers["X-Admin-Token"].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(setupToken) && !_adminPasswordSet)
                 return null;
         }
 
-        var provided = ctx.Request.Headers["X-Admin-Token"].FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(provided))
-            provided = ctx.Request.Query["token"].FirstOrDefault();
-        var providedBytes = System.Text.Encoding.UTF8.GetBytes(provided ?? "");
-        var expectedBytes = System.Text.Encoding.UTF8.GetBytes(_adminToken);
-        if (!string.IsNullOrWhiteSpace(_adminToken) &&
-            providedBytes.Length == expectedBytes.Length &&
-            CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes))
+        var provided = GetProvidedAdminToken(ctx);
+        if (IsValidAdminToken(provided))
             return null;
 
         return Results.Json(new { error = "Admin token required." }, statusCode: StatusCodes.Status401Unauthorized);
     }
+
+    private static bool ShouldGateDashboardAsset(HttpContext ctx)
+    {
+        if (ctx.Request.Path.StartsWithSegments("/api"))
+            return false;
+
+        var path = ctx.Request.Path.Value ?? "";
+        if (path.Equals("/login.html", StringComparison.OrdinalIgnoreCase) ||
+            path.Equals("/favicon.ico", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (!_adminPasswordSet)
+            return !IsLocalSetupAllowed(ctx);
+
+        return !IsValidAdminToken(GetProvidedAdminToken(ctx));
+    }
+
+    private static bool IsLocalSetupAllowed(HttpContext ctx) =>
+        IsLocalRequest(ctx) && !HasExternalForwardingHeaders(ctx);
+
+    private static string? GetProvidedAdminToken(HttpContext ctx)
+    {
+        var provided = ctx.Request.Headers["X-Admin-Token"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(provided))
+            provided = ctx.Request.Cookies[AdminCookieName];
+        if (string.IsNullOrWhiteSpace(provided))
+            provided = ctx.Request.Query["token"].FirstOrDefault();
+        return provided;
+    }
+
+    private static bool IsValidAdminToken(string? provided)
+    {
+        var providedBytes = System.Text.Encoding.UTF8.GetBytes(provided ?? "");
+        var expectedBytes = System.Text.Encoding.UTF8.GetBytes(_adminToken);
+        return !string.IsNullOrWhiteSpace(_adminToken) &&
+            providedBytes.Length == expectedBytes.Length &&
+            CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes);
+    }
+
+    private static void SetAdminCookie(HttpContext ctx)
+    {
+        ctx.Response.Cookies.Append(AdminCookieName, _adminToken, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = IsExternalHttps(ctx),
+            SameSite = SameSiteMode.Lax,
+            Path = "/"
+        });
+    }
+
+    private static void ClearAdminCookie(HttpContext ctx)
+    {
+        ctx.Response.Cookies.Delete(AdminCookieName, new CookieOptions
+        {
+            Secure = IsExternalHttps(ctx),
+            SameSite = SameSiteMode.Lax,
+            Path = "/"
+        });
+    }
+
+    private static bool IsExternalHttps(HttpContext ctx) =>
+        ctx.Request.IsHttps ||
+        string.Equals(ctx.Request.Headers["X-Forwarded-Proto"].FirstOrDefault(), "https", StringComparison.OrdinalIgnoreCase) ||
+        (ctx.Request.Headers["Cf-Visitor"].FirstOrDefault()?.Contains("\"scheme\":\"https\"", StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static bool HasExternalForwardingHeaders(HttpContext ctx) =>
+        ctx.Request.Headers.ContainsKey("CF-Connecting-IP") ||
+        ctx.Request.Headers.ContainsKey("CF-Ray") ||
+        ctx.Request.Headers.ContainsKey("X-Forwarded-For") ||
+        ctx.Request.Headers.ContainsKey("X-Real-IP") ||
+        ctx.Request.Headers.ContainsKey("Forwarded");
 
     private static bool IsLocalRequest(HttpContext ctx)
     {
@@ -1103,7 +1200,11 @@ public class DashboardServer
             var appName = Clean(mapping.AppName);
             if (!IsValidProcessName(processName) || !IsValidAppName(appName))
                 return "Backup contains an invalid app mapping.";
-            cleanMappings.Add(new AppMapping(processName, appName));
+            cleanMappings.Add(new AppMapping(
+                processName,
+                appName,
+                mapping.CountInBackground,
+                mapping.IgnoreOverlayFocus));
         }
         backup.AppMappings = cleanMappings;
 

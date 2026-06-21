@@ -26,7 +26,6 @@ if ($LASTEXITCODE -ne 0) { throw "UpdateAgent publish failed with exit code $LAS
 
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-watchdog.ps1') -Destination $publishDir -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall-watchdog.ps1') -Destination $publishDir -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'parent-health-monitor.ps1') -Destination $publishDir -Force
 
 Write-Host ""
 Write-Host "Published to: $publishDir"

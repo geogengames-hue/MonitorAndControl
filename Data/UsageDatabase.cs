@@ -6,6 +6,7 @@ namespace MonitorAndControl.Data;
 public class UsageDatabase : IDisposable
 {
     private readonly SqliteConnection _connection;
+    private readonly bool _databaseExistedAtStartup;
     private static readonly SemaphoreSlim _lock = new(1, 1);
     public string DatabasePath { get; }
 
@@ -27,6 +28,7 @@ public class UsageDatabase : IDisposable
         }
 
         DatabasePath = Path.GetFullPath(dbPath);
+        _databaseExistedAtStartup = File.Exists(DatabasePath);
         _connection = new SqliteConnection($"Data Source={DatabasePath}");
         _connection.Open();
         Initialize();
@@ -42,6 +44,8 @@ public class UsageDatabase : IDisposable
                 ProcessName TEXT NOT NULL,
                 Date TEXT NOT NULL,
                 TotalSeconds INTEGER NOT NULL DEFAULT 0,
+                ForegroundSeconds INTEGER NOT NULL DEFAULT 0,
+                BackgroundSeconds INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(AppName, Date)
             );
 
@@ -69,7 +73,9 @@ public class UsageDatabase : IDisposable
             CREATE TABLE IF NOT EXISTS AppMappings (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ProcessName TEXT NOT NULL UNIQUE,
-                AppName TEXT NOT NULL
+                AppName TEXT NOT NULL,
+                CountInBackground INTEGER NOT NULL DEFAULT 0,
+                IgnoreOverlayFocus INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS AppBonusTime (
@@ -87,25 +93,65 @@ public class UsageDatabase : IDisposable
             ALTER TABLE ScheduleRules ADD COLUMN AppName TEXT NOT NULL DEFAULT '';
             """;
         try { migrate.ExecuteNonQuery(); } catch (SqliteException ex) when (ex.SqliteErrorCode == 1) { }
+
+        foreach (var sql in new[]
+        {
+            "ALTER TABLE AppMappings ADD COLUMN CountInBackground INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE AppMappings ADD COLUMN IgnoreOverlayFocus INTEGER NOT NULL DEFAULT 0;"
+        })
+        {
+            using var appMappingMigration = _connection.CreateCommand();
+            appMappingMigration.CommandText = sql;
+            try { appMappingMigration.ExecuteNonQuery(); }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 1) { }
+        }
+
+        foreach (var sql in new[]
+        {
+            "ALTER TABLE UsageRecords ADD COLUMN ForegroundSeconds INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE UsageRecords ADD COLUMN BackgroundSeconds INTEGER NOT NULL DEFAULT 0;"
+        })
+        {
+            using var usageMigration = _connection.CreateCommand();
+            usageMigration.CommandText = sql;
+            try { usageMigration.ExecuteNonQuery(); }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 1) { }
+        }
     }
 
-    public async Task RecordUsageAsync(string appName, string processName, int seconds)
+    public Task RecordUsageAsync(string appName, string processName, int seconds) =>
+        RecordUsageAsync(appName, processName, seconds, 0);
+
+    public async Task RecordUsageAsync(string appName, string processName,
+        int foregroundSeconds, int backgroundSeconds)
     {
+        if (foregroundSeconds < 0)
+            throw new ArgumentOutOfRangeException(nameof(foregroundSeconds), "Usage seconds cannot be negative.");
+        if (backgroundSeconds < 0)
+            throw new ArgumentOutOfRangeException(nameof(backgroundSeconds), "Usage seconds cannot be negative.");
+        var totalSeconds = foregroundSeconds + backgroundSeconds;
+        if (totalSeconds == 0) return;
+
         await _lock.WaitAsync();
         try
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO UsageRecords (AppName, ProcessName, Date, TotalSeconds)
-                VALUES (@app, @proc, @date, @secs)
+                INSERT INTO UsageRecords
+                    (AppName, ProcessName, Date, TotalSeconds, ForegroundSeconds, BackgroundSeconds)
+                VALUES (@app, @proc, @date, @total, @foreground, @background)
                 ON CONFLICT(AppName, Date) DO UPDATE SET
-                    TotalSeconds = TotalSeconds + @secs,
+                    TotalSeconds = TotalSeconds + @total,
+                    ForegroundSeconds = ForegroundSeconds + @foreground,
+                    BackgroundSeconds = BackgroundSeconds + @background,
                     ProcessName = excluded.ProcessName;
                 """;
             cmd.Parameters.AddWithValue("@app", appName);
             cmd.Parameters.AddWithValue("@proc", processName);
             cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
-            cmd.Parameters.AddWithValue("@secs", seconds);
+            cmd.Parameters.AddWithValue("@total", totalSeconds);
+            cmd.Parameters.AddWithValue("@foreground", foregroundSeconds);
+            cmd.Parameters.AddWithValue("@background", backgroundSeconds);
             await cmd.ExecuteNonQueryAsync();
         }
         finally { _lock.Release(); }
@@ -124,7 +170,7 @@ public class UsageDatabase : IDisposable
             var list = new List<AppUsageRecord>();
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                SELECT AppName, ProcessName, Date, TotalSeconds
+                SELECT AppName, ProcessName, Date, TotalSeconds, ForegroundSeconds, BackgroundSeconds
                 FROM UsageRecords
                 WHERE Date >= @from AND Date <= @to
                 ORDER BY TotalSeconds DESC;
@@ -138,7 +184,9 @@ public class UsageDatabase : IDisposable
                     AppName = r.GetString(0),
                     ProcessName = r.GetString(1),
                     Date = DateTime.Parse(r.GetString(2)),
-                    TotalSeconds = r.GetInt64(3)
+                    TotalSeconds = r.GetInt64(3),
+                    ForegroundSeconds = r.GetInt64(4),
+                    BackgroundSeconds = r.GetInt64(5)
                 });
             return list;
         }
@@ -526,9 +574,11 @@ public class UsageDatabase : IDisposable
             {
                 using var cmd = _connection.CreateCommand();
                 cmd.Transaction = tx;
-                cmd.CommandText = "INSERT INTO AppMappings (ProcessName, AppName) VALUES (@p, @a)";
+                cmd.CommandText = "INSERT INTO AppMappings (ProcessName, AppName, CountInBackground, IgnoreOverlayFocus) VALUES (@p, @a, @background, @overlay)";
                 cmd.Parameters.AddWithValue("@p", mapping.ProcessName);
                 cmd.Parameters.AddWithValue("@a", mapping.AppName);
+                cmd.Parameters.AddWithValue("@background", mapping.CountInBackground ? 1 : 0);
+                cmd.Parameters.AddWithValue("@overlay", mapping.IgnoreOverlayFocus ? 1 : 0);
                 await cmd.ExecuteNonQueryAsync();
             }
 
@@ -576,27 +626,34 @@ public class UsageDatabase : IDisposable
         {
             var list = new List<AppMapping>();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT ProcessName, AppName FROM AppMappings";
+            cmd.CommandText = "SELECT ProcessName, AppName, CountInBackground, IgnoreOverlayFocus FROM AppMappings";
             using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
-                list.Add(new AppMapping(r.GetString(0), r.GetString(1)));
+                list.Add(new AppMapping(r.GetString(0), r.GetString(1), r.GetBoolean(2), r.GetBoolean(3)));
             return list;
         }
         finally { _lock.Release(); }
     }
 
-    public async Task SaveAppMappingAsync(string processName, string appName)
+    public async Task SaveAppMappingAsync(string processName, string appName,
+        bool countInBackground = false, bool ignoreOverlayFocus = false)
     {
         await _lock.WaitAsync();
         try
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO AppMappings (ProcessName, AppName) VALUES (@p, @a)
-                ON CONFLICT(ProcessName) DO UPDATE SET AppName = @a;
+                INSERT INTO AppMappings (ProcessName, AppName, CountInBackground, IgnoreOverlayFocus)
+                VALUES (@p, @a, @background, @overlay)
+                ON CONFLICT(ProcessName) DO UPDATE SET
+                    AppName = @a,
+                    CountInBackground = @background,
+                    IgnoreOverlayFocus = @overlay;
                 """;
             cmd.Parameters.AddWithValue("@p", processName);
             cmd.Parameters.AddWithValue("@a", appName);
+            cmd.Parameters.AddWithValue("@background", countInBackground ? 1 : 0);
+            cmd.Parameters.AddWithValue("@overlay", ignoreOverlayFocus ? 1 : 0);
             await cmd.ExecuteNonQueryAsync();
         }
         finally { _lock.Release(); }
@@ -630,18 +687,22 @@ public class UsageDatabase : IDisposable
 
     public async Task InitializeDefaults(AppConfig config)
     {
-        var existing = await GetLimitRulesAsync();
-        if (existing.Count == 0 && config.DefaultLimits.Count > 0)
+        const string initializedKey = "InitialDefaultsImported";
+        if (bool.TryParse(await GetSettingAsync(initializedKey, ""), out var initialized) && initialized)
+            return;
+
+        // Existing databases predate the marker. Treat them as already initialized so
+        // deliberately empty limit/schedule tables are never repopulated on upgrade.
+        if (!_databaseExistedAtStartup)
         {
             foreach (var limit in config.DefaultLimits)
                 await SaveLimitRuleAsync(limit);
-        }
-        var schedule = await GetScheduleRulesAsync();
-        if (schedule.Count == 0 && config.Schedule.Count > 0)
-        {
+
             foreach (var rule in config.Schedule)
                 await SaveScheduleRuleAsync(rule);
         }
+
+        await SetSettingAsync(initializedKey, "true");
     }
 
     public void Dispose()

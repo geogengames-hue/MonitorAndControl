@@ -424,34 +424,61 @@ async function loadToday() {
   try {
     const usage = await api('/api/usage/today');
     renderTodayChart(usage);
-    renderTable('today-table', usage, ['appName', 'durationFormatted'], [t('App'), t('Time')]);
+    const breakdown = document.getElementById('today-breakdown').checked;
+    renderUsageTable('today-table', usage, false, breakdown);
+    updateBreakdownNote('today-breakdown-note', usage, breakdown);
   } catch (e) { log(e); }
 }
+
+document.getElementById('today-breakdown').addEventListener('change', loadToday);
 
 function renderTodayChart(usage) {
   const ctx = document.getElementById('today-chart').getContext('2d');
   if (todayChart) todayChart.destroy();
   const labels = usage.map(u => u.appName);
-  const data = usage.map(u => +(u.totalSeconds / 60).toFixed(1));
+  const breakdown = document.getElementById('today-breakdown').checked;
   const colors = ['#7c7cff', '#ff7c7c', '#7cff7c', '#ffcc7c', '#7cffcc', '#cc7cff', '#ff7ccc', '#7cccff'];
+  const hasLegacy = usage.some(u => u.unclassifiedSeconds > 0);
+  const datasets = breakdown
+    ? [
+        {
+          label: t('Foreground'),
+          data: usage.map(u => +(u.foregroundSeconds / 60).toFixed(1)),
+          backgroundColor: '#7c7cff',
+          borderRadius: 4
+        },
+        {
+          label: t('Background'),
+          data: usage.map(u => +(u.backgroundSeconds / 60).toFixed(1)),
+          backgroundColor: '#7cffcc',
+          borderRadius: 4
+        },
+        ...(hasLegacy ? [{
+          label: t('Legacy / unclassified'),
+          data: usage.map(u => +(u.unclassifiedSeconds / 60).toFixed(1)),
+          backgroundColor: '#777',
+          borderRadius: 4
+        }] : [])
+      ]
+    : [{
+        label: t('Minutes'),
+        data: usage.map(u => +(u.totalSeconds / 60).toFixed(1)),
+        backgroundColor: labels.map((_, i) => colors[i % colors.length]),
+        borderRadius: 6
+      }];
   todayChart = new Chart(ctx, {
     type: 'bar',
     data: {
       labels,
-      datasets: [{
-        label: 'Minutes',
-        data,
-        backgroundColor: labels.map((_, i) => colors[i % colors.length]),
-        borderRadius: 6
-      }]
+      datasets
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: breakdown, labels: { color: '#888' } } },
       scales: {
-        y: { beginAtZero: true, ticks: { color: '#888' }, grid: { color: '#2a2a3e' } },
-        x: { ticks: { color: '#888' }, grid: { display: false } }
+        y: { stacked: breakdown, beginAtZero: true, ticks: { color: '#888' }, grid: { color: '#2a2a3e' } },
+        x: { stacked: breakdown, ticks: { color: '#888' }, grid: { display: false } }
       }
     }
   });
@@ -483,6 +510,7 @@ document.getElementById('history-apply').addEventListener('click', () => {
 document.getElementById('history-app-filter').addEventListener('change', renderHistoryDashboard);
 document.getElementById('history-day-filter').addEventListener('change', renderHistoryDashboard);
 document.getElementById('history-chart-mode').addEventListener('change', renderHistoryDashboard);
+document.getElementById('history-breakdown').addEventListener('change', renderHistoryDashboard);
 
 document.getElementById('history-clear').addEventListener('click', async () => {
   if (!confirm(t('Clear all usage history? Limits, schedules, app mappings, and settings will stay.'))) return;
@@ -537,11 +565,40 @@ function renderHistoryDashboard() {
     (!app || u.appName === app) &&
     (!day || u.date === day));
 
+  const breakdown = document.getElementById('history-breakdown').checked;
+  document.getElementById('history-chart-mode').disabled = breakdown;
+
   renderHistoryStats(historyFiltered);
   renderHistoryTopApps(historyFiltered);
   renderHistoryDayDetail(historyRaw, day);
   renderHistoryChart(historyFiltered);
-  renderTable('history-table', historyFiltered, ['date', 'appName', 'durationFormatted'], ['Date', 'App', 'Time']);
+  renderUsageTable('history-table', historyFiltered, true, breakdown);
+  updateBreakdownNote('history-breakdown-note', historyFiltered, breakdown);
+}
+
+function renderUsageTable(id, usage, includeDate, breakdown) {
+  const props = includeDate ? ['date', 'appName'] : ['appName'];
+  const headers = includeDate ? [t('Date'), t('App')] : [t('App')];
+  if (breakdown) {
+    props.push('foregroundDurationFormatted', 'backgroundDurationFormatted');
+    headers.push(t('Foreground'), t('Background'));
+    if (usage.some(u => u.unclassifiedSeconds > 0)) {
+      props.push('unclassifiedDurationFormatted');
+      headers.push(t('Legacy'));
+    }
+  }
+  props.push('durationFormatted');
+  headers.push(t('Total'));
+  renderTable(id, usage, props, headers);
+}
+
+function updateBreakdownNote(id, usage, breakdown) {
+  const note = document.getElementById(id);
+  const hasLegacy = breakdown && usage.some(u => u.unclassifiedSeconds > 0);
+  note.classList.toggle('hidden', !hasLegacy);
+  note.textContent = hasLegacy
+    ? t('Legacy time was recorded before foreground/background breakdown tracking and cannot be classified.')
+    : '';
 }
 
 function renderHistoryStats(usage) {
@@ -611,6 +668,7 @@ function renderHistoryChart(usage) {
   const ctx = document.getElementById('history-chart').getContext('2d');
   if (historyChart) historyChart.destroy();
   const mode = document.getElementById('history-chart-mode').value;
+  const breakdown = document.getElementById('history-breakdown').checked;
   const byDate = {};
   usage.forEach(u => {
     if (!byDate[u.date]) byDate[u.date] = {};
@@ -619,7 +677,21 @@ function renderHistoryChart(usage) {
   const dates = Object.keys(byDate).sort();
   const apps = [...new Set(usage.map(u => u.appName))];
   const colors = ['#7c7cff', '#ff7c7c', '#7cff7c', '#ffcc7c', '#7cffcc', '#cc7cff', '#ff7ccc', '#7cccff'];
-  const datasets = mode === 'total'
+  const hasLegacy = usage.some(u => u.unclassifiedSeconds > 0);
+  const sourceByDate = {};
+  usage.forEach(u => {
+    if (!sourceByDate[u.date]) sourceByDate[u.date] = { foreground: 0, background: 0, legacy: 0 };
+    sourceByDate[u.date].foreground += u.foregroundSeconds / 60;
+    sourceByDate[u.date].background += u.backgroundSeconds / 60;
+    sourceByDate[u.date].legacy += u.unclassifiedSeconds / 60;
+  });
+  const datasets = breakdown
+    ? [
+        { label: t('Foreground'), data: dates.map(d => sourceByDate[d]?.foreground || 0), backgroundColor: '#7c7cff', borderRadius: 3 },
+        { label: t('Background'), data: dates.map(d => sourceByDate[d]?.background || 0), backgroundColor: '#7cffcc', borderRadius: 3 },
+        ...(hasLegacy ? [{ label: t('Legacy / unclassified'), data: dates.map(d => sourceByDate[d]?.legacy || 0), backgroundColor: '#777', borderRadius: 3 }] : [])
+      ]
+    : mode === 'total'
     ? [{
         label: 'Total minutes',
         data: dates.map(d => Object.values(byDate[d]).reduce((sum, v) => sum + v, 0)),
@@ -640,8 +712,8 @@ function renderHistoryChart(usage) {
       maintainAspectRatio: false,
       plugins: { legend: { labels: { color: '#888' } } },
       scales: {
-        x: { stacked: mode !== 'total', ticks: { color: '#888' }, grid: { display: false } },
-        y: { stacked: mode !== 'total', beginAtZero: true, ticks: { color: '#888' }, grid: { color: '#2a2a3e' }, title: { display: true, text: 'Minutes', color: '#888' } }
+        x: { stacked: breakdown || mode !== 'total', ticks: { color: '#888' }, grid: { display: false } },
+        y: { stacked: breakdown || mode !== 'total', beginAtZero: true, ticks: { color: '#888' }, grid: { color: '#2a2a3e' }, title: { display: true, text: t('Minutes'), color: '#888' } }
       }
     }
   });
@@ -657,18 +729,29 @@ async function loadLimits() {
       api('/api/mappings'),
       api('/api/bonus/today')
     ]);
-    const allApps = [...new Set([...Object.keys(known).map(k => known[k]), ...limits.map(l => l.appName)])].sort();
-
     const table = document.getElementById('limits-table');
     if (!Array.isArray(mappings)) {
       table.innerHTML = `<p style="color:#ff4444;text-align:center">${t('Failed to load app mappings')}</p>`;
       return;
     }
-    const reverseMap = {};
-    mappings.forEach(m => reverseMap[m.appName] = m.processName);
+    const mappingByProcess = new Map(mappings.map(m => [m.processName.toLowerCase(), m]));
+    const rows = Object.entries(known)
+      .map(([processName, appName]) => ({
+        processName,
+        appName,
+        policy: mappingByProcess.get(processName.toLowerCase())
+      }));
+    const appsWithProcesses = new Set(rows.map(row => row.appName.toLowerCase()));
+    limits.forEach(limit => {
+      if (!appsWithProcesses.has(limit.appName.toLowerCase()))
+        rows.push({ processName: '', appName: limit.appName, policy: null });
+    });
+    rows.sort((a, b) => a.appName.localeCompare(b.appName) || a.processName.localeCompare(b.processName));
 
-    let html = `<table><thead><tr><th>${t('App')}</th><th>${t('Process')}</th><th>${t('Daily Max')}</th><th>${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
-    for (const app of allApps) {
+    let html = `<table><thead><tr><th>${t('App')}</th><th>${t('Process')}</th><th>${t('Background')}</th><th>${t('Filter overlays')}</th><th>${t('Daily Max')}</th><th>${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
+    for (const row of rows) {
+      const app = row.appName;
+      const procName = row.processName;
       const limit = limits.find(l => l.appName === app);
       const usage = today.find(u => u.appName === app);
       const bonus = bonuses.find(b => b.appName === app)?.bonusMinutes || 0;
@@ -677,15 +760,16 @@ async function loadLimits() {
       const pct = max > 0 ? Math.round((used / max) * 100) : 0;
       const exceeded = max > 0 && used >= max;
       const enabled = limit ? limit.enabled : false;
-      const procName = reverseMap[app] || Object.keys(known).find(k => known[k] === app) || '';
-      html += `<tr>
+      html += `<tr data-tracking-row>
         <td><strong>${esc(app)}</strong></td>
         <td style="font-size:11px;color:#666;max-width:250px;word-break:break-all">${esc(procName) || '-'}</td>
+        <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="background" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.countInBackground ? 'checked' : ''}>` : '-'}</td>
+        <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="overlay" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.ignoreOverlayFocus ? 'checked' : ''}>` : '-'}</td>
         <td>${limit ? limit.dailyMaxMinutes + ' min' + (bonus ? ` <span style="color:#ffcc66">(+${bonus})</span>` : '') : `<span style="color:#666">${t('No limit')}</span>`}</td>
         <td>${usage ? esc(usage.durationFormatted) : '0m'}</td>
         <td>${enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : (pct > 80 ? '<span style="color:#ff8800">' + pct + '%</span>' : '<span style="color:#44bb44">' + pct + '%</span>')) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
         <td class="actions">
-          <button onclick="editLimit('${escAttr(app)}')">${t('Edit')}</button>
+          ${limit ? `<button onclick="editLimit('${escAttr(app)}')">${t('Edit')}</button>` : ''}
           ${limit ? `<button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',15)">+15m</button><button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',30)">+30m</button>` : ''}
           ${limit ? `<button class="btn-danger" onclick="deleteLimit('${escAttr(app)}')">${t('Remove')}</button>` : `<button onclick="addLimit('${escAttr(app)}')">${t('Add')}</button>`}
           ${procName ? `<button class="btn-danger" onclick="forgetApp('${escAttr(app)}','${escAttr(procName)}')" title="${t('Delete mapping & all data')}" style="background:#882222">&times; ${t('Forget')}</button>` : ''}
@@ -694,7 +778,38 @@ async function loadLimits() {
     }
     html += '</tbody></table>';
     table.innerHTML = html;
+    table.querySelectorAll('.tracking-policy').forEach(checkbox =>
+      checkbox.addEventListener('change', saveTrackingPolicy));
   } catch (e) { log(e); }
+}
+
+async function saveTrackingPolicy(event) {
+  const checkbox = event.currentTarget;
+  const row = checkbox.closest('[data-tracking-row]');
+  const background = row.querySelector('[data-kind="background"]');
+  const overlay = row.querySelector('[data-kind="overlay"]');
+  const previous = !checkbox.checked;
+  background.disabled = true;
+  overlay.disabled = true;
+  try {
+    await api('/api/apps', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        processName: checkbox.dataset.process,
+        appName: checkbox.dataset.app,
+        countInBackground: background.checked,
+        ignoreOverlayFocus: overlay.checked
+      })
+    });
+  } catch (e) {
+    checkbox.checked = previous;
+    log(e);
+    alert(t('Failed to update tracking settings.'));
+  } finally {
+    background.disabled = false;
+    overlay.disabled = false;
+  }
 }
 
 async function grantBonus(appName, minutes) {
@@ -722,9 +837,9 @@ function editLimit(appName) {
     if (limit) document.getElementById('limit-minutes').value = limit.dailyMaxMinutes;
   });
   // Populate process name from the app mapping
-  api('/api/mappings').then(mappings => {
+  Promise.all([api('/api/mappings'), api('/api/apps')]).then(([mappings, known]) => {
     const m = mappings.find(x => x.appName === appName);
-    document.getElementById('limit-process').value = m ? m.processName : '';
+    document.getElementById('limit-process').value = m ? m.processName : (Object.keys(known).find(k => known[k] === appName) || '');
   }).catch(() => {});
 }
 
@@ -743,7 +858,18 @@ document.getElementById('limit-save').addEventListener('click', async () => {
   if (!app || !minutes) return;
   // If process name is provided, register mapping first
   if (proc) {
-    await api('/api/apps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ processName: proc, appName: app }) });
+    const existingMappings = await api('/api/mappings');
+    const existing = existingMappings.find(m => m.processName.toLowerCase() === proc.toLowerCase());
+    await api('/api/apps', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        processName: proc,
+        appName: app,
+        countInBackground: !!existing?.countInBackground,
+        ignoreOverlayFocus: !!existing?.ignoreOverlayFocus
+      })
+    });
   }
   await api('/api/limits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appName: app, dailyMaxMinutes: minutes, enabled: true }) });
   loadLimits();
@@ -997,9 +1123,13 @@ document.getElementById('settings-admin-password').addEventListener('click', asy
   setTimeout(() => el.textContent = '', 8000);
 });
 
-document.getElementById('settings-logout').addEventListener('click', () => {
+document.getElementById('settings-logout').addEventListener('click', async () => {
   sessionStorage.removeItem('dashboardAdminToken');
-  window.location.reload();
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch {
+  }
+  window.location.replace('/login.html');
 });
 
 document.getElementById('settings-rotate-token').addEventListener('click', async () => {

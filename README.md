@@ -23,7 +23,9 @@ and monitor usage — all from a beautiful web dashboard.
 
 ## Features
 
-- **Real‑time usage tracking** — polls the foreground window and accumulates time per app
+- **Real‑time usage tracking** — counts foreground use by default, with optional per-app background tracking
+- **Concurrent app accounting** — a foreground game and opted-in background communication apps can accumulate time simultaneously
+- **Overlay focus filtering** — prevents voice and notification overlays from being mistaken for deliberate app switches
 - **Daily time limits** — set per‑app limits (e.g. Fortnite 120 min/day); apps are auto‑closed when exceeded
 - **Graceful countdown** — full‑screen warning popup with countdown before an app is killed
 - **Bonus time** — grant extra minutes from the dashboard without changing limits
@@ -35,7 +37,8 @@ and monitor usage — all from a beautiful web dashboard.
 - **Webhook alerts** — POST JSON to a custom endpoint on limit breach
 - **Watchdog service** — optional Windows service that restarts the monitor if it crashes
 - **Admin password** — protect dashboard changes and shutdown
-- **Config export/import** — backup and restore limits, schedules, and app mappings
+- **Remote dashboard login** — remote users are redirected to a login page; authenticated sessions use an HTTP-only cookie and can be explicitly logged out
+- **Config export/import** — backup and restore limits, schedules, app mappings, and tracking policies
 - **Hotkey** — `Ctrl+Alt+H` opens the dashboard by default and can be changed in Settings
 
 ---
@@ -75,10 +78,34 @@ When you run `DeviceMon.exe`, it automatically looks for `GameHost.exe` in the s
 
 ### Data storage
 
-- **SQLite database** at `%LOCALAPPDATA%\SystemHelper\monitor.db` — usage records, limits, schedules, settings
+- **SQLite database** at `%LOCALAPPDATA%\SystemHelper\monitor.db` — usage records, limits, schedules, app tracking policies, settings
 - **Log file** at `%LOCALAPPDATA%\SystemHelper\monitor.log`
 - **Watchdog log** at `C:\ProgramData\SystemHelper\watchdog.log`
 - **Configuration** at `appsettings.json` (alongside the exe)
+
+### Usage tracking modes
+
+Tracking behavior is configured independently for every process using the **Background** and **Filter overlays** columns in the Limits table. Both options are off by default. The checkboxes save immediately and do not require the application to have a daily limit.
+
+| Option | Behavior |
+|--------|----------|
+| **Foreground only** | Default mode. Time is counted while the application's window is the accepted foreground window. |
+| **Count while running in background** | Counts time whenever the configured process is running, including while minimized or behind another application. |
+| **Ignore voice/notification overlay focus** | Rejects short or unattended focus changes from non-main overlay windows. A genuine switch to the application's main window must be stable and associated with recent keyboard or mouse input. |
+
+Background accounting is concurrent. For example, if a game is in the foreground while Discord, Telegram, Signal, Skype, Teams, Zoom, or another opted-in application is running, the same elapsed second can be added to both applications. An application is counted only once per sample even if it is both foreground and enabled for background tracking.
+
+> **Important:** Background mode measures process runtime, not microphone activity. An application left open but unused continues accumulating time, and its daily limit can be reached while it remains in the background.
+
+Usage is sampled approximately once per second using a monotonic clock. Large timing gaps caused by sleep, hibernation, or a stalled process are discarded instead of being charged as usage. Accumulated time is persisted according to `FlushIntervalSec`.
+
+The **Today** and **History** tabs include a **Show foreground/background breakdown** checkbox. When enabled, charts use stacked foreground and background segments and tables show Foreground, Background, and Total columns. If an opted-in background app becomes the accepted foreground app, that interval is classified only as foreground and is never double-counted.
+
+Usage recorded by an older release has only a total and cannot be reconstructed by source. After upgrading, that time is shown as **Legacy** / **unclassified** in breakdown mode while its original total remains unchanged. New usage is classified fully.
+
+Existing databases are upgraded automatically. Tracking policies are also included in configuration exports and restored during import.
+
+`DefaultLimits` and `Schedule` from `appsettings.json` are imported only when the SQLite database is created for the first time. After initialization, the database is authoritative: limits or schedules removed in the dashboard remain removed after restart. Delete `%LOCALAPPDATA%\SystemHelper\monitor.db` only when you intentionally want a fresh first-start import.
 
 ---
 
@@ -127,8 +154,8 @@ MonitorAndControl/
 ├── Services/
 │   ├── Logger.cs           # File‑based logger
 │   ├── Localization.cs     # .resx string localization
-│   ├── WindowTracker.cs    # Foreground window polling
-│   ├── UsageTracker.cs     # Usage accumulation
+│   ├── WindowTracker.cs    # Foreground polling, app policies, overlay filtering
+│   ├── UsageTracker.cs     # Concurrent foreground/background usage accumulation
 │   ├── LimitEnforcer.cs    # Limit checking + kill logic
 │   ├── SchedulerService.cs # Time‑based schedule enforcement
 │   ├── NotificationService.cs  # Webhook notifications
@@ -168,7 +195,7 @@ Opens the dashboard at `http://localhost:5000` and runs in the system tray.
 3. **Run `DeviceMon.exe`** (no admin required for basic usage)
    - On first run, it will detect `GameHost.exe` and ask for **administrator elevation** via a UAC prompt to install the watchdog service. This is optional — click **Yes** to enable auto-restart on crash, or **No** to skip (the app will still run normally)
 4. **Open the dashboard** — press `Ctrl+Alt+H` by default or open `http://localhost:5000` in a browser
-5. **Set limits** — navigate to **Limits** tab, add apps and set daily max minutes
+5. **Configure apps** — navigate to **Limits**, optionally set daily limits, and use the inline Background and Filter overlays checkboxes for any tracked process
 6. **Configure schedule** (optional) — navigate to **Schedule** tab, set allowed hours
 
 For remote access from another PC on the same network, see `appsettings.json` configuration below.
@@ -213,14 +240,14 @@ Place this file alongside `DeviceMon.exe`. All settings are optional — default
 | `KillDelaySeconds` | `30` | Seconds between limit breach warning and closing the app |
 | `ShowWarningOnChildPc` | `true` | Show full‑screen popup before killing an app |
 | `PollIntervalMs` | `1000` | Foreground window check interval (ms) |
-| `FlushIntervalSec` | `30` | How often usage data is written to the database |
+| `FlushIntervalSec` | `30` | How often sampled usage is written to the database and limits are evaluated |
 | `HotKeyModifiers` | `Control+Alt` | Default modifier keys for the dashboard hotkey. Can also be changed in dashboard Settings. |
 | `HotKeyKey` | `H` | Default key for the dashboard hotkey. Can also be changed in dashboard Settings. |
 | `KnownApps` | `{}` | Map of process names → friendly app names |
-| `DefaultLimits` | `[]` | Default daily limits for known apps |
-| `Schedule` | `[]` | Default allowed hours schedule |
+| `DefaultLimits` | `[]` | Daily limits imported only when the database is first created |
+| `Schedule` | `[]` | Allowed-hours rules imported only when the database is first created |
 
-> **Security note:** When `EnableRemoteDashboard` is `true`, anyone on your local network can access the dashboard until an admin password is set. Set the admin password from the local or remote dashboard **Settings** tab as soon as remote access is enabled.
+> **Security note:** When remote access is enabled, remote users cannot open the dashboard until an admin password has been created from a trusted local dashboard. After setup, remote users are redirected to the login page. Successful authentication creates an HTTP-only session cookie; use **Settings → Logout** to end that browser session.
 
 ### Installing the Watchdog (optional, requires admin)
 
@@ -253,15 +280,15 @@ Once installed, the `GameHost` service runs under the SYSTEM account and automat
 | Tab | Description |
 |-----|-------------|
 | **Live** | Currently active app, quick actions (pause, resume, block all, extend time) |
-| **Today** | Bar chart and table of today's app usage |
-| **History** | Historical usage with filters, charts, and stats (7/14/30/90 days or custom range) |
-| **Limits** | Per‑app daily limits, bonus time, status, edit/add/remove/forget apps |
+| **Today** | Bar chart and table of today's total usage, with optional foreground/background breakdown |
+| **History** | Historical totals and foreground/background breakdown with filters, charts, and stats (7/14/30/90 days or custom range) |
+| **Limits** | One combined table with per-process background/overlay checkboxes, optional daily limits, bonus time, status, and app management |
 | **Discover** | Scan system for installed games/apps, add them with default limit |
 | **Schedule** | Time‑based allowed hours rules per app |
 | **Logs** | Real‑time event log with filtering |
 | **Settings** | Kill delay, language, dashboard hotkey, auto-start, webhook, email, app update, admin password, backup/restore, health |
 
-**Admin password:** Set one in **Settings** from the child PC or a remote dashboard to protect dashboard changes (pause, resume, reset, kill, settings edits) and shutdown.
+**Admin password:** On first setup, create it from the trusted local dashboard on the child PC. Remote browsers are then redirected to `login.html` and must authenticate before dashboard assets are served. The authenticated session is stored in an HTTP-only, SameSite cookie. Use **Settings → Logout** to clear it. The password also protects dashboard changes (pause, resume, reset, kill, settings edits) and shutdown.
 
 **App update:** Put a freshly published package on a local folder, UNC share, or HTTP/HTTPS ZIP URL, then use **Settings -> App Update**. The package must contain `DeviceMon.exe`. For Windows 11 SMB shares, enter the optional SMB username/password. The dashboard starts `UpdateAgent.exe`, writes an update marker, closes DeviceMon, copies the package over the install folder, restarts DeviceMon, and repairs/restarts the watchdog when permissions allow. The updated watchdog pauses auto-restart while the update marker is fresh. Check `update.log` in the install folder if an update fails.
 
@@ -277,7 +304,7 @@ Once installed, the `GameHost` service runs under the SYSTEM account and automat
 | Command | Example | Description |
 |---------|---------|-------------|
 | `help` | `mc: help` | Shows all available commands |
-| `status` | `mc: status` | Current limits, schedule, and today's usage |
+| `status` | `mc: status` | Current app/process, limits, schedule, and the top eight apps used today |
 | `@device command` | `mc: @bedroom status` | Run a command only on the PC with that Device ID |
 | `set [app] [min] min` | `mc: set Fortnite 60 min` | Set daily limit for an app |
 | `bonus [app] [min] min` | `mc: bonus Fortnite 15 min` | Add bonus time today |
@@ -354,6 +381,18 @@ A: Download the latest release ZIP, extract it to a folder. Go to **Settings →
 
 **Q: Some games/apps show as "Unknown App" even though they're running.**
 A: The app only recognizes processes it has seen before. Add the unknown process from the **Discover** tab (auto-detect) or manually via **Limits → Add App**. You can also pre-map them in `appsettings.json` under `KnownApps`.
+
+**Q: Why does the log alternate between my game and Discord/Telegram while the game stays visible?**
+A: A voice or notification overlay can temporarily be reported by Windows as the foreground window. In the **Limits** table, enable **Filter overlays** for that process. The tracker will ignore non-main overlay windows and require a stable, recently user-initiated switch before changing the foreground app.
+
+**Q: How do I count Discord, Telegram, Signal, Skype, Teams, Zoom, or another app while a game is active?**
+A: Add the application through **Discover** or the Limits form, then enable **Background** for its process directly in the Limits table. This setting is generic and does not require a daily limit. The foreground game and background application will accumulate time concurrently.
+
+**Q: Does background tracking detect when the microphone or a voice call is active?**
+A: No. It counts whenever the configured process is running. This avoids application-specific microphone integrations, but it also means minimized or idle applications continue accumulating time until their process exits. Leave background tracking disabled when process runtime is not the behavior you want.
+
+**Q: Can background tracking cause an application to reach its daily limit while minimized?**
+A: Yes. Background-counted time uses the same daily usage total and limit enforcement as foreground time. Close the application when it is not being used, increase its limit, or disable background tracking.
 
 **Q: How do I set up email notifications?**
 A: Enable 2FA on your Gmail account, generate an [App Password](https://support.google.com/accounts/answer/185833), and enter your Gmail address and the app password in **Settings → Email Notifications & Control**. See the [Email control](#email-control-optional) section for all commands.

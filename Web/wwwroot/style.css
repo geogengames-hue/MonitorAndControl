@@ -56,6 +56,25 @@ tr:last-child td { border: none; }
 td.actions { text-align: right; }
 td.actions button { margin-left: 6px; }
 
+#limits-table table { min-width: 1080px; }
+#limits-table th, #limits-table td { vertical-align: middle; }
+#limits-table th:nth-child(3),
+#limits-table th:nth-child(4),
+#limits-table td:nth-child(3),
+#limits-table td:nth-child(4) {
+  width: 105px;
+  text-align: center;
+}
+#limits-table td.actions {
+  min-width: 185px;
+  white-space: nowrap;
+}
+#limits-table td.actions button {
+  margin: 0 0 0 5px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
 .period-select { margin-bottom: 15px; }
 .period-select button {
   background: #2a2a3e; color: #888; border: none; padding: 8px 16px; border-radius: 6px;

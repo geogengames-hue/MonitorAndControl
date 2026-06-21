@@ -11,6 +11,9 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern IntPtr GetForegroundWindow();
 
+    [DllImport("user32.dll")]
+    internal static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
@@ -49,4 +52,11 @@ internal static class NativeMethods
     internal const uint MOD_SHIFT = 0x0004;
     internal const uint MOD_WIN = 0x0008;
     internal const int WM_CLOSE = 0x0010;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct LASTINPUTINFO
+    {
+        internal uint cbSize;
+        internal uint dwTime;
+    }
 }
