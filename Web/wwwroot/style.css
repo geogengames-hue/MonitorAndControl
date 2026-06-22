@@ -38,6 +38,14 @@ h3 { font-size: 16px; margin: 15px 0 10px; color: #ccc; }
 .live-proc { font-size: 13px; color: #666; margin-top: 3px; }
 .live-status { font-size: 13px; color: #44bb44; margin-top: 10px; font-weight: 600; }
 .live-status.paused { color: #ffcc66; }
+.tracking-summary { color: #44bb44; font-size: 13px; font-weight: 600; margin: 8px 0 12px; }
+.tracking-summary.paused { color: #ffcc66; }
+.tracking-diagnostics { max-height: 260px; overflow: auto; }
+.tracking-diagnostics th, .tracking-diagnostics td { padding: 8px 10px; }
+.tracking-state { font-size: 12px; font-weight: 600; }
+.state-foreground, .state-background { color: #44bb44; }
+.state-locked, .state-idle { color: #ffcc66; }
+.state-running_not_counted { color: #888; }
 .live-app-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #2a2a3e; }
 .live-app-item:last-child { border: none; }
 .live-app-item .name { color: #ccc; }

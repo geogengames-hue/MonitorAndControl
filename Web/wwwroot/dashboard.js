@@ -308,7 +308,45 @@ async function loadLive() {
       status.textContent = t('Enforcement active');
       status.classList.remove('paused');
     }
+    renderTrackingDiagnostics(data);
   } catch (e) { log(e); }
+}
+
+function renderTrackingDiagnostics(data) {
+  const summary = document.getElementById('tracking-summary');
+  const container = document.getElementById('tracking-diagnostics');
+  const idleSeconds = Math.max(0, Math.round(data.idleSeconds || 0));
+  const idle = idleSeconds < 60 ? `${idleSeconds}s` : formatDuration(idleSeconds);
+  const summaryText = data.trackingState === 'locked'
+    ? t('Usage tracking paused: Windows is locked')
+    : data.trackingState === 'idle'
+      ? t('Usage tracking paused: user is idle ({time})', { time: idle })
+      : data.pauseWhenIdle
+        ? t('Usage tracking active (idle {time})', { time: idle })
+        : t('Usage tracking active (idle pausing disabled)');
+  summary.textContent = summaryText;
+  summary.classList.toggle('paused', !!data.trackingSuspended);
+
+  const diagnostics = data.diagnostics || [];
+  const visible = diagnostics.filter(item => item.isRunning || item.isForeground);
+  if (visible.length === 0) {
+    container.innerHTML = `<p>${t('No configured tracked processes are running.')}</p>`;
+    return;
+  }
+  const stateLabels = {
+    foreground: t('Counted: foreground'),
+    background: t('Counted: background'),
+    running_not_counted: t('Not counted: background disabled'),
+    locked: t('Paused: Windows locked'),
+    idle: t('Paused: user idle'),
+    not_running: t('Not running')
+  };
+  container.innerHTML = `<table><thead><tr><th>${t('App')}</th><th>${t('Process')}</th><th>${t('Reason')}</th></tr></thead><tbody>` +
+    visible.map(item => `<tr>
+      <td>${esc(item.appName)}</td>
+      <td>${esc(item.processName)}</td>
+      <td><span class="tracking-state state-${escAttr(item.state)}">${esc(stateLabels[item.state] || item.state)}</span></td>
+    </tr>`).join('') + '</tbody></table>';
 }
 
 async function runQuickAction(action, payload, confirmText) {
@@ -1057,9 +1095,17 @@ async function loadSettings() {
     document.getElementById('set-email-allowed-sender').value = s.emailAllowedSender || s.emailAddress || '';
     document.getElementById('set-email-device-id').value = s.emailDeviceId || s.hostname || '';
     document.getElementById('set-auto-start').checked = s.autoStart;
+    document.getElementById('set-pause-idle').checked = s.pauseTrackingWhenIdle;
+    document.getElementById('set-idle-threshold').value = s.idleThresholdMinutes || 10;
     document.getElementById('set-email-notify').checked = s.emailNotifyEnabled;
     document.getElementById('set-email-start-notify').checked = s.emailStartNotifyEnabled;
     document.getElementById('set-email-control').checked = s.emailControlEnabled;
+    document.getElementById('set-summary-enabled').checked = s.summaryEnabled;
+    document.getElementById('set-summary-frequency').value = s.summaryFrequency || 'weekly';
+    document.getElementById('set-summary-time').value = s.summaryTime || '18:00';
+    document.getElementById('set-summary-weekly-day').value = String(s.summaryWeeklyDay ?? 0);
+    document.getElementById('set-summary-monthly-day').value = s.summaryMonthlyDay || 1;
+    document.getElementById('set-tamper-alerts').checked = s.tamperAlertsEnabled;
     initHotkeyKeyOptions();
     setHotkeyControls(s.hotKeyModifiers, s.hotKeyKey);
     document.getElementById('current-hotkey').textContent = s.hotKey || `${s.hotKeyModifiers || 'Control+Alt'}+${s.hotKeyKey || 'H'}`;
@@ -1160,11 +1206,19 @@ document.getElementById('settings-save').addEventListener('click', async () => {
   const emailNotifyEnabled = document.getElementById('set-email-notify').checked;
   const emailStartNotifyEnabled = document.getElementById('set-email-start-notify').checked;
   const emailControlEnabled = document.getElementById('set-email-control').checked;
+  const summaryEnabled = document.getElementById('set-summary-enabled').checked;
+  const summaryFrequency = document.getElementById('set-summary-frequency').value;
+  const summaryTime = document.getElementById('set-summary-time').value || '18:00';
+  const summaryWeeklyDay = parseInt(document.getElementById('set-summary-weekly-day').value);
+  const summaryMonthlyDay = parseInt(document.getElementById('set-summary-monthly-day').value) || 1;
+  const tamperAlertsEnabled = document.getElementById('set-tamper-alerts').checked;
   const autoStart = document.getElementById('set-auto-start').checked;
+  const pauseTrackingWhenIdle = document.getElementById('set-pause-idle').checked;
+  const idleThresholdMinutes = parseInt(document.getElementById('set-idle-threshold').value) || 10;
   const hotKeyModifiers = getHotkeyModifiers();
   const hotKeyKey = document.getElementById('set-hotkey-key').value;
   uiLanguage = document.getElementById('set-language').value;
-  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, emailDeviceId, autoStart, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled, uiLanguage, hotKeyModifiers, hotKeyKey };
+  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, emailDeviceId, autoStart, pauseTrackingWhenIdle, idleThresholdMinutes, emailNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled, summaryEnabled, summaryFrequency, summaryTime, summaryWeeklyDay, summaryMonthlyDay, tamperAlertsEnabled, uiLanguage, hotKeyModifiers, hotKeyKey };
   if (emailPassword) payload.emailPassword = emailPassword;
   await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   document.getElementById('set-email-pw').value = '';

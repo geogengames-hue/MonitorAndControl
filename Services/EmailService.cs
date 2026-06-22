@@ -252,6 +252,13 @@ public class EmailService : IDisposable
         return null;
     }
 
+    public async Task<string?> SendSystemEmailAsync(string subject, string body)
+    {
+        if (string.IsNullOrEmpty(_email) || string.IsNullOrEmpty(_password))
+            return "Email credentials not configured";
+        return await SendMailAsync(subject, body, _email);
+    }
+
     private bool IsCommandForThisDevice(string commandText, out string effectiveCommand)
     {
         effectiveCommand = commandText.Trim();

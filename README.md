@@ -26,6 +26,10 @@ and monitor usage — all from a beautiful web dashboard.
 - **Real‑time usage tracking** — counts foreground use by default, with optional per-app background tracking
 - **Concurrent app accounting** — a foreground game and opted-in background communication apps can accumulate time simultaneously
 - **Overlay focus filtering** — prevents voice and notification overlays from being mistaken for deliberate app switches
+- **Lock and idle awareness** — tracking always pauses on the Windows lock screen, with optional configurable idle suspension
+- **Tracking diagnostics** — shows which processes are counted, ignored, paused, or running without background permission
+- **Scheduled parent summaries** — optional daily, weekly, or monthly email reports with automatic next-start catch-up
+- **Tamper alerts** — optional email/webhook alerts for deleted data/config, clock changes, watchdog failure, and repeated login failures
 - **Daily time limits** — set per‑app limits (e.g. Fortnite 120 min/day); apps are auto‑closed when exceeded
 - **Graceful countdown** — full‑screen warning popup with countdown before an app is killed
 - **Bonus time** — grant extra minutes from the dashboard without changing limits
@@ -95,9 +99,23 @@ Tracking behavior is configured independently for every process using the **Back
 
 Background accounting is concurrent. For example, if a game is in the foreground while Discord, Telegram, Signal, Skype, Teams, Zoom, or another opted-in application is running, the same elapsed second can be added to both applications. An application is counted only once per sample even if it is both foreground and enabled for background tracking.
 
+When several executables map to the same app name, they share one usage total and limit. Reaching that limit closes every running executable mapped to the app, not only the first process.
+
 > **Important:** Background mode measures process runtime, not microphone activity. An application left open but unused continues accumulating time, and its daily limit can be reached while it remains in the background.
 
 Usage is sampled approximately once per second using a monotonic clock. Large timing gaps caused by sleep, hibernation, or a stalled process are discarded instead of being charged as usage. Accumulated time is persisted according to `FlushIntervalSec`.
+
+Tracking always pauses while the Windows desktop is locked. **Settings → Pause all usage tracking when idle** can optionally pause foreground and background accounting after 1–240 minutes without keyboard or mouse input; it is disabled by default because controllers, video playback, and voice calls may not generate normal Windows input.
+
+The Live tab's **Tracking Diagnostics** card explains each running configured process: counted as foreground, counted in background, not counted because background mode is disabled, or paused because Windows is locked/the user is idle.
+
+### Scheduled summaries and tamper alerts
+
+Both features are disabled by default and configured under **Settings → Scheduled Reports & Security Alerts**. Summaries support daily, weekly, or monthly delivery using the computer's local time. Weekly reports have a weekday selector; monthly reports accept days 1–31 and automatically use the month's last valid day when necessary.
+
+If the computer is off at the scheduled time, the app sends only the latest missed period after the next startup. The due period is marked complete only after email delivery succeeds. Summary email requires Gmail credentials but does not require breach-notification email to be enabled.
+
+Tamper alerts use every configured channel available: email and webhook. Alerts are deduplicated while a condition remains active and cover missing database/config files, clock jumps of at least five minutes, an unavailable/stopped watchdog, and dashboard login lockouts after repeated failures.
 
 The **Today** and **History** tabs include a **Show foreground/background breakdown** checkbox. When enabled, charts use stacked foreground and background segments and tables show Foreground, Background, and Total columns. If an opted-in background app becomes the accepted foreground app, that interval is classified only as foreground and is never double-counted.
 
@@ -279,14 +297,14 @@ Once installed, the `GameHost` service runs under the SYSTEM account and automat
 
 | Tab | Description |
 |-----|-------------|
-| **Live** | Currently active app, quick actions (pause, resume, block all, extend time) |
+| **Live** | Currently active app, tracking diagnostics, quick actions (pause, resume, block all, extend time) |
 | **Today** | Bar chart and table of today's total usage, with optional foreground/background breakdown |
 | **History** | Historical totals and foreground/background breakdown with filters, charts, and stats (7/14/30/90 days or custom range) |
 | **Limits** | One combined table with per-process background/overlay checkboxes, optional daily limits, bonus time, status, and app management |
 | **Discover** | Scan system for installed games/apps, add them with default limit |
 | **Schedule** | Time‑based allowed hours rules per app |
 | **Logs** | Real‑time event log with filtering |
-| **Settings** | Kill delay, language, dashboard hotkey, auto-start, webhook, email, app update, admin password, backup/restore, health |
+| **Settings** | Kill delay, optional idle suspension, language, dashboard hotkey, auto-start, webhook, email, app update, admin password, backup/restore, health |
 
 **Admin password:** On first setup, create it from the trusted local dashboard on the child PC. Remote browsers are then redirected to `login.html` and must authenticate before dashboard assets are served. The authenticated session is stored in an HTTP-only, SameSite cookie. Use **Settings → Logout** to clear it. The password also protects dashboard changes (pause, resume, reset, kill, settings edits) and shutdown.
 
@@ -393,6 +411,12 @@ A: No. It counts whenever the configured process is running. This avoids applica
 
 **Q: Can background tracking cause an application to reach its daily limit while minimized?**
 A: Yes. Background-counted time uses the same daily usage total and limit enforcement as foreground time. Close the application when it is not being used, increase its limit, or disable background tracking.
+
+**Q: Why is a running app not accumulating time?**
+A: Open **Live → Tracking Diagnostics**. It shows whether the process is foreground, allowed in background, paused by the lock screen/idle setting, or simply running without background tracking enabled.
+
+**Q: Does tracking continue while Windows is locked or the PC is idle?**
+A: It always pauses while Windows is locked. Idle pausing is optional and disabled by default; enable it and choose a threshold in **Settings** if desired. Be cautious on PCs used with controllers, videos, or voice calls because those activities may not reset the Windows keyboard/mouse idle timer.
 
 **Q: How do I set up email notifications?**
 A: Enable 2FA on your Gmail account, generate an [App Password](https://support.google.com/accounts/answer/185833), and enter your Gmail address and the app password in **Settings → Email Notifications & Control**. See the [Email control](#email-control-optional) section for all commands.

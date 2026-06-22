@@ -15,12 +15,16 @@ public class WindowTracker : IDisposable
     private long _pendingSinceTick;
     private bool _pendingHadRecentInput;
     private IntPtr _lastIgnoredWindowHandle;
+    private volatile bool _pauseWhenIdle;
+    private volatile int _idleThresholdMinutes = 10;
 
     private static readonly long OverlayFocusDelayMs = 1500;
 
     public string? CurrentAppName { get; private set; }
     public string? CurrentProcessName { get; private set; }
     public IntPtr CurrentWindowHandle { get; private set; }
+    public bool PauseWhenIdle => _pauseWhenIdle;
+    public int IdleThresholdMinutes => _idleThresholdMinutes;
 
     public event Action<string, string>? OnActiveWindowChanged;
 
@@ -59,11 +63,67 @@ public class WindowTracker : IDisposable
 
     public string? GetProcessNameForApp(string appName)
     {
+        return GetProcessNamesForApp(appName).FirstOrDefault();
+    }
+
+    public void ConfigureIdleTracking(bool pauseWhenIdle, int idleThresholdMinutes)
+    {
+        _pauseWhenIdle = pauseWhenIdle;
+        _idleThresholdMinutes = Math.Clamp(idleThresholdMinutes, 1, 240);
+    }
+
+    public TimeSpan GetIdleDuration()
+    {
+        var info = new NativeMethods.LASTINPUTINFO
+        {
+            cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.LASTINPUTINFO>()
+        };
+        if (!NativeMethods.GetLastInputInfo(ref info))
+            return TimeSpan.Zero;
+        var now = unchecked((uint)Environment.TickCount);
+        return TimeSpan.FromMilliseconds(unchecked(now - info.dwTime));
+    }
+
+    public bool IsDesktopLocked()
+    {
+        var desktop = NativeMethods.OpenInputDesktop(0, false, NativeMethods.DESKTOP_SWITCHDESKTOP);
+        if (desktop == IntPtr.Zero)
+            return true;
+        NativeMethods.CloseDesktop(desktop);
+        return false;
+    }
+
+    public bool IsUsageTrackingSuspended(out string reason)
+    {
+        if (IsDesktopLocked())
+        {
+            reason = "locked";
+            return true;
+        }
+        if (_pauseWhenIdle && GetIdleDuration() >= TimeSpan.FromMinutes(_idleThresholdMinutes))
+        {
+            reason = "idle";
+            return true;
+        }
+        reason = "active";
+        return false;
+    }
+
+    public string[] GetProcessNamesForApp(string appName)
+    {
         lock (_sync)
             return _knownApps
                 .Where(kvp => kvp.Value.Equals(appName, StringComparison.OrdinalIgnoreCase))
                 .Select(kvp => kvp.Key)
-                .FirstOrDefault();
+                .ToArray();
+    }
+
+    public string[] GetRunningProcessNamesForApp(string appName)
+    {
+        var running = GetRunningProcessNameSnapshot();
+        return GetProcessNamesForApp(appName)
+            .Where(processName => running.Contains(NormalizeProcessName(processName)))
+            .ToArray();
     }
 
     public void Start(int intervalMs = 1000)
@@ -228,6 +288,47 @@ public class WindowTracker : IDisposable
             .ToList();
     }
 
+    public IReadOnlyList<TrackingDiagnostic> GetTrackingDiagnostics()
+    {
+        List<(string ProcessName, string AppName, AppTrackingPolicy Policy)> configured;
+        lock (_sync)
+            configured = _knownApps
+                .Select(kvp => (
+                    kvp.Key,
+                    kvp.Value,
+                    _trackingPolicies.TryGetValue(kvp.Key, out var policy) ? policy : new AppTrackingPolicy()))
+                .ToList();
+
+        var running = GetRunningProcessNameSnapshot();
+        var suspended = IsUsageTrackingSuspended(out var suspensionReason);
+        return configured
+            .Select(item =>
+            {
+                var isRunning = running.Contains(NormalizeProcessName(item.ProcessName));
+                var isForeground = isRunning && item.ProcessName.Equals(CurrentProcessName, StringComparison.OrdinalIgnoreCase);
+                var state = suspended && isRunning
+                    ? suspensionReason
+                    : isForeground
+                        ? "foreground"
+                        : isRunning && item.Policy.CountInBackground
+                            ? "background"
+                            : isRunning ? "running_not_counted" : "not_running";
+                return new TrackingDiagnostic(
+                    item.AppName,
+                    item.ProcessName,
+                    isRunning,
+                    isForeground,
+                    item.Policy.CountInBackground,
+                    item.Policy.IgnoreOverlayFocus,
+                    state);
+            })
+            .OrderByDescending(item => item.IsForeground)
+            .ThenByDescending(item => item.IsRunning)
+            .ThenBy(item => item.AppName)
+            .ThenBy(item => item.ProcessName)
+            .ToList();
+    }
+
     public bool IsProcessRunning(string processName)
     {
         try
@@ -289,3 +390,12 @@ public class WindowTracker : IDisposable
 public readonly record struct AppTrackingPolicy(
     bool CountInBackground = false,
     bool IgnoreOverlayFocus = false);
+
+public readonly record struct TrackingDiagnostic(
+    string AppName,
+    string ProcessName,
+    bool IsRunning,
+    bool IsForeground,
+    bool CountInBackground,
+    bool IgnoreOverlayFocus,
+    string State);

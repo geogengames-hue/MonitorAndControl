@@ -15,6 +15,12 @@ internal static class NativeMethods
     internal static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
 
     [DllImport("user32.dll", SetLastError = true)]
+    internal static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool CloseDesktop(IntPtr hDesktop);
+
+    [DllImport("user32.dll", SetLastError = true)]
     internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -52,6 +58,7 @@ internal static class NativeMethods
     internal const uint MOD_SHIFT = 0x0004;
     internal const uint MOD_WIN = 0x0008;
     internal const int WM_CLOSE = 0x0010;
+    internal const uint DESKTOP_SWITCHDESKTOP = 0x0100;
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct LASTINPUTINFO

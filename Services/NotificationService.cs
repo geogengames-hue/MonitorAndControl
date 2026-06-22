@@ -93,6 +93,17 @@ public class NotificationService : IDisposable
         });
     }
 
+    public async Task NotifySystemAsync(string eventType, string message)
+    {
+        await FireWebhook(eventType, "System", new
+        {
+            type = eventType,
+            app = "System",
+            message,
+            timestamp = DateTime.Now
+        });
+    }
+
     private async Task<string?> GetWebhookUrlAsync()
     {
         if ((DateTime.UtcNow - _lastUrlCheck).TotalSeconds > 30)

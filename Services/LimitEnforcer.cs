@@ -67,14 +67,14 @@ public class LimitEnforcer
         }
 
         // If this app was already killed today for exceeding its limit, block immediately
-        if (_exceededToday.ContainsKey(app) && IsProcessRunning(proc))
+        if (_exceededToday.ContainsKey(app) && _tracker.IsProcessRunning(proc))
         {
             KillAppProcesses(app);
             OnAppKilled?.Invoke(app);
         }
 
         // Child closed and reopened app during countdown - kill immediately.
-        if (!_exceededToday.ContainsKey(app) && _activeCountdowns.ContainsKey(app.ToLowerInvariant()) && IsProcessRunning(proc))
+        if (!_exceededToday.ContainsKey(app) && _activeCountdowns.ContainsKey(app.ToLowerInvariant()) && _tracker.IsProcessRunning(proc))
         {
             CancelCountdown(app);
             _exceededToday[app] = today;
@@ -129,8 +129,7 @@ public class LimitEnforcer
             {
                 if (!_activeCountdowns.ContainsKey(key))
                 {
-                    var procName = _tracker.GetProcessNameForApp(appName) ?? appName;
-                    if (IsProcessRunning(procName))
+                    if (IsAnyAppProcessRunning(appName))
                     {
                         Logger.Instance.Info($"Re-kill exceeded app: {appName}");
                         KillAppProcesses(appName);
@@ -150,7 +149,9 @@ public class LimitEnforcer
         var delay = await _db.GetKillDelayAsync();
         var cts = new CancellationTokenSource();
         var key = appName.ToLowerInvariant();
-        var procName = _tracker.GetProcessNameForApp(appName) ?? appName;
+        var procName = _tracker.GetRunningProcessNamesForApp(appName).FirstOrDefault()
+            ?? _tracker.GetProcessNameForApp(appName)
+            ?? appName;
 
         if (!_activeCountdowns.TryAdd(key, cts))
             return;
@@ -242,13 +243,24 @@ public class LimitEnforcer
     {
         try
         {
-            var procName = _tracker.GetProcessNameForApp(appName) ?? appName;
-            KillProcessByName(procName);
+            var processNames = _tracker.GetProcessNamesForApp(appName);
+            if (processNames.Length == 0)
+                processNames = new[] { appName };
+            foreach (var processName in processNames)
+                KillProcessByName(processName);
         }
         catch (Exception ex)
         {
             Logger.Instance.Error($"Failed to kill app processes for {appName}: {ex.Message}");
         }
+    }
+
+    private bool IsAnyAppProcessRunning(string appName)
+    {
+        var processNames = _tracker.GetProcessNamesForApp(appName);
+        return processNames.Length > 0
+            ? _tracker.GetRunningProcessNamesForApp(appName).Length > 0
+            : _tracker.IsProcessRunning(appName);
     }
 
     private void KillProcessByName(string processName)
@@ -276,13 +288,4 @@ public class LimitEnforcer
         }
     }
 
-    private bool IsProcessRunning(string processName)
-    {
-        try
-        {
-            var name = Path.GetFileNameWithoutExtension(processName);
-            return Process.GetProcessesByName(name).Length > 0;
-        }
-        catch { return false; }
-    }
 }

@@ -20,6 +20,11 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Defaults are imported only on first database creation", TestDefaultsImportedOnlyOnce),
     ("Existing empty databases do not reimport defaults", TestExistingDatabaseDoesNotReimportDefaults),
     ("Usage database replaces backup-managed config tables", TestUsageDatabaseReplacesConfigTables),
+    ("Window tracker returns every process mapped to an app", TestWindowTrackerReturnsAllAppProcesses),
+    ("Window tracker validates idle tracking settings", TestWindowTrackerIdleSettings),
+    ("Daily summaries calculate latest missed delivery", TestDailySummaryDueTime),
+    ("Weekly summaries calculate latest missed delivery", TestWeeklySummaryDueTime),
+    ("Monthly summaries clamp delivery days", TestMonthlySummaryDueTime),
     ("Limit enforcer rehydrates exceeded apps", TestLimitEnforcerRehydratesExceededApps),
     ("Limit enforcer can pause and resume enforcement", TestLimitEnforcerPauseResume)
 };
@@ -346,6 +351,56 @@ static Task TestLimitEnforcerPauseResume()
     AssertFalse(enforcer.IsPaused, "Enforcement should resume.");
 
     tracker.Dispose();
+    return Task.CompletedTask;
+}
+
+static Task TestWindowTrackerReturnsAllAppProcesses()
+{
+    using var tracker = new WindowTracker();
+    tracker.AddKnownApp("game-launcher.exe", "Game");
+    tracker.AddKnownApp("game-client.exe", "Game");
+    tracker.AddKnownApp("other.exe", "Other");
+
+    var processes = tracker.GetProcessNamesForApp("game");
+    AssertEqual(2, processes.Length, "Every process mapped to the same app should be returned.");
+    AssertTrue(processes.Contains("game-launcher.exe"), "Expected launcher mapping.");
+    AssertTrue(processes.Contains("game-client.exe"), "Expected client mapping.");
+    return Task.CompletedTask;
+}
+
+static Task TestWindowTrackerIdleSettings()
+{
+    using var tracker = new WindowTracker();
+    tracker.ConfigureIdleTracking(true, 0);
+    AssertTrue(tracker.PauseWhenIdle, "Idle pausing should be enabled.");
+    AssertEqual(1, tracker.IdleThresholdMinutes, "Idle threshold should clamp to one minute.");
+    tracker.ConfigureIdleTracking(false, 500);
+    AssertFalse(tracker.PauseWhenIdle, "Idle pausing should be disableable.");
+    AssertEqual(240, tracker.IdleThresholdMinutes, "Idle threshold should clamp to 240 minutes.");
+    return Task.CompletedTask;
+}
+
+static Task TestDailySummaryDueTime()
+{
+    var due = ParentReportService.GetLatestDue(
+        new DateTime(2026, 6, 22, 17, 0, 0), "daily", TimeSpan.FromHours(18), 0, 1);
+    AssertEqual(new DateTime(2026, 6, 21, 18, 0, 0), due, "Expected yesterday's missed daily delivery.");
+    return Task.CompletedTask;
+}
+
+static Task TestWeeklySummaryDueTime()
+{
+    var due = ParentReportService.GetLatestDue(
+        new DateTime(2026, 6, 22, 17, 0, 0), "weekly", TimeSpan.FromHours(18), 0, 1);
+    AssertEqual(new DateTime(2026, 6, 21, 18, 0, 0), due, "Expected the latest Sunday delivery.");
+    return Task.CompletedTask;
+}
+
+static Task TestMonthlySummaryDueTime()
+{
+    var due = ParentReportService.GetLatestDue(
+        new DateTime(2026, 6, 22, 17, 0, 0), "monthly", TimeSpan.FromHours(18), 0, 31);
+    AssertEqual(new DateTime(2026, 5, 31, 18, 0, 0), due, "Expected the previous valid month-end delivery.");
     return Task.CompletedTask;
 }
 

@@ -26,6 +26,7 @@ internal static class Program
     private static SchedulerService? _scheduler;
     private static NotificationService? _notifier;
     private static EmailService? _emailService;
+    private static ParentReportService? _parentReportService;
     private static HiddenForm? _hiddenForm;
     private static CancellationTokenSource? _cts;
 
@@ -91,9 +92,7 @@ internal static class Program
 
     private static AppConfig LoadConfig()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-        if (!File.Exists(path))
-            path = "appsettings.json";
+        var path = GetConfigPath();
 
         if (File.Exists(path))
         {
@@ -103,6 +102,12 @@ internal static class Program
         }
         _cachedConfig = new AppConfig();
         return _cachedConfig;
+    }
+
+    private static string GetConfigPath()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        return File.Exists(path) ? path : Path.GetFullPath("appsettings.json");
     }
 
     private static void RegisterAutoStart()
@@ -365,6 +370,12 @@ internal static class Program
         return await _hiddenForm.UpdateHotKeyAsync(mods, vk);
     }
 
+    public static async Task ReloadParentReportingAsync()
+    {
+        if (_parentReportService != null)
+            await _parentReportService.ReloadAndCheckAsync();
+    }
+
     private static void StartServices(AppConfig config)
     {
         _tracker = new WindowTracker();
@@ -373,6 +384,11 @@ internal static class Program
         var mappings = _db!.GetAppMappingsAsync().GetAwaiter().GetResult();
         foreach (var m in mappings)
             _tracker.AddKnownApp(m.ProcessName, m.AppName, m.CountInBackground, m.IgnoreOverlayFocus);
+        var pauseWhenIdleText = _db.GetSettingAsync("PauseTrackingWhenIdle", "false").GetAwaiter().GetResult();
+        var idleThresholdText = _db.GetSettingAsync("IdleThresholdMinutes", "10").GetAwaiter().GetResult();
+        _tracker.ConfigureIdleTracking(
+            bool.TryParse(pauseWhenIdleText, out var pauseWhenIdle) && pauseWhenIdle,
+            int.TryParse(idleThresholdText, out var idleThresholdMinutes) ? idleThresholdMinutes : 10);
         _tracker.Start(config.PollIntervalMs);
 
         // Copy PopupHost to hidden appdata location
@@ -397,6 +413,9 @@ internal static class Program
         _emailService = new EmailService(_db!, _tracker!, _enforcer!, _scheduler!);
         _emailService.LoadSettingsAsync().GetAwaiter().GetResult();
         _emailService.StartPolling();
+        _parentReportService = new ParentReportService(_db!, _emailService, _notifier!, GetConfigPath());
+        DashboardServer.LoginLockoutDetected = _parentReportService.ReportLoginLockout;
+        _parentReportService.Start();
         _enforcer.OnBreachAlert += (app, delay, proc) => _ = _emailService.SendAlertAsync($"Limit Breach: {app}", $"{app} exceeded its daily limit. Closing in {delay}s.");
         _enforcer.OnAppKilled += (app) => _ = _emailService.SendAlertAsync($"App Closed: {app}", $"{app} was closed after exceeding its limit.");
         _enforcer.OnAppTerminatedBySchedule += (app) => _ = _emailService.SendAlertAsync($"Schedule Block: {app}", $"{app} was closed by schedule rule.");
@@ -662,6 +681,8 @@ internal static class Program
         Logger.Instance.Info("Monitor shutting down");
         _usageTracker?.Stop();
         _tracker?.Stop();
+        DashboardServer.LoginLockoutDetected = null;
+        _parentReportService?.Dispose();
         _emailService?.Dispose();
         await DashboardServer.StopAsync();
         _db?.Dispose();

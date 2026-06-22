@@ -34,6 +34,11 @@
         <div class="live-status" id="enforcement-status"></div>
       </div>
       <div class="live-card">
+        <div class="live-label">Tracking Diagnostics</div>
+        <div class="tracking-summary" id="tracking-summary"></div>
+        <div class="tracking-diagnostics" id="tracking-diagnostics"></div>
+      </div>
+      <div class="live-card">
         <div class="live-label">Quick Actions</div>
         <div class="quick-actions">
           <button id="action-pause-15" class="btn-secondary">Pause 15m</button>
@@ -198,6 +203,12 @@
         <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
           <input type="checkbox" id="set-auto-start" style="width:auto"> Auto-start with Windows
         </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:12px">
+          <input type="checkbox" id="set-pause-idle" style="width:auto"> Pause all usage tracking when idle
+        </label>
+        <label>Idle threshold (minutes)</label>
+        <input type="number" id="set-idle-threshold" min="1" max="240" value="10">
+        <p style="font-size:12px;color:#888">Tracking always pauses while Windows is locked. Idle pausing is optional and disabled by default.</p>
         <label>Show warning on child's PC</label>
         <select id="set-show-warning"><option value="true">Yes</option><option value="false">No</option></select>
         <label>Warning message on child's PC</label>
@@ -250,6 +261,24 @@
         <button id="settings-email-start-test" class="btn-secondary">Test App Start Email</button>
         <button id="settings-email-start-reset" class="btn-secondary">Reset App Start Emails</button>
         <span id="email-test-result" style="margin-left:10px;font-size:13px"></span>
+        <hr>
+        <h3>Scheduled Reports &amp; Security Alerts</h3>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
+          <input type="checkbox" id="set-summary-enabled" style="width:auto"> Send scheduled parent usage summary
+        </label>
+        <label>Summary frequency</label>
+        <select id="set-summary-frequency"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
+        <label>Delivery time</label>
+        <input type="time" id="set-summary-time" value="18:00">
+        <label>Weekly delivery day</label>
+        <select id="set-summary-weekly-day"><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select>
+        <label>Monthly delivery day</label>
+        <input type="number" id="set-summary-monthly-day" min="1" max="31" value="1">
+        <p style="font-size:12px;color:#888">If the computer is off at delivery time, the latest missed report is sent once after the next startup. Email credentials must be configured above.</p>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:10px">
+          <input type="checkbox" id="set-tamper-alerts" style="width:auto"> Send tamper alerts by configured email and webhook
+        </label>
+        <p style="font-size:12px;color:#888">Alerts cover database/config deletion, major clock changes, watchdog failure, and repeated dashboard login failures.</p>
         <hr>
         <h3>Backup &amp; Restore</h3>
         <p style="font-size:12px;color:#888">Exports app mappings, limits, schedules, and non-sensitive settings. Admin passwords and email app passwords are not included.</p>

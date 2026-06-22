@@ -31,6 +31,7 @@ public class DashboardServer
     private const int MaxFailedLoginAttempts = 5;
     private static readonly TimeSpan AuthLockoutDuration = TimeSpan.FromMinutes(5);
     private const string AdminCookieName = "DeviceMonAdminToken";
+    public static Action<string>? LoginLockoutDetected { get; set; }
 
     public static async Task StartAsync(UsageDatabase db, WindowTracker tracker, LimitEnforcer enforcer,
         SchedulerService scheduler, EmailService emailService, AppConfig config)
@@ -300,14 +301,20 @@ public class DashboardServer
 
         app.MapGet("/api/live", () =>
         {
-            var countdownApps = new List<object>();
+            var trackingSuspended = tracker.IsUsageTrackingSuspended(out var trackingState);
             return Results.Json(new
             {
                 currentApp = tracker.CurrentAppName ?? "None",
                 currentProcess = tracker.CurrentProcessName ?? "None",
                 isTracking = tracker.CurrentAppName != null,
                 enforcementPaused = enforcer.IsPaused,
-                pausedUntil = enforcer.PausedUntil
+                pausedUntil = enforcer.PausedUntil,
+                trackingSuspended,
+                trackingState,
+                idleSeconds = (long)tracker.GetIdleDuration().TotalSeconds,
+                pauseWhenIdle = tracker.PauseWhenIdle,
+                idleThresholdMinutes = tracker.IdleThresholdMinutes,
+                diagnostics = tracker.GetTrackingDiagnostics()
             }, JsonOpts);
         });
 
@@ -566,6 +573,14 @@ public class DashboardServer
             var emailControlEnabled = await db.GetSettingAsync("EmailControlEnabled", "false");
             var emailDeviceId = await db.GetSettingAsync("EmailDeviceId", Environment.MachineName);
             var uiLanguage = await db.GetSettingAsync("UiLanguage", "en");
+            var pauseTrackingWhenIdle = await db.GetSettingAsync("PauseTrackingWhenIdle", "false");
+            var idleThresholdMinutes = await db.GetSettingAsync("IdleThresholdMinutes", "10");
+            var summaryEnabled = await db.GetSettingAsync("SummaryEnabled", "false");
+            var summaryFrequency = await db.GetSettingAsync("SummaryFrequency", "weekly");
+            var summaryTime = await db.GetSettingAsync("SummaryTime", "18:00");
+            var summaryWeeklyDay = await db.GetSettingAsync("SummaryWeeklyDay", "0");
+            var summaryMonthlyDay = await db.GetSettingAsync("SummaryMonthlyDay", "1");
+            var tamperAlertsEnabled = await db.GetSettingAsync("TamperAlertsEnabled", "false");
             var config = Program.GetConfig();
             var (hotKeyModifiers, hotKeyKey) = await Program.GetDashboardHotKeySettings(config);
             var hostname = Environment.MachineName;
@@ -589,6 +604,14 @@ public class DashboardServer
                 emailControlEnabled = emailControlEnabled == "true",
                 emailDeviceId = EmailService.NormalizeDeviceId(emailDeviceId),
                 uiLanguage,
+                pauseTrackingWhenIdle = pauseTrackingWhenIdle == "true",
+                idleThresholdMinutes = int.TryParse(idleThresholdMinutes, out var idleMinutes) ? idleMinutes : 10,
+                summaryEnabled = summaryEnabled == "true",
+                summaryFrequency,
+                summaryTime,
+                summaryWeeklyDay = int.TryParse(summaryWeeklyDay, out var weeklyDay) ? weeklyDay : 0,
+                summaryMonthlyDay = int.TryParse(summaryMonthlyDay, out var monthlyDay) ? monthlyDay : 1,
+                tamperAlertsEnabled = tamperAlertsEnabled == "true",
                 hotKeyModifiers,
                 hotKeyKey,
                 hotKey = $"{hotKeyModifiers}+{hotKeyKey}",
@@ -669,6 +692,50 @@ public class DashboardServer
                     return Results.BadRequest(new { error = "Unsupported language." });
                 await db.SetSettingAsync("UiLanguage", language);
             }
+            if (root.TryGetProperty("pauseTrackingWhenIdle", out var pauseIdle))
+                await db.SetSettingAsync("PauseTrackingWhenIdle", pauseIdle.GetBoolean() ? "true" : "false");
+            if (root.TryGetProperty("idleThresholdMinutes", out var idleThreshold))
+            {
+                var minutes = idleThreshold.GetInt32();
+                if (minutes is < 1 or > 240)
+                    return Results.BadRequest(new { error = "Idle threshold must be between 1 and 240 minutes." });
+                await db.SetSettingAsync("IdleThresholdMinutes", minutes.ToString());
+            }
+            var savedPauseWhenIdle = await db.GetSettingAsync("PauseTrackingWhenIdle", "false");
+            var savedIdleThreshold = await db.GetSettingAsync("IdleThresholdMinutes", "10");
+            tracker.ConfigureIdleTracking(
+                savedPauseWhenIdle == "true",
+                int.TryParse(savedIdleThreshold, out var savedIdleMinutes) ? savedIdleMinutes : 10);
+            if (root.TryGetProperty("summaryEnabled", out var summaryEnabled))
+                await db.SetSettingAsync("SummaryEnabled", summaryEnabled.GetBoolean() ? "true" : "false");
+            if (root.TryGetProperty("summaryFrequency", out var summaryFrequency))
+            {
+                var frequency = Clean(summaryFrequency.GetString()).ToLowerInvariant();
+                if (frequency is not ("daily" or "weekly" or "monthly"))
+                    return Results.BadRequest(new { error = "Summary frequency must be daily, weekly, or monthly." });
+                await db.SetSettingAsync("SummaryFrequency", frequency);
+            }
+            if (root.TryGetProperty("summaryTime", out var summaryTime))
+            {
+                var value = Clean(summaryTime.GetString());
+                if (!TimeSpan.TryParse(value, out var parsedTime) || parsedTime < TimeSpan.Zero || parsedTime >= TimeSpan.FromDays(1))
+                    return Results.BadRequest(new { error = "Invalid summary time." });
+                await db.SetSettingAsync("SummaryTime", value);
+            }
+            if (root.TryGetProperty("summaryWeeklyDay", out var summaryWeeklyDay))
+            {
+                var value = summaryWeeklyDay.GetInt32();
+                if (value is < 0 or > 6) return Results.BadRequest(new { error = "Invalid weekly summary day." });
+                await db.SetSettingAsync("SummaryWeeklyDay", value.ToString());
+            }
+            if (root.TryGetProperty("summaryMonthlyDay", out var summaryMonthlyDay))
+            {
+                var value = summaryMonthlyDay.GetInt32();
+                if (value is < 1 or > 31) return Results.BadRequest(new { error = "Invalid monthly summary day." });
+                await db.SetSettingAsync("SummaryMonthlyDay", value.ToString());
+            }
+            if (root.TryGetProperty("tamperAlertsEnabled", out var tamperEnabled))
+                await db.SetSettingAsync("TamperAlertsEnabled", tamperEnabled.GetBoolean() ? "true" : "false");
             if (root.TryGetProperty("hotKeyModifiers", out var hkm) || root.TryGetProperty("hotKeyKey", out var hkk))
             {
                 var config = Program.GetConfig();
@@ -694,6 +761,7 @@ public class DashboardServer
             // Always reload email config after save
             await emailService.LoadSettingsAsync();
             if (emailService.IsEnabled) emailService.StartPolling(); else emailService.StopPolling();
+            await Program.ReloadParentReportingAsync();
             return Results.Ok();
         });
 
@@ -871,8 +939,14 @@ public class DashboardServer
             tracker.LoadKnownApps(Program.GetConfig().KnownApps);
             foreach (var mapping in await db.GetAppMappingsAsync())
                 tracker.AddKnownApp(mapping.ProcessName, mapping.AppName, mapping.CountInBackground, mapping.IgnoreOverlayFocus);
+            var importedPauseWhenIdle = await db.GetSettingAsync("PauseTrackingWhenIdle", "false");
+            var importedIdleThreshold = await db.GetSettingAsync("IdleThresholdMinutes", "10");
+            tracker.ConfigureIdleTracking(
+                importedPauseWhenIdle == "true",
+                int.TryParse(importedIdleThreshold, out var importedIdleMinutes) ? importedIdleMinutes : 10);
             await emailService.LoadSettingsAsync();
             if (emailService.IsEnabled) emailService.StartPolling(); else emailService.StopPolling();
+            await Program.ReloadParentReportingAsync();
 
             return Results.Ok(new { status = "imported" });
         });
@@ -990,6 +1064,7 @@ public class DashboardServer
     private static void RegisterFailedLogin(HttpContext ctx)
     {
         var key = GetAuthAttemptKey(ctx);
+        var lockoutTriggered = false;
         AuthAttempts.AddOrUpdate(
             key,
             _ => new AuthAttemptState { FailedCount = 1 },
@@ -998,11 +1073,14 @@ public class DashboardServer
                 state.FailedCount++;
                 if (state.FailedCount >= MaxFailedLoginAttempts)
                 {
+                    lockoutTriggered = state.LockedUntil <= DateTimeOffset.Now;
                     state.LockedUntil = DateTimeOffset.Now.Add(AuthLockoutDuration);
                     Logger.Instance.Warn($"Dashboard login temporarily locked for {key}");
                 }
                 return state;
             });
+        if (lockoutTriggered)
+            LoginLockoutDetected?.Invoke(key);
     }
 
     private static void ResetLoginRateLimit(HttpContext ctx)
@@ -1179,6 +1257,14 @@ public class DashboardServer
         "EmailControlEnabled",
         "EmailDeviceId",
         "UiLanguage",
+        "PauseTrackingWhenIdle",
+        "IdleThresholdMinutes",
+        "SummaryEnabled",
+        "SummaryFrequency",
+        "SummaryTime",
+        "SummaryWeeklyDay",
+        "SummaryMonthlyDay",
+        "TamperAlertsEnabled",
         "HotKeyModifiers",
         "HotKeyKey"
     };
@@ -1235,11 +1321,34 @@ public class DashboardServer
                         return "Backup contains an invalid kill delay.";
                     break;
                 case "ShowWarning":
+                case "PauseTrackingWhenIdle":
+                case "SummaryEnabled":
+                case "TamperAlertsEnabled":
                 case "EmailNotifyEnabled":
                 case "EmailStartNotifyEnabled":
                 case "EmailControlEnabled":
                     if (!bool.TryParse(cleanValue, out _))
                         return $"Backup contains an invalid boolean setting: {key}.";
+                    break;
+                case "IdleThresholdMinutes":
+                    if (!int.TryParse(cleanValue, out var idleMinutes) || idleMinutes is < 1 or > 240)
+                        return "Backup contains an invalid idle threshold.";
+                    break;
+                case "SummaryFrequency":
+                    if (cleanValue is not ("daily" or "weekly" or "monthly"))
+                        return "Backup contains an invalid summary frequency.";
+                    break;
+                case "SummaryTime":
+                    if (!TimeSpan.TryParse(cleanValue, out var summaryTime) || summaryTime < TimeSpan.Zero || summaryTime >= TimeSpan.FromDays(1))
+                        return "Backup contains an invalid summary time.";
+                    break;
+                case "SummaryWeeklyDay":
+                    if (!int.TryParse(cleanValue, out var weeklyDay) || weeklyDay is < 0 or > 6)
+                        return "Backup contains an invalid weekly summary day.";
+                    break;
+                case "SummaryMonthlyDay":
+                    if (!int.TryParse(cleanValue, out var monthlyDay) || monthlyDay is < 1 or > 31)
+                        return "Backup contains an invalid monthly summary day.";
                     break;
                 case "EmailDeviceId":
                     var normalizedDeviceId = EmailService.NormalizeDeviceId(cleanValue);

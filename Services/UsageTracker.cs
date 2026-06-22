@@ -71,6 +71,9 @@ public class UsageTracker : IDisposable
         if (elapsedMs is < 250 or > 5000)
             return;
 
+        if (_windowTracker.IsUsageTrackingSuspended(out _))
+            return;
+
         var activeApps = new Dictionary<string, ActiveUsage>(StringComparer.OrdinalIgnoreCase);
         foreach (var backgroundApp in _windowTracker.GetRunningBackgroundApps())
             activeApps[backgroundApp.AppName] = new ActiveUsage(backgroundApp.ProcessName, IsForeground: false);
