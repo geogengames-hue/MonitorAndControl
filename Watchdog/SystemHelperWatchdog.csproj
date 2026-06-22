@@ -11,6 +11,9 @@
     <Product>GameHost</Product>
     <Description>Watchdog service for DeviceMon</Description>
     <AssemblyTitle>GameHost</AssemblyTitle>
+    <Version>1.2.0</Version>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
+    <FileVersion>1.2.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
