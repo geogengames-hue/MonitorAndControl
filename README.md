@@ -122,7 +122,9 @@ Both features are disabled by default and configured under **Settings → Schedu
 
 If the computer is off at the scheduled time, the app sends only the latest missed period after the next startup. The due period is marked complete only after email delivery succeeds. Summary email requires Gmail credentials but does not require breach-notification email to be enabled.
 
-Tamper alerts use every configured channel available: email and webhook. Alerts are deduplicated while a condition remains active and cover missing database/config files, clock jumps of at least five minutes, an unavailable/stopped watchdog, and dashboard login lockouts after repeated failures.
+Tamper alerts use every configured channel available: email and webhook. Alerts are deduplicated while a condition remains active and cover missing database/config files, clock jumps of at least five minutes, an unavailable/stopped watchdog, watchdog recovery after DeviceMon was terminated, and dashboard login lockouts after repeated failures. Watchdog-restart delivery is attempted three times; its marker is retained after repeated failure so it can be retried after the next startup. Routine app-start emails are suppressed for two minutes after watchdog recovery so they do not obscure the tamper event.
+
+Limit notification emails have separate switches for **limit reached** (the countdown begins) and **app closed** (enforcement completed). Webhooks already use distinct `limit_breach` and `app_killed` event types. Existing installations migrate the former combined email switch to both new switches until the parent saves new preferences.
 
 The **Today** and **History** tabs include a **Show foreground/background breakdown** checkbox. When enabled, charts use stacked foreground and background segments and tables show Foreground, Background, and Total columns. If an opted-in background app becomes the accepted foreground app, that interval is classified only as foreground and is never double-counted.
 

@@ -35,6 +35,15 @@ public sealed class ParentReportService : IDisposable
         "login_lockout",
         $"Repeated failed dashboard logins from {source} triggered a temporary lockout.");
 
+    public async Task<bool> ReportWatchdogRestartAsync(string details)
+    {
+        if ((await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true")
+            return true;
+        return await SendTamperAlertAsync(
+            "watchdog_restart",
+            $"DeviceMon was stopped and restarted by the GameHost watchdog.\n{details}");
+    }
+
     private async void Check(object? state)
     {
         if (Interlocked.Exchange(ref _checking, 1) != 0) return;
@@ -145,15 +154,20 @@ public sealed class ParentReportService : IDisposable
     private async Task SetConditionAsync(string key, bool active, string message)
     {
         if (!active) { _activeTamperConditions.Remove(key); return; }
-        if (_activeTamperConditions.Add(key)) await SendTamperAlertAsync(key, message);
+        if (_activeTamperConditions.Contains(key)) return;
+        if (await SendTamperAlertAsync(key, message))
+            _activeTamperConditions.Add(key);
     }
 
-    private async Task SendTamperAlertAsync(string type, string message)
+    private async Task<bool> SendTamperAlertAsync(string type, string message)
     {
-        if ((await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true") return;
+        if ((await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true") return false;
         Logger.Instance.Warn($"Tamper alert: {message}");
-        await _email.SendSystemEmailAsync($"Tamper Alert: {type}", message);
-        await _notifications.NotifySystemAsync("tamper_alert", message);
+        var emailError = await _email.SendSystemEmailAsync($"Tamper Alert: {type}", message);
+        var webhookSent = await _notifications.NotifySystemAsync(type, message);
+        if (emailError != null && !webhookSent)
+            Logger.Instance.Error($"Tamper alert delivery failed: {emailError}");
+        return emailError == null || webhookSent;
     }
 
     private static string Format(long seconds) => TimeSpan.FromSeconds(seconds) is var value

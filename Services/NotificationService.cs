@@ -59,26 +59,28 @@ public class NotificationService : IDisposable
         });
     }
 
-    private async Task FireWebhook(string eventType, string appName, object payload)
+    private async Task<bool> FireWebhook(string eventType, string appName, object payload)
     {
         try
         {
             var url = await GetWebhookUrlAsync();
-            if (string.IsNullOrWhiteSpace(url)) return;
+            if (string.IsNullOrWhiteSpace(url)) return false;
 
             var json = JsonSerializer.Serialize(payload, JsonOpts);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await _http.PostAsync(url, content);
+            using var response = await _http.PostAsync(url, content);
             if (!response.IsSuccessStatusCode)
             {
                 System.Diagnostics.Debug.WriteLine(
                     $"Webhook failed ({response.StatusCode}) for event {eventType}");
             }
+            return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Webhook error: {ex.Message}");
+            return false;
         }
     }
 
@@ -93,9 +95,9 @@ public class NotificationService : IDisposable
         });
     }
 
-    public async Task NotifySystemAsync(string eventType, string message)
+    public async Task<bool> NotifySystemAsync(string eventType, string message)
     {
-        await FireWebhook(eventType, "System", new
+        return await FireWebhook(eventType, "System", new
         {
             type = eventType,
             app = "System",

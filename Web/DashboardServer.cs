@@ -663,6 +663,8 @@ public class DashboardServer
             var emailAddress = await db.GetSettingAsync("EmailAddress", "");
             var emailAllowedSender = await db.GetSettingAsync("EmailAllowedSender", emailAddress);
             var emailNotifyEnabled = await db.GetSettingAsync("EmailNotifyEnabled", "false");
+            var emailBreachNotifyEnabled = await db.GetSettingAsync("EmailBreachNotifyEnabled", emailNotifyEnabled);
+            var emailKillNotifyEnabled = await db.GetSettingAsync("EmailKillNotifyEnabled", emailNotifyEnabled);
             var emailStartNotifyEnabled = await db.GetSettingAsync("EmailStartNotifyEnabled", "false");
             var emailControlEnabled = await db.GetSettingAsync("EmailControlEnabled", "false");
             var emailDeviceId = await db.GetSettingAsync("EmailDeviceId", Environment.MachineName);
@@ -694,6 +696,8 @@ public class DashboardServer
                 localIps,
                 autoStart = Program.GetAutoStart(),
                 emailNotifyEnabled = emailNotifyEnabled == "true",
+                emailBreachNotifyEnabled = emailBreachNotifyEnabled == "true",
+                emailKillNotifyEnabled = emailKillNotifyEnabled == "true",
                 emailStartNotifyEnabled = emailStartNotifyEnabled == "true",
                 emailControlEnabled = emailControlEnabled == "true",
                 emailDeviceId = EmailService.NormalizeDeviceId(emailDeviceId),
@@ -767,7 +771,18 @@ public class DashboardServer
                 await db.SetSettingAsync("EmailAllowedSender", allowedSender);
             }
             if (root.TryGetProperty("emailNotifyEnabled", out var en))
-                await db.SetSettingAsync("EmailNotifyEnabled", en.GetBoolean() ? "true" : "false");
+            {
+                var legacyValue = en.GetBoolean() ? "true" : "false";
+                await db.SetSettingAsync("EmailNotifyEnabled", legacyValue);
+                if (!root.TryGetProperty("emailBreachNotifyEnabled", out _))
+                    await db.SetSettingAsync("EmailBreachNotifyEnabled", legacyValue);
+                if (!root.TryGetProperty("emailKillNotifyEnabled", out _))
+                    await db.SetSettingAsync("EmailKillNotifyEnabled", legacyValue);
+            }
+            if (root.TryGetProperty("emailBreachNotifyEnabled", out var breachNotify))
+                await db.SetSettingAsync("EmailBreachNotifyEnabled", breachNotify.GetBoolean() ? "true" : "false");
+            if (root.TryGetProperty("emailKillNotifyEnabled", out var killNotify))
+                await db.SetSettingAsync("EmailKillNotifyEnabled", killNotify.GetBoolean() ? "true" : "false");
             if (root.TryGetProperty("emailStartNotifyEnabled", out var esn))
                 await db.SetSettingAsync("EmailStartNotifyEnabled", esn.GetBoolean() ? "true" : "false");
             if (root.TryGetProperty("emailControlEnabled", out var ec))
@@ -1366,6 +1381,8 @@ public class DashboardServer
         "EmailAddress",
         "EmailAllowedSender",
         "EmailNotifyEnabled",
+        "EmailBreachNotifyEnabled",
+        "EmailKillNotifyEnabled",
         "EmailStartNotifyEnabled",
         "EmailControlEnabled",
         "EmailDeviceId",
@@ -1451,6 +1468,8 @@ public class DashboardServer
                 case "SummaryEnabled":
                 case "TamperAlertsEnabled":
                 case "EmailNotifyEnabled":
+                case "EmailBreachNotifyEnabled":
+                case "EmailKillNotifyEnabled":
                 case "EmailStartNotifyEnabled":
                 case "EmailControlEnabled":
                     if (!bool.TryParse(cleanValue, out _))

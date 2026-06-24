@@ -26,6 +26,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Daily summaries calculate latest missed delivery", TestDailySummaryDueTime),
     ("Weekly summaries calculate latest missed delivery", TestWeeklySummaryDueTime),
     ("Monthly summaries clamp delivery days", TestMonthlySummaryDueTime),
+    ("Watchdog restart tamper delivery is retry-safe", TestWatchdogRestartTamperDelivery),
     ("Limit enforcer rehydrates exceeded apps", TestLimitEnforcerRehydratesExceededApps),
     ("Limit enforcer rehydrates exceeded groups", TestLimitEnforcerRehydratesExceededGroups),
     ("Limit enforcer blocks inactive group members without warnings", TestLimitEnforcerBlocksInactiveGroup),
@@ -522,6 +523,24 @@ static Task TestMonthlySummaryDueTime()
         new DateTime(2026, 6, 22, 17, 0, 0), "monthly", TimeSpan.FromHours(18), 0, 31);
     AssertEqual(new DateTime(2026, 5, 31, 18, 0, 0), due, "Expected the previous valid month-end delivery.");
     return Task.CompletedTask;
+}
+
+static async Task TestWatchdogRestartTamperDelivery()
+{
+    using var db = CreateTempDatabase();
+    using var tracker = new WindowTracker();
+    var enforcer = new LimitEnforcer(db, tracker);
+    var scheduler = new SchedulerService(db);
+    using var email = new EmailService(db, tracker, enforcer, scheduler);
+    using var notifications = new NotificationService(db);
+    using var reports = new ParentReportService(db, email, notifications, "missing-appsettings.json");
+
+    var disabledResult = await reports.ReportWatchdogRestartAsync("test marker");
+    AssertTrue(disabledResult, "A disabled tamper channel should consume the marker without retrying forever.");
+
+    await db.SetSettingAsync("TamperAlertsEnabled", "true");
+    var failedDelivery = await reports.ReportWatchdogRestartAsync("test marker");
+    AssertFalse(failedDelivery, "A configured tamper event with no delivery channel should retain the marker for retry.");
 }
 
 static ScheduleRule Rule(string day, string start, string end) => new()

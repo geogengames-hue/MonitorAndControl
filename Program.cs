@@ -416,9 +416,9 @@ internal static class Program
         _parentReportService = new ParentReportService(_db!, _emailService, _notifier!, GetConfigPath());
         DashboardServer.LoginLockoutDetected = _parentReportService.ReportLoginLockout;
         _parentReportService.Start();
-        _enforcer.OnBreachAlert += (app, delay, proc) => _ = _emailService.SendAlertAsync($"Limit Breach: {app}", $"{app} exceeded its daily limit. Closing in {delay}s.");
-        _enforcer.OnAppKilled += (app) => _ = _emailService.SendAlertAsync($"App Closed: {app}", $"{app} was closed after exceeding its limit.");
-        _enforcer.OnAppTerminatedBySchedule += (app) => _ = _emailService.SendAlertAsync($"Schedule Block: {app}", $"{app} was closed by schedule rule.");
+        _enforcer.OnBreachAlert += (app, delay, proc) => _ = _emailService.SendBreachAlertAsync($"Limit Breach: {app}", $"{app} exceeded its daily limit. Closing in {delay}s.");
+        _enforcer.OnAppKilled += (app) => _ = _emailService.SendKillAlertAsync($"App Closed: {app}", $"{app} was closed after exceeding its limit.");
+        _enforcer.OnAppTerminatedBySchedule += (app) => _ = _emailService.SendKillAlertAsync($"Schedule Block: {app}", $"{app} was closed by schedule rule.");
         _tracker.OnActiveWindowChanged += (app, proc) => _ = _emailService.NotifyTrackedAppStartedAsync(app, proc);
         _ = SendWatchdogRestartAlertAsync();
         _ = _enforcer.RehydrateExceededTodayAsync();
@@ -448,18 +448,25 @@ internal static class Program
     {
         try
         {
-            if (_emailService == null) return;
+            if (_emailService == null || _parentReportService == null) return;
             var marker = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                 "SystemHelper",
                 "watchdog-restart.marker");
             if (!File.Exists(marker)) return;
 
+            _emailService.SuppressStartAlertsFor(TimeSpan.FromMinutes(2));
             var markerText = await File.ReadAllTextAsync(marker);
-            File.Delete(marker);
-            await _emailService.SendAlertAsync(
-                "Monitor Restarted by Watchdog",
-                $"The monitor was restarted by the watchdog on {Environment.MachineName}.\n{markerText}");
+            for (var attempt = 1; attempt <= 3; attempt++)
+            {
+                if (await _parentReportService.ReportWatchdogRestartAsync(markerText))
+                {
+                    File.Delete(marker);
+                    return;
+                }
+                if (attempt < 3) await Task.Delay(TimeSpan.FromSeconds(30));
+            }
+            Logger.Instance.Error("Watchdog restart alert could not be delivered after three attempts; marker retained for the next startup.");
         }
         catch (Exception ex)
         {

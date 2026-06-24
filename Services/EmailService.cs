@@ -22,10 +22,12 @@ public class EmailService : IDisposable
     private int _pollingInbox;
     private int _pollingStarts;
     private readonly object _startAlertDateSync = new();
-    private bool _notifyEnabled;
+    private DateTimeOffset _startAlertsSuppressedUntil;
+    private bool _breachNotifyEnabled;
+    private bool _killNotifyEnabled;
     private bool _startNotifyEnabled;
     private bool _controlEnabled;
-    public bool IsEnabled => _notifyEnabled || _controlEnabled;
+    public bool IsEnabled => _breachNotifyEnabled || _killNotifyEnabled || _startNotifyEnabled || _controlEnabled;
 
     private string _email = "";
     private string _password = "";
@@ -58,8 +60,11 @@ public class EmailService : IDisposable
         _deviceId = NormalizeDeviceId(await _db.GetSettingAsync("EmailDeviceId", Environment.MachineName));
         if (string.IsNullOrWhiteSpace(_deviceId))
             _deviceId = NormalizeDeviceId(Environment.MachineName);
-        _notifyEnabled = !string.IsNullOrEmpty(_email) && !string.IsNullOrEmpty(_password)
-            && (await _db.GetSettingAsync("EmailNotifyEnabled", "false")) == "true";
+        var legacyNotify = await _db.GetSettingAsync("EmailNotifyEnabled", "false");
+        _breachNotifyEnabled = !string.IsNullOrEmpty(_email) && !string.IsNullOrEmpty(_password)
+            && (await _db.GetSettingAsync("EmailBreachNotifyEnabled", legacyNotify)) == "true";
+        _killNotifyEnabled = !string.IsNullOrEmpty(_email) && !string.IsNullOrEmpty(_password)
+            && (await _db.GetSettingAsync("EmailKillNotifyEnabled", legacyNotify)) == "true";
         _startNotifyEnabled = !string.IsNullOrEmpty(_email) && !string.IsNullOrEmpty(_password)
             && (await _db.GetSettingAsync("EmailStartNotifyEnabled", "false")) == "true";
         _controlEnabled = !string.IsNullOrEmpty(_email) && !string.IsNullOrEmpty(_password)
@@ -82,6 +87,7 @@ public class EmailService : IDisposable
     private async void PollRunningTrackedApps(object? state)
     {
         if (!_startNotifyEnabled || string.IsNullOrEmpty(_email)) return;
+        if (IsStartAlertSuppressed()) return;
         if (Interlocked.Exchange(ref _pollingStarts, 1) != 0) return;
 
         try
@@ -102,10 +108,31 @@ public class EmailService : IDisposable
         finally { Volatile.Write(ref _pollingStarts, 0); }
     }
 
-    public async Task<string?> SendAlertAsync(string subject, string body)
+    public async Task<string?> SendBreachAlertAsync(string subject, string body)
     {
-        if (!_notifyEnabled || string.IsNullOrEmpty(_email)) return "Email alerts not configured";
+        if (!_breachNotifyEnabled || string.IsNullOrEmpty(_email)) return "Breach email alerts not configured";
         return await SendMailAsync(subject, body, _email);
+    }
+
+    public async Task<string?> SendKillAlertAsync(string subject, string body)
+    {
+        if (!_killNotifyEnabled || string.IsNullOrEmpty(_email)) return "App-closed email alerts not configured";
+        return await SendMailAsync(subject, body, _email);
+    }
+
+    public void SuppressStartAlertsFor(TimeSpan duration)
+    {
+        lock (_startAlertDateSync)
+        {
+            var until = DateTimeOffset.Now.Add(duration);
+            if (until > _startAlertsSuppressedUntil) _startAlertsSuppressedUntil = until;
+        }
+    }
+
+    private bool IsStartAlertSuppressed()
+    {
+        lock (_startAlertDateSync)
+            return _startAlertsSuppressedUntil > DateTimeOffset.Now;
     }
 
     private async Task<string?> SendMailAsync(string subject, string body, string to)
@@ -137,6 +164,8 @@ public class EmailService : IDisposable
     {
         if (!_startNotifyEnabled || string.IsNullOrEmpty(_email))
             return "Email start alerts not configured";
+        if (IsStartAlertSuppressed())
+            return "App-start alerts temporarily suppressed after watchdog recovery";
 
         var today = DateTime.Now.ToString("yyyy-MM-dd");
         lock (_startAlertDateSync)
@@ -355,8 +384,11 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
                 }
                 var delay = await _db.GetKillDelayAsync();
                 sb.AppendLine($"\nKill delay: {delay}s");
-                var tracking = await _db.GetSettingAsync("EmailNotifyEnabled", "false");
-                sb.AppendLine($"Email alerts: {(tracking == "true" ? "on" : "off")}");
+                var legacyAlerts = await _db.GetSettingAsync("EmailNotifyEnabled", "false");
+                var breachAlerts = await _db.GetSettingAsync("EmailBreachNotifyEnabled", legacyAlerts);
+                var killAlerts = await _db.GetSettingAsync("EmailKillNotifyEnabled", legacyAlerts);
+                sb.AppendLine($"Limit-reached emails: {(breachAlerts == "true" ? "on" : "off")}");
+                sb.AppendLine($"App-closed emails: {(killAlerts == "true" ? "on" : "off")}");
                 return sb.ToString();
             }
 

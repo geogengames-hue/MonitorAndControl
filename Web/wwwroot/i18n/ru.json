@@ -297,4 +297,7 @@
 , "Expected ZIP SHA-256 (required for HTTPS updates)": "Ожидаемый SHA-256 ZIP (обязателен для обновлений HTTPS)"
 , "64-character SHA-256": "SHA-256 из 64 символов"
 , "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "Обновления по URL требуют HTTPS и точного SHA-256. Программа обновления запрашивает права администратора для защиты маркера watchdog."
+, "Send email when a limit is reached": "Отправлять письмо при достижении лимита"
+, "Send email when an app is closed by enforcement": "Отправлять письмо, когда приложение закрыто системой контроля"
+, "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.": "Оповещения охватывают удаление базы данных или конфигурации, значительные изменения времени, сбой или восстановление watchdog и повторные неудачные входы."
 }

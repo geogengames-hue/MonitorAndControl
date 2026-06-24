@@ -17,5 +17,8 @@
   "Historical shared-pool time is shown separately to avoid double-counting app usage.": "Historical shared-pool time is shown separately to avoid double-counting app usage.",
   "Expected ZIP SHA-256 (required for HTTPS updates)": "Expected ZIP SHA-256 (required for HTTPS updates)",
   "64-character SHA-256": "64-character SHA-256",
-  "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker."
+  "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.",
+  "Send email when a limit is reached": "Send email when a limit is reached",
+  "Send email when an app is closed by enforcement": "Send email when an app is closed by enforcement",
+  "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.": "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures."
 }
