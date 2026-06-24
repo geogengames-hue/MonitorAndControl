@@ -1,4 +1,6 @@
 {
+  "Send email when a limited app is closed by enforcement": "Enviar un correo cuando el control cierre una aplicación limitada",
+  "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery (including DeviceMon being forcibly closed), and repeated dashboard login failures.": "Las alertas cubren la eliminación de la base de datos o configuración, cambios importantes del reloj, fallo o recuperación del watchdog (incluido el cierre forzado de DeviceMon) e intentos repetidos de inicio de sesión.",
   "Scheduled Reports & Security Alerts": "Informes programados y alertas de seguridad",
   "Send scheduled parent usage summary": "Enviar resumen de uso programado a los padres",
   "Summary frequency": "Frecuencia del resumen",

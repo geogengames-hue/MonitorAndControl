@@ -22,6 +22,7 @@ public class EmailService : IDisposable
     private int _pollingInbox;
     private int _pollingStarts;
     private readonly object _startAlertDateSync = new();
+    private readonly DateTimeOffset _commandPollingStartedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _startAlertsSuppressedUntil;
     private bool _breachNotifyEnabled;
     private bool _killNotifyEnabled;
@@ -229,10 +230,15 @@ public class EmailService : IDisposable
             MailKit.Search.SearchQuery fromQuery = MailKit.Search.SearchQuery.FromContains(allowedSenders[0]);
             foreach (var sender in allowedSenders.Skip(1))
                 fromQuery = fromQuery.Or(MailKit.Search.SearchQuery.FromContains(sender));
-            var uids = await client.Inbox.SearchAsync(MailKit.Search.SearchQuery.NotSeen.And(fromQuery));
+            // Gmail's Seen flag is shared by every computer using this mailbox. It cannot
+            // be used as command-delivery state because the first computer would hide a
+            // broadcast from all the others. Each installation keeps its own receipt list.
+            var allUids = await client.Inbox.SearchAsync(fromQuery);
+            var uids = allUids.Skip(Math.Max(0, allUids.Count - 250)).ToList();
             if (uids.Count == 0) { await client.DisconnectAsync(true); return; }
 
             var items = await client.Inbox.FetchAsync(uids, new MailKit.FetchRequest(MailKit.MessageSummaryItems.Full));
+            var initialized = (await _db.GetSettingAsync("EmailCommandTrackingInitialized", "false")) == "true";
             foreach (var item in items)
             {
                 var mime = await client.Inbox.GetMessageAsync(item.UniqueId);
@@ -245,9 +251,29 @@ public class EmailService : IDisposable
                 var commandText = ExtractCommandText(subject, body);
                 if (commandText == null)
                     continue;
+
+                var messageKey = !string.IsNullOrWhiteSpace(mime.MessageId)
+                    ? $"message-id:{mime.MessageId.Trim()}"
+                    : $"imap:{client.Inbox.UidValidity}:{item.UniqueId.Id}";
+                if (await _db.IsEmailCommandProcessedAsync(messageKey))
+                    continue;
+
+                var receivedAt = item.InternalDate ?? mime.Date;
+                var tooOld = receivedAt < DateTimeOffset.UtcNow.AddDays(-30);
+                var predatesUpgrade = !initialized
+                    && item.Flags.HasValue
+                    && item.Flags.Value.HasFlag(MailKit.MessageFlags.Seen)
+                    && receivedAt < _commandPollingStartedAt.AddMinutes(-2);
+                if (tooOld || predatesUpgrade)
+                {
+                    await _db.MarkEmailCommandProcessedAsync(messageKey);
+                    continue;
+                }
+
                 if (!IsCommandForThisDevice(commandText, out var effectiveCommand))
                 {
                     Logger.Instance.Info($"Email command ignored on {_deviceId}; target does not match: \"{commandText}\"");
+                    await _db.MarkEmailCommandProcessedAsync(messageKey);
                     continue;
                 }
 
@@ -259,8 +285,15 @@ public class EmailService : IDisposable
                     await SendReplyAsync(from, subject, reply);
                 }
 
+                // Mark locally after command execution. This prevents duplicate side effects
+                // even when sending the reply fails and allows every PC to handle broadcasts.
+                await _db.MarkEmailCommandProcessedAsync(messageKey);
                 client.Inbox.SetFlags(item.UniqueId, MailKit.MessageFlags.Seen, true);
             }
+
+            if (!initialized)
+                await _db.SetSettingAsync("EmailCommandTrackingInitialized", "true");
+            await _db.DeleteProcessedEmailCommandsBeforeAsync(DateTimeOffset.UtcNow.AddDays(-90));
 
             await client.DisconnectAsync(true);
         }

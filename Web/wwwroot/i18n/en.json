@@ -1,4 +1,6 @@
 {
+  "Send email when a limited app is closed by enforcement": "Send email when a limited app is closed by enforcement",
+  "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery (including DeviceMon being forcibly closed), and repeated dashboard login failures.": "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery (including DeviceMon being forcibly closed), and repeated dashboard login failures.",
   "Shared Limit Groups": "Shared Limit Groups",
   "All apps in a group share one daily time pool. Simultaneous apps count only once.": "All apps in a group share one daily time pool. Simultaneous apps count only once.",
   "Create / Edit Group": "Create / Edit Group",

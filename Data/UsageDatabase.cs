@@ -114,6 +114,11 @@ public class UsageDatabase : IDisposable
                 TotalSeconds INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(GroupName, Date)
             );
+
+            CREATE TABLE IF NOT EXISTS ProcessedEmailCommands (
+                MessageKey TEXT PRIMARY KEY,
+                ProcessedAt TEXT NOT NULL
+            );
             """;
         cmd.ExecuteNonQuery();
 
@@ -725,6 +730,46 @@ public class UsageDatabase : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = "DELETE FROM UsageRecords WHERE AppName = @app";
             cmd.Parameters.AddWithValue("@app", appName);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<bool> IsEmailCommandProcessedAsync(string messageKey)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT 1 FROM ProcessedEmailCommands WHERE MessageKey = @key LIMIT 1";
+            cmd.Parameters.AddWithValue("@key", messageKey);
+            return await cmd.ExecuteScalarAsync() != null;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task MarkEmailCommandProcessedAsync(string messageKey, DateTimeOffset? processedAt = null)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "INSERT OR IGNORE INTO ProcessedEmailCommands (MessageKey, ProcessedAt) VALUES (@key, @at)";
+            cmd.Parameters.AddWithValue("@key", messageKey);
+            cmd.Parameters.AddWithValue("@at", (processedAt ?? DateTimeOffset.UtcNow).ToString("O"));
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task DeleteProcessedEmailCommandsBeforeAsync(DateTimeOffset cutoff)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM ProcessedEmailCommands WHERE ProcessedAt < @cutoff";
+            cmd.Parameters.AddWithValue("@cutoff", cutoff.ToString("O"));
             await cmd.ExecuteNonQueryAsync();
         }
         finally { _lock.Release(); }

@@ -126,6 +126,10 @@ Tamper alerts use every configured channel available: email and webhook. Alerts 
 
 Limit notification emails have separate switches for **limit reached** (the countdown begins) and **app closed** (enforcement completed). Webhooks already use distinct `limit_breach` and `app_killed` event types. Existing installations migrate the former combined email switch to both new switches until the parent saves new preferences.
 
+Email commands are acknowledged separately by every DeviceMon installation instead of relying on Gmail's shared read/unread flag. Therefore a broadcast such as `mc: status` is processed once by every configured computer, while `mc: @device-id status` is processed only by its target. On the first run after upgrading, previously read commands are recorded without replaying them.
+
+The **app closed by enforcement** email switch applies to limited apps that DeviceMon terminates. It does not report DeviceMon itself being terminated; enable **Tamper alerts** for watchdog recovery emails after DeviceMon is forcibly closed.
+
 The **Today** and **History** tabs include a **Show foreground/background breakdown** checkbox. When enabled, charts use stacked foreground and background segments and tables show Foreground, Background, and Total columns. If an opted-in background app becomes the accepted foreground app, that interval is classified only as foreground and is never double-counted.
 
 Usage recorded by an older release has only a total and cannot be reconstructed by source. After upgrading, that time is shown as **Legacy** / **unclassified** in breakdown mode while its original total remains unchanged. New usage is classified fully.

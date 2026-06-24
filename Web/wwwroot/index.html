@@ -270,7 +270,7 @@
           <input type="checkbox" id="set-email-breach-notify" style="width:auto"> Send email when a limit is reached
         </label>
         <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
-          <input type="checkbox" id="set-email-kill-notify" style="width:auto"> Send email when an app is closed by enforcement
+          <input type="checkbox" id="set-email-kill-notify" style="width:auto"> Send email when a limited app is closed by enforcement
         </label>
         <label style="display:flex;align-items:center;gap:8px;margin-top:5px">
           <input type="checkbox" id="set-email-start-notify" style="width:auto"> Send email when a limited app starts
@@ -300,7 +300,7 @@
         <label style="display:flex;align-items:center;gap:8px;margin-top:10px">
           <input type="checkbox" id="set-tamper-alerts" style="width:auto"> Send tamper alerts by configured email and webhook
         </label>
-        <p style="font-size:12px;color:#888">Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.</p>
+        <p style="font-size:12px;color:#888">Alerts cover database/config deletion, major clock changes, watchdog failure or recovery (including DeviceMon being forcibly closed), and repeated dashboard login failures.</p>
         <hr>
         <h3>Backup &amp; Restore</h3>
         <p style="font-size:12px;color:#888">Exports app mappings, limits, schedules, and non-sensitive settings. Admin passwords and email app passwords are not included.</p>

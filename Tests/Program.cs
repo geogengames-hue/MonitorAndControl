@@ -18,6 +18,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Usage database stores per-app schedule targets", TestUsageDatabaseStoresScheduleTarget),
     ("Usage database stores app tracking policies", TestUsageDatabaseStoresTrackingPolicy),
     ("Usage database stores shared limit groups and usage", TestUsageDatabaseStoresLimitGroups),
+    ("Usage database tracks email commands per device", TestUsageDatabaseTracksEmailCommands),
     ("Defaults are imported only on first database creation", TestDefaultsImportedOnlyOnce),
     ("Existing empty databases do not reimport defaults", TestExistingDatabaseDoesNotReimportDefaults),
     ("Usage database replaces backup-managed config tables", TestUsageDatabaseReplacesConfigTables),
@@ -541,6 +542,17 @@ static async Task TestWatchdogRestartTamperDelivery()
     await db.SetSettingAsync("TamperAlertsEnabled", "true");
     var failedDelivery = await reports.ReportWatchdogRestartAsync("test marker");
     AssertFalse(failedDelivery, "A configured tamper event with no delivery channel should retain the marker for retry.");
+}
+
+static async Task TestUsageDatabaseTracksEmailCommands()
+{
+    using var db = CreateTempDatabase();
+    AssertFalse(await db.IsEmailCommandProcessedAsync("message-1"), "A new command must not be processed.");
+    await db.MarkEmailCommandProcessedAsync("message-1", DateTimeOffset.UtcNow.AddDays(-100));
+    AssertTrue(await db.IsEmailCommandProcessedAsync("message-1"), "The command receipt must persist.");
+    await db.MarkEmailCommandProcessedAsync("message-1");
+    await db.DeleteProcessedEmailCommandsBeforeAsync(DateTimeOffset.UtcNow.AddDays(-90));
+    AssertFalse(await db.IsEmailCommandProcessedAsync("message-1"), "Old command receipts must be pruned.");
 }
 
 static ScheduleRule Rule(string day, string start, string end) => new()
