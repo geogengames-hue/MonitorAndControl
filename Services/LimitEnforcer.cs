@@ -54,6 +54,11 @@ public class LimitEnforcer
 
             _exceededToday[limit.AppName] = today;
         }
+
+        var groups = await _db.GetLimitGroupsAsync();
+        foreach (var group in groups.Where(g => g.Enabled && g.TodaySeconds >= g.DailyMaxMinutes * 60L))
+            foreach (var appName in group.AppNames)
+                _exceededToday[appName] = today;
     }
 
     private void OnAppChanged(string app, string proc)

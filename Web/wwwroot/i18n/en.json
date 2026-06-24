@@ -1,1 +1,18 @@
-{}
+{
+  "Shared Limit Groups": "Shared Limit Groups",
+  "All apps in a group share one daily time pool. Simultaneous apps count only once.": "All apps in a group share one daily time pool. Simultaneous apps count only once.",
+  "Create / Edit Group": "Create / Edit Group",
+  "Group name (e.g. Games)": "Group name (e.g. Games)",
+  "Save Group": "Save Group",
+  "Individual Apps": "Individual Apps",
+  "Group": "Group",
+  "Apps": "Apps",
+  "No shared limit groups configured.": "No shared limit groups configured.",
+  "Add tracked apps before creating a group.": "Add tracked apps before creating a group.",
+  "Enter a group name, daily limit, and select at least one app.": "Enter a group name, daily limit, and select at least one app.",
+  "Remove shared limit group {group}?": "Remove shared limit group {group}?",
+  "Shared Group Usage": "Shared Group Usage",
+  "Shared Total": "Shared Total",
+  "Group totals are a shared pool and are not added to the individual-app total.": "Group totals are a shared pool and are not added to the individual-app total.",
+  "Historical shared-pool time is shown separately to avoid double-counting app usage.": "Historical shared-pool time is shown separately to avoid double-counting app usage."
+}

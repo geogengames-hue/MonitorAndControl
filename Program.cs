@@ -434,7 +434,7 @@ internal static class Program
         try
         {
             await DashboardServer.StartAsync(
-                _db!, _tracker!, _enforcer!, _scheduler!, _emailService!, config);
+                _db!, _tracker!, _enforcer!, _scheduler!, _usageTracker!, _emailService!, config);
         }
         catch (Exception ex)
         {

@@ -66,13 +66,21 @@ td.actions button { margin-left: 6px; }
 
 #limits-table table { min-width: 1080px; }
 #limits-table th, #limits-table td { vertical-align: middle; }
-#limits-table th:nth-child(3),
 #limits-table th:nth-child(4),
-#limits-table td:nth-child(3),
-#limits-table td:nth-child(4) {
+#limits-table th:nth-child(5),
+#limits-table td:nth-child(4),
+#limits-table td:nth-child(5) {
   width: 105px;
   text-align: center;
 }
+.individual-limits-title { margin-top: 25px; }
+.usage-groups-title { margin-top: 25px; }
+.group-form { margin-bottom: 25px; }
+.inline-check { display: inline-flex; align-items: center; gap: 7px; color: #aaa; margin: 5px 10px 5px 0; }
+.group-members { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 15px 0; }
+.group-member { display: flex; align-items: center; gap: 8px; background: #222238; border-radius: 6px; padding: 9px 10px; color: #ccc; }
+#limit-groups-table { margin-bottom: 0; }
+#limit-groups-table td.actions { white-space: nowrap; }
 #limits-table td.actions {
   min-width: 185px;
   white-space: nowrap;

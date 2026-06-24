@@ -17,6 +17,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Usage database tracks and clears daily bonus time", TestUsageDatabaseTracksBonusTime),
     ("Usage database stores per-app schedule targets", TestUsageDatabaseStoresScheduleTarget),
     ("Usage database stores app tracking policies", TestUsageDatabaseStoresTrackingPolicy),
+    ("Usage database stores shared limit groups and usage", TestUsageDatabaseStoresLimitGroups),
     ("Defaults are imported only on first database creation", TestDefaultsImportedOnlyOnce),
     ("Existing empty databases do not reimport defaults", TestExistingDatabaseDoesNotReimportDefaults),
     ("Usage database replaces backup-managed config tables", TestUsageDatabaseReplacesConfigTables),
@@ -26,6 +27,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Weekly summaries calculate latest missed delivery", TestWeeklySummaryDueTime),
     ("Monthly summaries clamp delivery days", TestMonthlySummaryDueTime),
     ("Limit enforcer rehydrates exceeded apps", TestLimitEnforcerRehydratesExceededApps),
+    ("Limit enforcer rehydrates exceeded groups", TestLimitEnforcerRehydratesExceededGroups),
     ("Limit enforcer can pause and resume enforcement", TestLimitEnforcerPauseResume)
 };
 
@@ -232,6 +234,58 @@ static async Task TestUsageDatabaseStoresScheduleTarget()
 
     AssertTrue(rule != null, "Expected one schedule rule.");
     AssertEqual("Chess", rule!.AppName, "Schedule target should round-trip.");
+}
+
+static async Task TestLimitEnforcerRehydratesExceededGroups()
+{
+    using var db = CreateTempDatabase();
+    var tracker = new WindowTracker();
+    tracker.AddKnownApp("chess.exe", "Chess");
+    tracker.AddKnownApp("cards.exe", "Cards");
+    var enforcer = new LimitEnforcer(db, tracker);
+
+    await db.SaveLimitGroupAsync(new AppLimitGroup
+    {
+        Name = "Games",
+        DailyMaxMinutes = 1,
+        Enabled = true,
+        AppNames = new List<string> { "Chess", "Cards" }
+    });
+    var group = (await db.GetLimitGroupsAsync()).Single();
+    await db.RecordLimitGroupUsageAsync(group.Id, 60);
+
+    await enforcer.RehydrateExceededTodayAsync();
+
+    AssertTrue(enforcer.IsExceededToday("Chess"), "Every member should be blocked after a group reaches its limit.");
+    AssertTrue(enforcer.IsExceededToday("Cards"), "Every member should be blocked after a group reaches its limit.");
+    tracker.Dispose();
+}
+
+static async Task TestUsageDatabaseStoresLimitGroups()
+{
+    using var db = CreateTempDatabase();
+    await db.SaveLimitGroupAsync(new AppLimitGroup
+    {
+        Name = "Games",
+        DailyMaxMinutes = 180,
+        Enabled = true,
+        AppNames = new List<string> { "Chess", "Cards" }
+    });
+
+    var group = (await db.GetLimitGroupsAsync()).Single();
+    AssertEqual("Games", group.Name, "Group name should round-trip.");
+    AssertEqual(2, group.AppNames.Count, "Group members should round-trip.");
+    await db.RecordLimitGroupUsageAsync(group.Id, 45);
+    group = (await db.GetLimitGroupsAsync()).Single();
+    AssertEqual(45L, group.TodaySeconds, "Group usage should accumulate independently.");
+    var history = await db.GetLimitGroupUsageRangeAsync(DateTime.Today, DateTime.Today);
+    AssertEqual(1, history.Count, "Group usage should be available in history.");
+    AssertEqual("Games", history[0].GroupName, "Group history should include its name.");
+    AssertEqual(45L, history[0].TotalSeconds, "Group history should preserve shared elapsed time.");
+
+    await db.ClearTodayUsageAsync();
+    group = (await db.GetLimitGroupsAsync()).Single();
+    AssertEqual(0L, group.TodaySeconds, "Clearing today should clear group usage.");
 }
 
 static async Task TestUsageDatabaseStoresTrackingPolicy()

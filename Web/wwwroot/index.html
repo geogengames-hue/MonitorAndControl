@@ -70,6 +70,9 @@
       <p id="today-breakdown-note" class="hidden" style="font-size:12px;color:#888"></p>
       <div class="chart-container"><canvas id="today-chart"></canvas></div>
       <div class="table-container" id="today-table"></div>
+      <h3 class="usage-groups-title">Shared Group Usage</h3>
+      <p style="font-size:12px;color:#888">Group totals are a shared pool and are not added to the individual-app total.</p>
+      <div class="table-container" id="today-groups-table"></div>
     </div>
     <div id="view-history" class="view">
       <h2>Usage History</h2>
@@ -118,10 +121,26 @@
         </div>
       </div>
       <div class="table-container" id="history-table"></div>
+      <h3 class="usage-groups-title">Shared Group Usage</h3>
+      <p style="font-size:12px;color:#888">Historical shared-pool time is shown separately to avoid double-counting app usage.</p>
+      <div class="table-container" id="history-groups-table"></div>
     </div>
     <div id="view-limits" class="view">
       <h2>App Limits</h2>
       <p style="font-size:13px;color:#888">Background and overlay settings apply per process and save immediately, even when no daily limit is set.</p>
+      <h3>Shared Limit Groups</h3>
+      <p style="font-size:13px;color:#888">All apps in a group share one daily time pool. Simultaneous apps count only once.</p>
+      <div class="table-container" id="limit-groups-table"></div>
+      <div class="add-form group-form">
+        <h3>Create / Edit Group</h3>
+        <input type="text" id="group-name" placeholder="Group name (e.g. Games)">
+        <input type="number" id="group-minutes" placeholder="Minutes per day" min="1" max="1440" value="180">
+        <label class="inline-check"><input type="checkbox" id="group-enabled" checked> Enabled</label>
+        <div id="group-members" class="group-members"></div>
+        <button id="group-save">Save Group</button>
+        <button id="group-cancel" class="btn-secondary hidden">Cancel</button>
+      </div>
+      <h3 class="individual-limits-title">Individual Apps</h3>
       <div class="table-container" id="limits-table"></div>
       <div class="add-form">
         <h3>Add / Edit Limit</h3>

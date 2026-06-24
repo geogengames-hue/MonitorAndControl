@@ -278,4 +278,20 @@
   "Update failed": "Обновление не удалось",
   "Password for the update share": "Пароль для сетевой папки обновления",
   "PCNAME\\username or user@example.com": "PCNAME\\username или user@example.com"
+, "Shared Limit Groups": "Группы с общим лимитом"
+, "All apps in a group share one daily time pool. Simultaneous apps count only once.": "Все приложения группы используют общий дневной лимит. Одновременная работа учитывается только один раз."
+, "Create / Edit Group": "Создать / изменить группу"
+, "Group name (e.g. Games)": "Название группы (например, Игры)"
+, "Save Group": "Сохранить группу"
+, "Individual Apps": "Отдельные приложения"
+, "Group": "Группа"
+, "Apps": "Приложения"
+, "No shared limit groups configured.": "Группы с общим лимитом не настроены."
+, "Add tracked apps before creating a group.": "Добавьте отслеживаемые приложения перед созданием группы."
+, "Enter a group name, daily limit, and select at least one app.": "Введите название, дневной лимит и выберите хотя бы одно приложение."
+, "Remove shared limit group {group}?": "Удалить группу с общим лимитом {group}?"
+, "Shared Group Usage": "Использование общих групп"
+, "Shared Total": "Общее время группы"
+, "Group totals are a shared pool and are not added to the individual-app total.": "Время группы является общим лимитом и не добавляется к сумме отдельных приложений."
+, "Historical shared-pool time is shown separately to avoid double-counting app usage.": "История общего времени показывается отдельно, чтобы избежать двойного подсчёта."
 }

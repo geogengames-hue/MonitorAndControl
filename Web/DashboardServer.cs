@@ -34,7 +34,7 @@ public class DashboardServer
     public static Action<string>? LoginLockoutDetected { get; set; }
 
     public static async Task StartAsync(UsageDatabase db, WindowTracker tracker, LimitEnforcer enforcer,
-        SchedulerService scheduler, EmailService emailService, AppConfig config)
+        SchedulerService scheduler, UsageTracker usageTracker, EmailService emailService, AppConfig config)
     {
         var port = config.DashboardPort;
         Port = port;
@@ -103,13 +103,13 @@ public class DashboardServer
 
         var discovery = new DiscoveryService();
         var notifier = new NotificationService(db);
-        MapApiEndpoints(_app, db, tracker, enforcer, scheduler, discovery, notifier, emailService);
+        MapApiEndpoints(_app, db, tracker, enforcer, scheduler, usageTracker, discovery, notifier, emailService);
 
         await _app.StartAsync();
     }
 
     private static void MapApiEndpoints(WebApplication app, UsageDatabase db, WindowTracker tracker,
-        LimitEnforcer enforcer, SchedulerService scheduler, DiscoveryService discovery,
+        LimitEnforcer enforcer, SchedulerService scheduler, UsageTracker usageTracker, DiscoveryService discovery,
         NotificationService notifier, EmailService emailService)
     {
         app.MapGet("/", async ctx =>
@@ -218,6 +218,9 @@ public class DashboardServer
         app.MapGet("/api/usage/today", async () =>
             Results.Json(await db.GetTodayUsageAsync(), JsonOpts));
 
+        app.MapGet("/api/usage/groups/today", async () =>
+            Results.Json(await db.GetLimitGroupUsageRangeAsync(DateTime.Today, DateTime.Today), JsonOpts));
+
         app.MapGet("/api/usage/history", async (int days = 7, string? from = null, string? to = null) =>
         {
             DateTime startDate;
@@ -243,6 +246,30 @@ public class DashboardServer
                 return Results.BadRequest(new { error = "History range is limited to 366 days." });
 
             return Results.Json(await db.GetUsageRangeAsync(startDate, endDate), JsonOpts);
+        });
+
+        app.MapGet("/api/usage/groups/history", async (int days = 7, string? from = null, string? to = null) =>
+        {
+            DateTime startDate;
+            DateTime endDate;
+            if (!string.IsNullOrWhiteSpace(from) || !string.IsNullOrWhiteSpace(to))
+            {
+                if (!DateTime.TryParse(from, out startDate) || !DateTime.TryParse(to, out endDate))
+                    return Results.BadRequest(new { error = "Invalid date range." });
+                startDate = startDate.Date;
+                endDate = endDate.Date;
+            }
+            else
+            {
+                days = Math.Clamp(days, 1, 366);
+                endDate = DateTime.Today;
+                startDate = endDate.AddDays(-days + 1);
+            }
+            if (startDate > endDate)
+                return Results.BadRequest(new { error = "Start date must be before end date." });
+            if ((endDate - startDate).TotalDays > 366)
+                return Results.BadRequest(new { error = "History range is limited to 366 days." });
+            return Results.Json(await db.GetLimitGroupUsageRangeAsync(startDate, endDate), JsonOpts);
         });
 
         app.MapDelete("/api/usage/history", async (HttpContext ctx) =>
@@ -419,6 +446,55 @@ public class DashboardServer
 
         app.MapGet("/api/limits", async () =>
             Results.Json(await db.GetLimitRulesAsync(), JsonOpts));
+
+        app.MapGet("/api/limit-groups", async () =>
+            Results.Json(await db.GetLimitGroupsAsync(), JsonOpts));
+
+        app.MapPost("/api/limit-groups", async (HttpContext ctx, AppLimitGroup group) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            group.Name = Clean(group.Name);
+            group.AppNames = group.AppNames.Select(Clean)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (!IsValidAppName(group.Name) || group.DailyMaxMinutes is < 1 or > 1440 || group.AppNames.Count == 0 ||
+                group.AppNames.Any(name => !IsValidAppName(name)))
+                return Results.BadRequest(new { error = "A group requires a valid name, 1-1440 minutes, and at least one valid app." });
+
+            var groups = await db.GetLimitGroupsAsync();
+            if (group.Id > 0 && groups.All(existing => existing.Id != group.Id))
+                return Results.NotFound(new { error = "Limit group not found." });
+            if (groups.Any(existing => existing.Id != group.Id && existing.Name.Equals(group.Name, StringComparison.OrdinalIgnoreCase)))
+                return Results.BadRequest(new { error = "A group with this name already exists." });
+            var duplicateMember = groups
+                .Where(existing => existing.Id != group.Id)
+                .SelectMany(existing => existing.AppNames)
+                .FirstOrDefault(member => group.AppNames.Contains(member, StringComparer.OrdinalIgnoreCase));
+            if (duplicateMember != null)
+                return Results.BadRequest(new { error = $"{duplicateMember} already belongs to another group." });
+
+            var previousMembers = groups.FirstOrDefault(existing => existing.Id == group.Id)?.AppNames
+                ?? new List<string>();
+            await db.SaveLimitGroupAsync(group);
+            await usageTracker.ReloadLimitGroupsAsync();
+            foreach (var appName in previousMembers.Concat(group.AppNames).Distinct(StringComparer.OrdinalIgnoreCase))
+                enforcer.ClearExceeded(appName);
+            return Results.Ok();
+        });
+
+        app.MapDelete("/api/limit-groups/{id:int}", async (HttpContext ctx, int id) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            var group = (await db.GetLimitGroupsAsync()).FirstOrDefault(item => item.Id == id);
+            if (group == null) return Results.NotFound();
+            await db.DeleteLimitGroupAsync(id);
+            await usageTracker.ReloadLimitGroupsAsync();
+            foreach (var appName in group.AppNames) enforcer.ClearExceeded(appName);
+            return Results.Ok();
+        });
 
         app.MapGet("/api/bonus/today", async () =>
             Results.Json(await db.GetTodayBonusTimeAsync(), JsonOpts));
@@ -886,6 +962,7 @@ public class DashboardServer
                 ExportedAt = DateTime.Now,
                 AppMappings = await db.GetAppMappingsAsync(),
                 Limits = await db.GetLimitRulesAsync(),
+                LimitGroups = await db.GetLimitGroupsAsync(),
                 Schedules = await db.GetScheduleRulesAsync(),
                 Settings = settings
                     .Where(kvp => ExportableSettings.Contains(kvp.Key))
@@ -921,6 +998,8 @@ public class DashboardServer
 
             await db.ReplaceAppMappingsAsync(backup.AppMappings);
             await db.ReplaceLimitRulesAsync(backup.Limits);
+            await db.ReplaceLimitGroupsAsync(backup.LimitGroups);
+            await usageTracker.ReloadLimitGroupsAsync();
             await db.ReplaceScheduleRulesAsync(backup.Schedules);
             foreach (var setting in backup.Settings.Where(kvp => ExportableSettings.Contains(kvp.Key)))
                 await db.SetSettingAsync(setting.Key, setting.Value);
@@ -1276,7 +1355,7 @@ public class DashboardServer
 
     private static string? ValidateBackup(ConfigBackup backup)
     {
-        if (backup.AppMappings.Count > 500 || backup.Limits.Count > 500 || backup.Schedules.Count > 500)
+        if (backup.AppMappings.Count > 500 || backup.Limits.Count > 500 || backup.Schedules.Count > 500 || backup.LimitGroups.Count > 100)
             return "Backup contains too many records.";
 
         var cleanMappings = new List<AppMapping>();
@@ -1299,6 +1378,19 @@ public class DashboardServer
             limit.AppName = Clean(limit.AppName);
             if (!IsValidAppName(limit.AppName) || limit.DailyMaxMinutes is < 1 or > 1440)
                 return "Backup contains an invalid app limit.";
+        }
+
+        var groupedApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in backup.LimitGroups)
+        {
+            group.Id = 0;
+            group.Name = Clean(group.Name);
+            group.AppNames = group.AppNames.Select(Clean).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (!IsValidAppName(group.Name) || group.DailyMaxMinutes is < 1 or > 1440 || group.AppNames.Count == 0 ||
+                group.AppNames.Count > 100 || group.AppNames.Any(name => !IsValidAppName(name)))
+                return "Backup contains an invalid limit group.";
+            if (group.AppNames.Any(name => !groupedApps.Add(name)))
+                return "An app belongs to more than one limit group in the backup.";
         }
 
         foreach (var rule in backup.Schedules)

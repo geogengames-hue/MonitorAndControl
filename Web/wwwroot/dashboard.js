@@ -2,9 +2,13 @@
 let todayChart = null;
 let historyChart = null;
 let editingLimit = null;
+let editingGroup = null;
+let currentLimitGroups = [];
+let currentGroupApps = [];
 let currentDays = 7;
 let historyRaw = [];
 let historyFiltered = [];
+let groupHistoryRaw = [];
 let historyRange = { mode: 'days', days: 7, from: '', to: '' };
 let alertEventSource = null;
 let alertReconnectTimer = null;
@@ -460,11 +464,15 @@ function syncQuickExtendApps(limits, usage) {
 // Today
 async function loadToday() {
   try {
-    const usage = await api('/api/usage/today');
+    const [usage, groupUsage] = await Promise.all([
+      api('/api/usage/today'),
+      api('/api/usage/groups/today')
+    ]);
     renderTodayChart(usage);
     const breakdown = document.getElementById('today-breakdown').checked;
     renderUsageTable('today-table', usage, false, breakdown);
     updateBreakdownNote('today-breakdown-note', usage, breakdown);
+    renderGroupUsageTable('today-groups-table', groupUsage, false);
   } catch (e) { log(e); }
 }
 
@@ -567,8 +575,13 @@ async function loadHistory(days) {
     const url = historyRange.mode === 'custom'
       ? `/api/usage/history?from=${encodeURIComponent(historyRange.from)}&to=${encodeURIComponent(historyRange.to)}`
       : `/api/usage/history?days=${days}`;
-    historyRaw = (await api(url))
+    const groupUrl = historyRange.mode === 'custom'
+      ? `/api/usage/groups/history?from=${encodeURIComponent(historyRange.from)}&to=${encodeURIComponent(historyRange.to)}`
+      : `/api/usage/groups/history?days=${days}`;
+    const [appUsage, groupUsage] = await Promise.all([api(url), api(groupUrl)]);
+    historyRaw = appUsage
       .map(u => ({ ...u, date: formatDateOnly(u.date) }));
+    groupHistoryRaw = groupUsage.map(u => ({ ...u, date: formatDateOnly(u.date) }));
     syncHistoryFilters();
     renderHistoryDashboard();
   } catch (e) { log(e); }
@@ -585,7 +598,7 @@ function syncHistoryFilters() {
   const currentApp = appSelect.value;
   const currentDay = daySelect.value;
   const apps = [...new Set(historyRaw.map(u => u.appName))].sort();
-  const days = [...new Set(historyRaw.map(u => u.date))].sort().reverse();
+  const days = [...new Set([...historyRaw.map(u => u.date), ...groupHistoryRaw.map(u => u.date)])].sort().reverse();
 
   appSelect.innerHTML = `<option value="">${t('All apps')}</option>` +
     apps.map(app => `<option value="${escAttr(app)}">${esc(app)}</option>`).join('');
@@ -612,6 +625,13 @@ function renderHistoryDashboard() {
   renderHistoryChart(historyFiltered);
   renderUsageTable('history-table', historyFiltered, true, breakdown);
   updateBreakdownNote('history-breakdown-note', historyFiltered, breakdown);
+  renderGroupUsageTable('history-groups-table', groupHistoryRaw.filter(item => !day || item.date === day), true);
+}
+
+function renderGroupUsageTable(id, usage, includeDate) {
+  const props = includeDate ? ['date', 'groupName', 'durationFormatted'] : ['groupName', 'durationFormatted'];
+  const headers = includeDate ? [t('Date'), t('Group'), t('Shared Total')] : [t('Group'), t('Shared Total')];
+  renderTable(id, usage, props, headers);
 }
 
 function renderUsageTable(id, usage, includeDate, breakdown) {
@@ -760,13 +780,15 @@ function renderHistoryChart(usage) {
 // Limits
 async function loadLimits() {
   try {
-    const [limits, known, today, mappings, bonuses] = await Promise.all([
+    const [limits, known, today, mappings, bonuses, groups] = await Promise.all([
       api('/api/limits'),
       api('/api/apps'),
       api('/api/usage/today'),
       api('/api/mappings'),
-      api('/api/bonus/today')
+      api('/api/bonus/today'),
+      api('/api/limit-groups')
     ]);
+    renderLimitGroups(groups, known, limits);
     const table = document.getElementById('limits-table');
     if (!Array.isArray(mappings)) {
       table.innerHTML = `<p style="color:#ff4444;text-align:center">${t('Failed to load app mappings')}</p>`;
@@ -786,7 +808,7 @@ async function loadLimits() {
     });
     rows.sort((a, b) => a.appName.localeCompare(b.appName) || a.processName.localeCompare(b.processName));
 
-    let html = `<table><thead><tr><th>${t('App')}</th><th>${t('Process')}</th><th>${t('Background')}</th><th>${t('Filter overlays')}</th><th>${t('Daily Max')}</th><th>${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
+    let html = `<table><thead><tr><th>${t('App')}</th><th>${t('Process')}</th><th>${t('Group')}</th><th>${t('Background')}</th><th>${t('Filter overlays')}</th><th>${t('Daily Max')}</th><th>${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
     for (const row of rows) {
       const app = row.appName;
       const procName = row.processName;
@@ -798,9 +820,11 @@ async function loadLimits() {
       const pct = max > 0 ? Math.round((used / max) * 100) : 0;
       const exceeded = max > 0 && used >= max;
       const enabled = limit ? limit.enabled : false;
+      const group = groups.find(g => g.appNames.some(name => name.toLowerCase() === app.toLowerCase()));
       html += `<tr data-tracking-row>
         <td><strong>${esc(app)}</strong></td>
         <td style="font-size:11px;color:#666;max-width:250px;word-break:break-all">${esc(procName) || '-'}</td>
+        <td>${group ? `<span style="color:#7c7cff">${esc(group.name)}</span>` : '-'}</td>
         <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="background" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.countInBackground ? 'checked' : ''}>` : '-'}</td>
         <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="overlay" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.ignoreOverlayFocus ? 'checked' : ''}>` : '-'}</td>
         <td>${limit ? limit.dailyMaxMinutes + ' min' + (bonus ? ` <span style="color:#ffcc66">(+${bonus})</span>` : '') : `<span style="color:#666">${t('No limit')}</span>`}</td>
@@ -819,6 +843,87 @@ async function loadLimits() {
     table.querySelectorAll('.tracking-policy').forEach(checkbox =>
       checkbox.addEventListener('change', saveTrackingPolicy));
   } catch (e) { log(e); }
+}
+
+function renderLimitGroups(groups, known, limits) {
+  currentLimitGroups = groups;
+  currentGroupApps = [...new Set([
+    ...Object.values(known),
+    ...limits.map(limit => limit.appName)
+  ])].sort((a, b) => a.localeCompare(b));
+
+  const table = document.getElementById('limit-groups-table');
+  if (!groups.length) {
+    table.innerHTML = `<p style="color:#888;text-align:center;padding:12px">${t('No shared limit groups configured.')}</p>`;
+  } else {
+    let html = `<table><thead><tr><th>${t('Group')}</th><th>${t('Apps')}</th><th>${t('Daily Max')}</th><th>${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
+    groups.forEach(group => {
+      const max = group.dailyMaxMinutes * 60;
+      const pct = max ? Math.round(group.todaySeconds / max * 100) : 0;
+      const exceeded = group.enabled && group.todaySeconds >= max;
+      html += `<tr>
+        <td><strong>${esc(group.name)}</strong></td>
+        <td>${group.appNames.map(esc).join(', ')}</td>
+        <td>${group.dailyMaxMinutes} ${t('min')}</td>
+        <td>${formatDuration(group.todaySeconds)}</td>
+        <td>${group.enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : `<span style="color:${pct > 80 ? '#ff8800' : '#44bb44'}">${pct}%</span>`) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
+        <td class="actions"><button onclick="editLimitGroup(${group.id})">${t('Edit')}</button><button class="btn-danger" onclick="deleteLimitGroup(${group.id})">${t('Remove')}</button></td>
+      </tr>`;
+    });
+    table.innerHTML = html + '</tbody></table>';
+  }
+
+  const selected = editingGroup?.appNames || [];
+  document.getElementById('group-members').innerHTML = currentGroupApps.length
+    ? currentGroupApps.map(app => `<label class="group-member"><input type="checkbox" value="${escAttr(app)}" ${selected.some(name => name.toLowerCase() === app.toLowerCase()) ? 'checked' : ''}> ${esc(app)}</label>`).join('')
+    : `<p>${t('Add tracked apps before creating a group.')}</p>`;
+}
+
+function editLimitGroup(id) {
+  editingGroup = currentLimitGroups.find(group => group.id === id) || null;
+  if (!editingGroup) return;
+  document.getElementById('group-name').value = editingGroup.name;
+  document.getElementById('group-minutes').value = editingGroup.dailyMaxMinutes;
+  document.getElementById('group-enabled').checked = editingGroup.enabled;
+  document.getElementById('group-cancel').classList.remove('hidden');
+  renderLimitGroups(currentLimitGroups, Object.fromEntries(currentGroupApps.map((app, i) => [i, app])), []);
+}
+
+function resetLimitGroupForm() {
+  editingGroup = null;
+  document.getElementById('group-name').value = '';
+  document.getElementById('group-minutes').value = 180;
+  document.getElementById('group-enabled').checked = true;
+  document.getElementById('group-cancel').classList.add('hidden');
+  renderLimitGroups(currentLimitGroups, Object.fromEntries(currentGroupApps.map((app, i) => [i, app])), []);
+}
+
+document.getElementById('group-save').addEventListener('click', async () => {
+  const name = document.getElementById('group-name').value.trim();
+  const dailyMaxMinutes = parseInt(document.getElementById('group-minutes').value);
+  const appNames = [...document.querySelectorAll('#group-members input:checked')].map(input => input.value);
+  if (!name || !dailyMaxMinutes || !appNames.length) {
+    alert(t('Enter a group name, daily limit, and select at least one app.'));
+    return;
+  }
+  try {
+    await api('/api/limit-groups', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: editingGroup?.id || 0, name, dailyMaxMinutes, enabled: document.getElementById('group-enabled').checked, appNames })
+    });
+    resetLimitGroupForm();
+    loadLimits();
+  } catch (e) { log(e); alert(e.message); }
+});
+
+document.getElementById('group-cancel').addEventListener('click', resetLimitGroupForm);
+
+async function deleteLimitGroup(id) {
+  const group = currentLimitGroups.find(item => item.id === id);
+  if (!group || !confirm(t('Remove shared limit group {group}?', { group: group.name }))) return;
+  await api(`/api/limit-groups/${id}`, { method: 'DELETE' });
+  resetLimitGroupForm();
+  loadLimits();
 }
 
 async function saveTrackingPolicy(event) {

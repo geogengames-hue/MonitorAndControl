@@ -278,4 +278,20 @@
   "Update failed": "Actualización fallida",
   "Password for the update share": "Contraseña del recurso compartido de actualización",
   "PCNAME\\username or user@example.com": "PCNAME\\usuario o user@example.com"
+, "Shared Limit Groups": "Grupos de límite compartido"
+, "All apps in a group share one daily time pool. Simultaneous apps count only once.": "Todas las aplicaciones de un grupo comparten un límite diario. Las aplicaciones simultáneas cuentan solo una vez."
+, "Create / Edit Group": "Crear / editar grupo"
+, "Group name (e.g. Games)": "Nombre del grupo (p. ej., Juegos)"
+, "Save Group": "Guardar grupo"
+, "Individual Apps": "Aplicaciones individuales"
+, "Group": "Grupo"
+, "Apps": "Aplicaciones"
+, "No shared limit groups configured.": "No hay grupos de límite compartido configurados."
+, "Add tracked apps before creating a group.": "Añade aplicaciones supervisadas antes de crear un grupo."
+, "Enter a group name, daily limit, and select at least one app.": "Introduce un nombre, un límite diario y selecciona al menos una aplicación."
+, "Remove shared limit group {group}?": "¿Eliminar el grupo de límite compartido {group}?"
+, "Shared Group Usage": "Uso de grupos compartidos"
+, "Shared Total": "Total compartido"
+, "Group totals are a shared pool and are not added to the individual-app total.": "Los totales de grupo forman un límite compartido y no se suman al total de aplicaciones."
+, "Historical shared-pool time is shown separately to avoid double-counting app usage.": "El tiempo compartido histórico se muestra por separado para evitar el doble conteo."
 }

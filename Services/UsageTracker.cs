@@ -1,4 +1,5 @@
 using MonitorAndControl.Data;
+using MonitorAndControl.Models;
 
 namespace MonitorAndControl.Services;
 
@@ -14,6 +15,8 @@ public class UsageTracker : IDisposable
     private readonly object _usageSync = new();
     private readonly Dictionary<string, AccumulatedUsage> _pendingUsage =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<int, long> _pendingGroupMilliseconds = new();
+    private List<AppLimitGroup> _limitGroups = new();
 
     private long _lastSampleTick;
     private int _sampling;
@@ -31,10 +34,18 @@ public class UsageTracker : IDisposable
 
     public void Start(int flushIntervalSec = 30)
     {
+        _limitGroups = _db.GetLimitGroupsAsync().GetAwaiter().GetResult();
         _running = true;
         _lastSampleTick = Environment.TickCount64;
         _sampleTimer.Change(1000, 1000);
         _flushTimer.Change(flushIntervalSec * 1000, flushIntervalSec * 1000);
+    }
+
+    public async Task ReloadLimitGroupsAsync()
+    {
+        var groups = await _db.GetLimitGroupsAsync();
+        lock (_usageSync)
+            _limitGroups = groups;
     }
 
     public void Stop()
@@ -100,6 +111,13 @@ public class UsageTracker : IDisposable
                         (active.Value.IsForeground ? 0 : elapsedMs)
                 };
             }
+
+            foreach (var group in _limitGroups)
+            {
+                if (!group.AppNames.Any(activeApps.ContainsKey)) continue;
+                _pendingGroupMilliseconds.TryGetValue(group.Id, out var pending);
+                _pendingGroupMilliseconds[group.Id] = pending + elapsedMs;
+            }
         }
     }
 
@@ -108,7 +126,9 @@ public class UsageTracker : IDisposable
         await _flushLock.WaitAsync();
         try
         {
+            var currentGroups = await _db.GetLimitGroupsAsync();
             List<UsageFlushRecord> records;
+            List<(int GroupId, int Seconds)> groupRecords;
             lock (_usageSync)
             {
                 records = _pendingUsage
@@ -129,6 +149,16 @@ public class UsageTracker : IDisposable
                         BackgroundMilliseconds = usage.BackgroundMilliseconds - record.BackgroundSeconds * 1000L
                     };
                 }
+                var currentGroupIds = currentGroups.Select(g => g.Id).ToHashSet();
+                groupRecords = _pendingGroupMilliseconds
+                    .Where(kvp => currentGroupIds.Contains(kvp.Key) && kvp.Value >= 1000)
+                    .Select(kvp => (kvp.Key, (int)(kvp.Value / 1000)))
+                    .ToList();
+                foreach (var record in groupRecords)
+                    _pendingGroupMilliseconds[record.GroupId] -= record.Seconds * 1000L;
+                foreach (var staleId in _pendingGroupMilliseconds.Keys.Where(id => !currentGroupIds.Contains(id)).ToList())
+                    _pendingGroupMilliseconds.Remove(staleId);
+                _limitGroups = currentGroups;
             }
 
             try
@@ -139,6 +169,8 @@ public class UsageTracker : IDisposable
                         record.ProcessName,
                         record.ForegroundSeconds,
                         record.BackgroundSeconds);
+                foreach (var record in groupRecords)
+                    await _db.RecordLimitGroupUsageAsync(record.GroupId, record.Seconds);
             }
             catch
             {
@@ -154,6 +186,11 @@ public class UsageTracker : IDisposable
                             ForegroundMilliseconds = usage.ForegroundMilliseconds + record.ForegroundSeconds * 1000L,
                             BackgroundMilliseconds = usage.BackgroundMilliseconds + record.BackgroundSeconds * 1000L
                         };
+                    }
+                    foreach (var record in groupRecords)
+                    {
+                        _pendingGroupMilliseconds.TryGetValue(record.GroupId, out var pending);
+                        _pendingGroupMilliseconds[record.GroupId] = pending + record.Seconds * 1000L;
                     }
                 }
                 throw;
@@ -174,6 +211,15 @@ public class UsageTracker : IDisposable
                 var maxSecs = (limit.DailyMaxMinutes + bonusMinutes) * 60L;
                 if (usedSecs >= maxSecs)
                     breached.Add((limit.AppName, usedSecs, maxSecs));
+            }
+
+            var refreshedGroups = await _db.GetLimitGroupsAsync();
+            foreach (var group in refreshedGroups.Where(g => g.Enabled))
+            {
+                var maxSecs = group.DailyMaxMinutes * 60L;
+                if (group.TodaySeconds < maxSecs) continue;
+                foreach (var appName in group.AppNames)
+                    breached.Add((appName, group.TodaySeconds, maxSecs));
             }
 
             var knownAppNames = new HashSet<string>(

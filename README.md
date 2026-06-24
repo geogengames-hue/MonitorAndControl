@@ -23,6 +23,8 @@ and monitor usage — all from a beautiful web dashboard.
 
 ## Features
 
+- **Shared limit groups** — combine apps such as games into one daily allowance; simultaneous group members consume the shared pool only once
+
 - **Real‑time usage tracking** — counts foreground use by default, with optional per-app background tracking
 - **Concurrent app accounting** — a foreground game and opted-in background communication apps can accumulate time simultaneously
 - **Overlay focus filtering** — prevents voice and notification overlays from being mistaken for deliberate app switches
@@ -100,6 +102,10 @@ Tracking behavior is configured independently for every process using the **Back
 Background accounting is concurrent. For example, if a game is in the foreground while Discord, Telegram, Signal, Skype, Teams, Zoom, or another opted-in application is running, the same elapsed second can be added to both applications. An application is counted only once per sample even if it is both foreground and enabled for background tracking.
 
 When several executables map to the same app name, they share one usage total and limit. Reaching that limit closes every running executable mapped to the app, not only the first process.
+
+### Shared limit groups
+
+The Limits page can combine tracked applications into a named group such as **Games** with one shared daily allowance. Time used by any member consumes the group pool. If multiple members run simultaneously, the group records real elapsed time only once instead of adding every member's duration. An app can belong to at most one group and may still have an individual limit; reaching either limit blocks that app. Shared group totals appear separately in Today and History so they are not added to individual-app totals. Group definitions are included in configuration export/import, while historical group usage remains local usage data.
 
 > **Important:** Background mode measures process runtime, not microphone activity. An application left open but unused continues accumulating time, and its daily limit can be reached while it remains in the background.
 
