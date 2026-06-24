@@ -186,9 +186,7 @@ function connectSSE() {
     clearTimeout(alertReconnectTimer);
     alertReconnectTimer = null;
   }
-  const token = sessionStorage.getItem('dashboardAdminToken') || '';
-  const streamUrl = token ? `/api/alerts/stream?token=${encodeURIComponent(token)}` : '/api/alerts/stream';
-  const evtSource = new EventSource(streamUrl);
+  const evtSource = new EventSource('/api/alerts/stream');
   alertEventSource = evtSource;
   evtSource.onmessage = e => {
     try { handleAlert(JSON.parse(e.data)); } catch (e) { log(e); }
@@ -235,8 +233,6 @@ function handleAlert(data) {
 async function api(url, opts) {
   opts = opts || {};
   opts.headers = opts.headers || {};
-  const token = sessionStorage.getItem('dashboardAdminToken');
-  if (token) opts.headers['X-Admin-Token'] = token;
   let r = await fetch(url, opts);
   if (r.status === 401) {
     const password = prompt(t('Admin password required'));
@@ -246,11 +242,7 @@ async function api(url, opts) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password })
       });
-      if (login.ok) {
-        const auth = await login.json();
-        sessionStorage.setItem('dashboardAdminToken', auth.token);
-        opts.headers['X-Admin-Token'] = auth.token;
-      }
+      if (login.ok) await login.json();
       r = await fetch(url, opts);
     }
   }
@@ -263,23 +255,7 @@ async function ensureAuthenticatedOnOpen() {
   if (!status.ok) return false;
   const authStatus = await status.json();
   if (!authStatus.passwordSet) return true;
-  if (sessionStorage.getItem('dashboardAdminToken')) return true;
-
-  while (true) {
-    const password = prompt(t('Admin password required'));
-    if (!password) return false;
-    const login = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
-    });
-    if (login.ok) {
-      const auth = await login.json();
-      sessionStorage.setItem('dashboardAdminToken', auth.token);
-      return true;
-    }
-    alert(t('Invalid admin password.'));
-  }
+  return true;
 }
 
 async function startApp() {
@@ -1040,8 +1016,6 @@ async function forgetApp(appName, procName) {
   if (!confirm(t('Remove all mapping & data for "{app}" ({proc})?', { app: appName, proc: procName }))) return;
   try {
     await api(`/api/apps/${encodeURIComponent(procName)}`, { method: 'DELETE' });
-    // Also remove limit if one exists
-    await api(`/api/limits/${encodeURIComponent(appName)}`, { method: 'DELETE' }).catch(() => {});
     loadLimits();
   } catch (e) {
     log(e);
@@ -1257,12 +1231,11 @@ document.getElementById('settings-admin-password').addEventListener('click', asy
   const newPassword = document.getElementById('set-admin-pw').value;
   el.textContent = t('Saving...');
   try {
-    const r = await api('/api/auth/password', {
+    await api('/api/auth/password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ currentPassword, newPassword })
     });
-    if (r.token) sessionStorage.setItem('dashboardAdminToken', r.token);
     document.getElementById('set-admin-current-pw').value = '';
     document.getElementById('set-admin-pw').value = '';
     el.style.color = '#44bb44';
@@ -1275,7 +1248,6 @@ document.getElementById('settings-admin-password').addEventListener('click', asy
 });
 
 document.getElementById('settings-logout').addEventListener('click', async () => {
-  sessionStorage.removeItem('dashboardAdminToken');
   try {
     await fetch('/api/auth/logout', { method: 'POST' });
   } catch {
@@ -1288,8 +1260,7 @@ document.getElementById('settings-rotate-token').addEventListener('click', async
   const el = document.getElementById('session-result');
   el.textContent = t('Rotating...');
   try {
-    const r = await api('/api/auth/token/rotate', { method: 'POST' });
-    if (r.token) sessionStorage.setItem('dashboardAdminToken', r.token);
+    await api('/api/auth/token/rotate', { method: 'POST' });
     el.style.color = '#44bb44';
     el.textContent = t('Token rotated');
   } catch (e) {
@@ -1486,6 +1457,7 @@ document.getElementById('settings-run-update').addEventListener('click', async (
   const source = document.getElementById('set-update-source').value.trim();
   const username = document.getElementById('set-update-username').value.trim();
   const password = document.getElementById('set-update-password').value;
+  const sha256 = document.getElementById('set-update-sha256').value.trim();
   if (!source) {
     el.style.color = '#ff4444';
     el.textContent = t('Enter an update source first.');
@@ -1500,7 +1472,7 @@ document.getElementById('settings-run-update').addEventListener('click', async (
     await api('/api/settings/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, username, password })
+      body: JSON.stringify({ source, username, password, sha256 })
     });
     document.getElementById('set-update-password').value = '';
     el.style.color = '#44bb44';

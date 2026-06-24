@@ -107,6 +107,13 @@ public class UsageDatabase : IDisposable
                 PRIMARY KEY (GroupId, Date),
                 FOREIGN KEY (GroupId) REFERENCES LimitGroups(Id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS LimitGroupUsageArchive (
+                GroupName TEXT NOT NULL,
+                Date TEXT NOT NULL,
+                TotalSeconds INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(GroupName, Date)
+            );
             """;
         cmd.ExecuteNonQuery();
 
@@ -221,7 +228,7 @@ public class UsageDatabase : IDisposable
         try
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM UsageRecords; DELETE FROM LimitGroupUsage";
+            cmd.CommandText = "DELETE FROM UsageRecords; DELETE FROM LimitGroupUsage; DELETE FROM LimitGroupUsageArchive";
             await cmd.ExecuteNonQueryAsync();
         }
         finally { _lock.Release(); }
@@ -247,6 +254,14 @@ public class UsageDatabase : IDisposable
             {
                 cmd.Transaction = tx;
                 cmd.CommandText = "DELETE FROM LimitGroupUsage WHERE Date = @date";
+                cmd.Parameters.AddWithValue("@date", date);
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "DELETE FROM LimitGroupUsageArchive WHERE Date = @date";
                 cmd.Parameters.AddWithValue("@date", date);
                 await cmd.ExecuteNonQueryAsync();
             }
@@ -715,6 +730,59 @@ public class UsageDatabase : IDisposable
         finally { _lock.Release(); }
     }
 
+    public async Task RecordUsageBatchAsync(
+        IEnumerable<(string AppName, string ProcessName, int ForegroundSeconds, int BackgroundSeconds)> appRecords,
+        IEnumerable<(int GroupId, int Seconds)> groupRecords)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            var date = DateTime.Today.ToString("yyyy-MM-dd");
+            foreach (var record in appRecords)
+            {
+                var total = record.ForegroundSeconds + record.BackgroundSeconds;
+                if (total <= 0) continue;
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO UsageRecords
+                        (AppName, ProcessName, Date, TotalSeconds, ForegroundSeconds, BackgroundSeconds)
+                    VALUES (@app, @proc, @date, @total, @foreground, @background)
+                    ON CONFLICT(AppName, Date) DO UPDATE SET
+                        TotalSeconds = TotalSeconds + @total,
+                        ForegroundSeconds = ForegroundSeconds + @foreground,
+                        BackgroundSeconds = BackgroundSeconds + @background,
+                        ProcessName = excluded.ProcessName;
+                    """;
+                cmd.Parameters.AddWithValue("@app", record.AppName);
+                cmd.Parameters.AddWithValue("@proc", record.ProcessName);
+                cmd.Parameters.AddWithValue("@date", date);
+                cmd.Parameters.AddWithValue("@total", total);
+                cmd.Parameters.AddWithValue("@foreground", record.ForegroundSeconds);
+                cmd.Parameters.AddWithValue("@background", record.BackgroundSeconds);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            foreach (var record in groupRecords)
+            {
+                if (record.Seconds <= 0) continue;
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO LimitGroupUsage (GroupId, Date, TotalSeconds)
+                    SELECT Id, @date, @seconds FROM LimitGroups WHERE Id = @id
+                    ON CONFLICT(GroupId, Date) DO UPDATE SET TotalSeconds = TotalSeconds + @seconds;
+                    """;
+                cmd.Parameters.AddWithValue("@id", record.GroupId);
+                cmd.Parameters.AddWithValue("@date", date);
+                cmd.Parameters.AddWithValue("@seconds", record.Seconds);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
     public async Task<List<AppLimitGroup>> GetLimitGroupsAsync()
     {
         await _lock.WaitAsync();
@@ -810,10 +878,23 @@ public class UsageDatabase : IDisposable
         await _lock.WaitAsync();
         try
         {
+            using var tx = _connection.BeginTransaction();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM LimitGroupMembers WHERE GroupId=@id; DELETE FROM LimitGroupUsage WHERE GroupId=@id; DELETE FROM LimitGroups WHERE Id=@id";
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT INTO LimitGroupUsageArchive (GroupName, Date, TotalSeconds)
+                SELECT g.Name, u.Date, u.TotalSeconds
+                FROM LimitGroupUsage u JOIN LimitGroups g ON g.Id = u.GroupId
+                WHERE u.GroupId = @id
+                ON CONFLICT(GroupName, Date) DO UPDATE SET
+                    TotalSeconds = TotalSeconds + excluded.TotalSeconds;
+                DELETE FROM LimitGroupMembers WHERE GroupId=@id;
+                DELETE FROM LimitGroupUsage WHERE GroupId=@id;
+                DELETE FROM LimitGroups WHERE Id=@id;
+                """;
             cmd.Parameters.AddWithValue("@id", id);
             await cmd.ExecuteNonQueryAsync();
+            tx.Commit();
         }
         finally { _lock.Release(); }
     }
@@ -824,7 +905,9 @@ public class UsageDatabase : IDisposable
         await _lock.WaitAsync();
         try
         {
+            using var tx = _connection.BeginTransaction();
             using var cmd = _connection.CreateCommand();
+            cmd.Transaction = tx;
             cmd.CommandText = """
                 INSERT INTO LimitGroupUsage (GroupId, Date, TotalSeconds)
                 VALUES (@id, @date, @seconds)
@@ -834,6 +917,7 @@ public class UsageDatabase : IDisposable
             cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
             cmd.Parameters.AddWithValue("@seconds", seconds);
             await cmd.ExecuteNonQueryAsync();
+            tx.Commit();
         }
         finally { _lock.Release(); }
     }
@@ -846,11 +930,17 @@ public class UsageDatabase : IDisposable
             var records = new List<LimitGroupUsageRecord>();
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                SELECT g.Id, g.Name, u.Date, u.TotalSeconds
-                FROM LimitGroupUsage u
-                JOIN LimitGroups g ON g.Id = u.GroupId
-                WHERE u.Date >= @from AND u.Date <= @to
-                ORDER BY u.Date DESC, u.TotalSeconds DESC;
+                SELECT MAX(GroupId), GroupName, Date, SUM(TotalSeconds)
+                FROM (
+                    SELECT g.Id AS GroupId, g.Name AS GroupName, u.Date, u.TotalSeconds
+                    FROM LimitGroupUsage u JOIN LimitGroups g ON g.Id = u.GroupId
+                    UNION ALL
+                    SELECT 0 AS GroupId, GroupName, Date, TotalSeconds
+                    FROM LimitGroupUsageArchive
+                )
+                WHERE Date >= @from AND Date <= @to
+                GROUP BY GroupName, Date
+                ORDER BY Date DESC, SUM(TotalSeconds) DESC;
                 """;
             cmd.Parameters.AddWithValue("@from", from.ToString("yyyy-MM-dd"));
             cmd.Parameters.AddWithValue("@to", to.ToString("yyyy-MM-dd"));
@@ -877,7 +967,45 @@ public class UsageDatabase : IDisposable
         {
             group.Id = 0;
             await SaveLimitGroupAsync(group);
+            await RestoreArchivedLimitGroupUsageAsync(group.Name);
         }
+    }
+
+    private async Task RestoreArchivedLimitGroupUsageAsync(string groupName)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            using var cmd = _connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT INTO LimitGroupUsage (GroupId, Date, TotalSeconds)
+                SELECT g.Id, a.Date, a.TotalSeconds
+                FROM LimitGroupUsageArchive a JOIN LimitGroups g ON g.Name = a.GroupName COLLATE NOCASE
+                WHERE a.GroupName = @name COLLATE NOCASE
+                ON CONFLICT(GroupId, Date) DO UPDATE SET
+                    TotalSeconds = TotalSeconds + excluded.TotalSeconds;
+                DELETE FROM LimitGroupUsageArchive WHERE GroupName = @name COLLATE NOCASE;
+                """;
+            cmd.Parameters.AddWithValue("@name", groupName);
+            await cmd.ExecuteNonQueryAsync();
+            tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task RemoveAppFromLimitGroupsAsync(string appName)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM LimitGroupMembers WHERE AppName = @app";
+            cmd.Parameters.AddWithValue("@app", appName);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
     }
 
     public async Task InitializeDefaults(AppConfig config)

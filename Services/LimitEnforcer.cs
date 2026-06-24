@@ -4,6 +4,13 @@ using MonitorAndControl.Data;
 
 namespace MonitorAndControl.Services;
 
+public sealed record GroupLimitBreach(
+    int GroupId,
+    string GroupName,
+    IReadOnlyList<string> AppNames,
+    long UsedSecs,
+    long MaxSecs);
+
 public class LimitEnforcer
 {
     private readonly UsageDatabase _db;
@@ -88,13 +95,13 @@ public class LimitEnforcer
         }
     }
 
-    public async Task EnforceAsync(
+    public Task EnforceAsync(
         List<(string AppName, long UsedSecs, long MaxSecs)> breached,
-        HashSet<string> scheduleViolationApps,
-        HashSet<string> knownAppNames)
+        List<GroupLimitBreach> breachedGroups,
+        HashSet<string> scheduleViolationApps)
     {
         if (IsPaused)
-            return;
+            return Task.CompletedTask;
 
         if (_pausedUntil.HasValue && _pausedUntil.Value <= DateTimeOffset.Now)
             _pausedUntil = null;
@@ -123,8 +130,36 @@ public class LimitEnforcer
             _todayDate = today;
         }
 
+        var groupMemberApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in breachedGroups)
+        {
+            var members = group.AppNames
+                .Where(appName => _tracker.KnownApps.Values.Any(value =>
+                    value.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            foreach (var member in members) groupMemberApps.Add(member);
+            if (members.Length == 0) continue;
+
+            var key = GroupCountdownKey(group.GroupId);
+            if (members.All(IsExceededToday))
+            {
+                foreach (var member in members.Where(IsAnyAppProcessRunning))
+                    KillAppProcesses(member);
+                continue;
+            }
+            if (!members.Any(IsAnyAppProcessRunning))
+            {
+                foreach (var member in members) _exceededToday[member] = today;
+                continue;
+            }
+            if (!_activeCountdowns.ContainsKey(key))
+                _ = StartGroupCountdownAsync(group, members);
+        }
+
         foreach (var (appName, used, max) in breached)
         {
+            if (groupMemberApps.Contains(appName)) continue;
             var key = appName.ToLowerInvariant();
             if (!_tracker.KnownApps.Values.Any(v =>
                     v.Equals(appName, StringComparison.OrdinalIgnoreCase)))
@@ -147,7 +182,42 @@ public class LimitEnforcer
             if (!_activeCountdowns.ContainsKey(key))
                 _ = StartCountdownAsync(appName);
         }
+        return Task.CompletedTask;
     }
+
+    private async Task StartGroupCountdownAsync(GroupLimitBreach group, string[] members)
+    {
+        var delay = await _db.GetKillDelayAsync();
+        var cts = new CancellationTokenSource();
+        var key = GroupCountdownKey(group.GroupId);
+        var runningMember = members.FirstOrDefault(IsAnyAppProcessRunning) ?? members[0];
+        var procName = _tracker.GetRunningProcessNamesForApp(runningMember).FirstOrDefault()
+            ?? _tracker.GetProcessNameForApp(runningMember)
+            ?? runningMember;
+        var displayName = $"{group.GroupName} (group)";
+
+        if (!_activeCountdowns.TryAdd(key, cts)) return;
+        OnBreachAlert?.Invoke(displayName, delay, procName);
+        try
+        {
+            for (var i = delay; i > 0; i--)
+            {
+                await Task.Delay(1000, cts.Token);
+                OnCountdownTick?.Invoke(displayName, i);
+            }
+            var today = DateTime.Now.ToString("yyyy-MM-dd");
+            foreach (var member in members)
+            {
+                _exceededToday[member] = today;
+                KillAppProcesses(member);
+            }
+            OnAppKilled?.Invoke(displayName);
+        }
+        catch (TaskCanceledException) { }
+        finally { _activeCountdowns.TryRemove(key, out _); }
+    }
+
+    private static string GroupCountdownKey(int groupId) => $"group:{groupId}";
 
     private async Task StartCountdownAsync(string appName)
     {
@@ -187,12 +257,23 @@ public class LimitEnforcer
     public void ClearExceeded(string? appName = null)
     {
         if (appName != null)
+        {
             _exceededToday.TryRemove(appName, out _);
+            CancelCountdown(appName);
+        }
         else
         {
+            foreach (var key in _activeCountdowns.Keys)
+                if (_activeCountdowns.TryRemove(key, out var cts)) cts.Cancel();
             _exceededToday.Clear();
             _todayDate = DateTime.Now.ToString("yyyy-MM-dd");
         }
+    }
+
+    public void ClearGroup(int groupId)
+    {
+        var key = GroupCountdownKey(groupId);
+        if (_activeCountdowns.TryRemove(key, out var cts)) cts.Cancel();
     }
 
     public void CancelCountdown(string appName)

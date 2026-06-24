@@ -48,6 +48,22 @@ public class UsageTracker : IDisposable
             _limitGroups = groups;
     }
 
+    public async Task ResetTodayAsync()
+    {
+        await _flushLock.WaitAsync();
+        try
+        {
+            lock (_usageSync)
+            {
+                _pendingUsage.Clear();
+                _pendingGroupMilliseconds.Clear();
+                _lastSampleTick = Environment.TickCount64;
+            }
+            await _db.ClearTodayUsageAsync();
+        }
+        finally { _flushLock.Release(); }
+    }
+
     public void Stop()
     {
         if (!_running) return;
@@ -163,14 +179,9 @@ public class UsageTracker : IDisposable
 
             try
             {
-                foreach (var record in records)
-                    await _db.RecordUsageAsync(
-                        record.AppName,
-                        record.ProcessName,
-                        record.ForegroundSeconds,
-                        record.BackgroundSeconds);
-                foreach (var record in groupRecords)
-                    await _db.RecordLimitGroupUsageAsync(record.GroupId, record.Seconds);
+                await _db.RecordUsageBatchAsync(
+                    records.Select(record => (record.AppName, record.ProcessName, record.ForegroundSeconds, record.BackgroundSeconds)),
+                    groupRecords);
             }
             catch
             {
@@ -201,6 +212,7 @@ public class UsageTracker : IDisposable
             var bonusByApp = (await _db.GetTodayBonusTimeAsync())
                 .ToDictionary(b => b.AppName, b => b.BonusMinutes, StringComparer.OrdinalIgnoreCase);
             var breached = new List<(string AppName, long UsedSecs, long MaxSecs)>();
+            var breachedGroups = new List<GroupLimitBreach>();
 
             foreach (var limit in limits.Where(l => l.Enabled))
             {
@@ -218,8 +230,8 @@ public class UsageTracker : IDisposable
             {
                 var maxSecs = group.DailyMaxMinutes * 60L;
                 if (group.TodaySeconds < maxSecs) continue;
-                foreach (var appName in group.AppNames)
-                    breached.Add((appName, group.TodaySeconds, maxSecs));
+                breachedGroups.Add(new GroupLimitBreach(
+                    group.Id, group.Name, group.AppNames, group.TodaySeconds, maxSecs));
             }
 
             var knownAppNames = new HashSet<string>(
@@ -227,7 +239,7 @@ public class UsageTracker : IDisposable
                 StringComparer.OrdinalIgnoreCase);
             var scheduleViolationApps = await _scheduler.GetViolatingAppNamesAsync(knownAppNames);
 
-            await _limitEnforcer.EnforceAsync(breached, scheduleViolationApps, knownAppNames);
+            await _limitEnforcer.EnforceAsync(breached, breachedGroups, scheduleViolationApps);
         }
         finally
         {

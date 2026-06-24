@@ -44,6 +44,7 @@ and monitor usage — all from a beautiful web dashboard.
 - **Watchdog service** — optional Windows service that restarts the monitor if it crashes
 - **Admin password** — protect dashboard changes and shutdown
 - **Remote dashboard login** — remote users are redirected to a login page; authenticated sessions use an HTTP-only cookie and can be explicitly logged out
+- **Secure defaults** — the dashboard binds to localhost by default, and remote API access is denied until an administrator authenticates
 - **Config export/import** — backup and restore limits, schedules, app mappings, and tracking policies
 - **Hotkey** — `Ctrl+Alt+H` opens the dashboard by default and can be changed in Settings
 
@@ -105,7 +106,7 @@ When several executables map to the same app name, they share one usage total an
 
 ### Shared limit groups
 
-The Limits page can combine tracked applications into a named group such as **Games** with one shared daily allowance. Time used by any member consumes the group pool. If multiple members run simultaneously, the group records real elapsed time only once instead of adding every member's duration. An app can belong to at most one group and may still have an individual limit; reaching either limit blocks that app. Shared group totals appear separately in Today and History so they are not added to individual-app totals. Group definitions are included in configuration export/import, while historical group usage remains local usage data.
+The Limits page can combine tracked applications into a named group such as **Games** with one shared daily allowance. Time used by any member consumes the group pool. If multiple members run simultaneously, the group records real elapsed time only once instead of adding every member's duration. An app can belong to at most one group and may still have an individual limit; reaching either limit blocks that app. A group breach shows one countdown for the group, closes running members, and blocks every member for the rest of the day. Shared group totals appear separately in Today and History so they are not added to individual-app totals. Group definitions are included in configuration export/import, and importing definitions preserves existing group history and today's consumed allowance.
 
 > **Important:** Background mode measures process runtime, not microphone activity. An application left open but unused continues accumulating time, and its daily limit can be reached while it remains in the background.
 
@@ -314,7 +315,9 @@ Once installed, the `GameHost` service runs under the SYSTEM account and automat
 
 **Admin password:** On first setup, create it from the trusted local dashboard on the child PC. Remote browsers are then redirected to `login.html` and must authenticate before dashboard assets are served. The authenticated session is stored in an HTTP-only, SameSite cookie. Use **Settings → Logout** to clear it. The password also protects dashboard changes (pause, resume, reset, kill, settings edits) and shutdown.
 
-**App update:** Put a freshly published package on a local folder, UNC share, or HTTP/HTTPS ZIP URL, then use **Settings -> App Update**. The package must contain `DeviceMon.exe`. For Windows 11 SMB shares, enter the optional SMB username/password. The dashboard starts `UpdateAgent.exe`, writes an update marker, closes DeviceMon, copies the package over the install folder, restarts DeviceMon, and repairs/restarts the watchdog when permissions allow. The updated watchdog pauses auto-restart while the update marker is fresh. Check `update.log` in the install folder if an update fails.
+**App update:** Put a freshly published package in a local folder or UNC share, or provide an HTTPS ZIP URL with its exact SHA-256, then use **Settings -> App Update**. HTTP URLs are rejected. For Windows 11 SMB shares, enter the optional SMB username/password. The updater requests administrator approval, verifies remote ZIP contents before extraction, writes its marker in an administrator/SYSTEM-only directory, closes DeviceMon, copies the package, restarts DeviceMon, and repairs the watchdog. Check `update.log` in the install folder if an update fails.
+
+**Reset Today:** Resetting today's usage is synchronized with the tracking flush and clears both persisted and pending app/group counters, so pre-reset seconds cannot reappear later.
 
 **Remote access:** Settings show the computer name and IP addresses. From another PC, open `http://CHILD_PC_NAME:5000` or `http://192.168.x.x:5000`.
 

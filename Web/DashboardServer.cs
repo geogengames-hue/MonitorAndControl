@@ -69,9 +69,7 @@ public class DashboardServer
         _app.Use(async (ctx, next) =>
         {
             if (ctx.Request.Path.StartsWithSegments("/api") &&
-                !ctx.Request.Path.StartsWithSegments("/api/auth") &&
-                !ctx.Request.Path.StartsWithSegments("/api/health") &&
-                _adminPasswordSet)
+                !ctx.Request.Path.StartsWithSegments("/api/auth"))
             {
                 var auth = RequireWriteAccess(ctx);
                 if (auth != null)
@@ -112,9 +110,10 @@ public class DashboardServer
         LimitEnforcer enforcer, SchedulerService scheduler, UsageTracker usageTracker, DiscoveryService discovery,
         NotificationService notifier, EmailService emailService)
     {
-        app.MapGet("/", async ctx =>
+        app.MapGet("/", (HttpContext ctx) =>
         {
             ctx.Response.Redirect("/index.html");
+            return Task.CompletedTask;
         });
 
         app.MapPost("/api/auth/login", async (HttpContext ctx) =>
@@ -137,7 +136,7 @@ public class DashboardServer
                 if (!IsLocalSetupAllowed(ctx))
                     return Results.Json(new { error = "Admin password has not been set locally yet." }, statusCode: StatusCodes.Status403Forbidden);
                 SetAdminCookie(ctx);
-                return Results.Ok(new { token = _adminToken, passwordSet = false });
+                return Results.Ok(new { passwordSet = false });
             }
 
             if (!PasswordHasher.Verify(password, storedHash))
@@ -148,7 +147,7 @@ public class DashboardServer
 
             ResetLoginRateLimit(ctx);
             SetAdminCookie(ctx);
-            return Results.Ok(new { token = _adminToken, passwordSet = true });
+            return Results.Ok(new { passwordSet = true });
         });
 
         app.MapGet("/api/auth/status", () =>
@@ -200,7 +199,7 @@ public class DashboardServer
             await db.SetSettingAsync("DashboardAdminPasswordHash", PasswordHasher.Hash(newPassword));
             _adminPasswordSet = true;
             SetAdminCookie(ctx);
-            return Results.Ok(new { status = "password_set", token = _adminToken });
+            return Results.Ok(new { status = "password_set" });
         });
 
         app.MapPost("/api/auth/token/rotate", async (HttpContext ctx) =>
@@ -212,7 +211,7 @@ public class DashboardServer
             await db.SetSettingAsync("DashboardAdminToken", _adminToken);
             SetAdminCookie(ctx);
             Logger.Instance.Warn("Dashboard admin token rotated");
-            return Results.Ok(new { status = "rotated", token = _adminToken });
+            return Results.Ok(new { status = "rotated" });
         });
 
         app.MapGet("/api/usage/today", async () =>
@@ -313,7 +312,7 @@ public class DashboardServer
         {
             var auth = RequireWriteAccess(ctx);
             if (auth != null) return auth;
-            await db.ClearTodayUsageAsync();
+            await usageTracker.ResetTodayAsync();
             enforcer.ClearExceeded();
             return Results.Ok(new { status = "today_reset" });
         });
@@ -379,9 +378,6 @@ public class DashboardServer
             // Look up the app name before deleting mapping
             var appName = tracker.KnownApps.TryGetValue(processName, out var name)
                 ? name : Path.GetFileNameWithoutExtension(processName);
-            enforcer.ClearExceeded(appName);
-            await db.DeleteAppUsageAsync(appName);
-
             await db.DeleteAppMappingAsync(processName);
             // Rebuild tracker mappings from config + remaining dynamic
             var config = Program.GetConfig();
@@ -389,7 +385,16 @@ public class DashboardServer
             var mappings = await db.GetAppMappingsAsync();
             foreach (var m in mappings)
                 tracker.AddKnownApp(m.ProcessName, m.AppName, m.CountInBackground, m.IgnoreOverlayFocus);
-            return Results.Ok();
+            var appRemoved = tracker.GetProcessNamesForApp(appName).Length == 0;
+            if (appRemoved)
+            {
+                enforcer.ClearExceeded(appName);
+                await db.DeleteAppUsageAsync(appName);
+                await db.DeleteLimitRuleAsync(appName);
+                await db.RemoveAppFromLimitGroupsAsync(appName);
+                await usageTracker.ReloadLimitGroupsAsync();
+            }
+            return Results.Ok(new { appRemoved });
         });
 
         app.MapGet("/api/mappings", async () =>
@@ -448,7 +453,18 @@ public class DashboardServer
             Results.Json(await db.GetLimitRulesAsync(), JsonOpts));
 
         app.MapGet("/api/limit-groups", async () =>
-            Results.Json(await db.GetLimitGroupsAsync(), JsonOpts));
+        {
+            var groups = await db.GetLimitGroupsAsync();
+            return Results.Json(groups.Select(group => new
+            {
+                group.Id,
+                group.Name,
+                group.DailyMaxMinutes,
+                group.Enabled,
+                group.AppNames,
+                group.TodaySeconds
+            }), JsonOpts);
+        });
 
         app.MapPost("/api/limit-groups", async (HttpContext ctx, AppLimitGroup group) =>
         {
@@ -477,6 +493,7 @@ public class DashboardServer
 
             var previousMembers = groups.FirstOrDefault(existing => existing.Id == group.Id)?.AppNames
                 ?? new List<string>();
+            if (group.Id > 0) enforcer.ClearGroup(group.Id);
             await db.SaveLimitGroupAsync(group);
             await usageTracker.ReloadLimitGroupsAsync();
             foreach (var appName in previousMembers.Concat(group.AppNames).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -490,6 +507,7 @@ public class DashboardServer
             if (auth != null) return auth;
             var group = (await db.GetLimitGroupsAsync()).FirstOrDefault(item => item.Id == id);
             if (group == null) return Results.NotFound();
+            enforcer.ClearGroup(id);
             await db.DeleteLimitGroupAsync(id);
             await usageTracker.ReloadLimitGroupsAsync();
             foreach (var appName in group.AppNames) enforcer.ClearExceeded(appName);
@@ -899,6 +917,7 @@ public class DashboardServer
             string source = "";
             string username = "";
             string password = "";
+            string sha256 = "";
             if (ctx.Request.ContentLength > 0)
             {
                 using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
@@ -908,9 +927,11 @@ public class DashboardServer
                     username = Clean(user.GetString());
                 if (doc.RootElement.TryGetProperty("password", out var pw))
                     password = pw.GetString() ?? "";
+                if (doc.RootElement.TryGetProperty("sha256", out var hash))
+                    sha256 = Clean(hash.GetString()).ToUpperInvariant();
             }
 
-            if (!IsValidUpdateSource(source, username, out var updateSourceError))
+            if (!IsValidUpdateSource(source, username, sha256, out var updateSourceError))
                 return Results.BadRequest(new { error = updateSourceError });
 
             var updaterPath = Path.Combine(AppContext.BaseDirectory, "UpdateAgent.exe");
@@ -934,7 +955,8 @@ public class DashboardServer
                 monitorPid = pid,
                 restart = true,
                 username = string.IsNullOrWhiteSpace(username) ? null : username,
-                password = string.IsNullOrWhiteSpace(password) ? null : password
+                password = string.IsNullOrWhiteSpace(password) ? null : password,
+                sha256 = string.IsNullOrWhiteSpace(sha256) ? null : sha256
             }, JsonOpts));
 
             Process.Start(new ProcessStartInfo
@@ -943,6 +965,7 @@ public class DashboardServer
                 Arguments = $"--request \"{requestPath}\"",
                 WorkingDirectory = tempDir,
                 UseShellExecute = true,
+                Verb = "runas",
                 WindowStyle = ProcessWindowStyle.Hidden
             });
 
@@ -1213,8 +1236,6 @@ public class DashboardServer
         var provided = ctx.Request.Headers["X-Admin-Token"].FirstOrDefault();
         if (string.IsNullOrWhiteSpace(provided))
             provided = ctx.Request.Cookies[AdminCookieName];
-        if (string.IsNullOrWhiteSpace(provided))
-            provided = ctx.Request.Query["token"].FirstOrDefault();
         return provided;
     }
 
@@ -1233,7 +1254,7 @@ public class DashboardServer
         {
             HttpOnly = true,
             Secure = IsExternalHttps(ctx),
-            SameSite = SameSiteMode.Lax,
+            SameSite = SameSiteMode.Strict,
             Path = "/"
         });
     }
@@ -1243,7 +1264,7 @@ public class DashboardServer
         ctx.Response.Cookies.Delete(AdminCookieName, new CookieOptions
         {
             Secure = IsExternalHttps(ctx),
-            SameSite = SameSiteMode.Lax,
+            SameSite = SameSiteMode.Strict,
             Path = "/"
         });
     }
@@ -1281,7 +1302,7 @@ public class DashboardServer
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
-    private static bool IsValidUpdateSource(string source, string username, out string error)
+    private static bool IsValidUpdateSource(string source, string username, string sha256, out string error)
     {
         error = "";
         if (string.IsNullOrWhiteSpace(source) || source.Length > 2048 || source.Any(char.IsControl))
@@ -1290,8 +1311,21 @@ public class DashboardServer
             return false;
         }
 
-        if (IsHttpUrl(source))
+        if (Uri.TryCreate(source, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            if (uri.Scheme != Uri.UriSchemeHttps)
+            {
+                error = "Remote update URLs must use HTTPS.";
+                return false;
+            }
+            if (sha256.Length != 64 || sha256.Any(c => !Uri.IsHexDigit(c)))
+            {
+                error = "HTTPS updates require a valid 64-character SHA-256.";
+                return false;
+            }
             return true;
+        }
 
         if (source.StartsWith(@"\\", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(username))
             return true;

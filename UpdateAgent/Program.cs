@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 
 namespace MonitorAndControl.UpdateAgent;
@@ -16,7 +19,7 @@ internal static class Program
         var options = UpdateOptions.Parse(args);
         if (options == null)
         {
-            Console.Error.WriteLine("Usage: UpdateAgent --source <folder-or-zip-url> --target <install-folder> --monitor <DeviceMon.exe> [--pid <pid>] [--restart]");
+            Console.Error.WriteLine("Usage: UpdateAgent --source <folder-or-https-zip-url> --target <install-folder> --monitor <DeviceMon.exe> [--sha256 <hash>] [--pid <pid>] [--restart]");
             return 2;
         }
 
@@ -41,7 +44,7 @@ internal static class Program
             StopWatchdog(Log);
             await WaitForMonitorExitAsync(options.MonitorPid, options.MonitorPath, Log);
 
-            var preparedSource = await PrepareSourceAsync(options.Source, Log);
+            var preparedSource = await PrepareSourceAsync(options.Source, options.ExpectedSha256, Log);
             ValidateSource(preparedSource);
             CopyDirectory(preparedSource, options.TargetDirectory, Log);
 
@@ -68,13 +71,14 @@ internal static class Program
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "SystemHelper");
 
-    private static string UpdateMarkerPath => Path.Combine(DataDirectory, "update-in-progress.marker");
+    private static string ProtectedDataDirectory => Path.Combine(DataDirectory, "Protected");
+    private static string UpdateMarkerPath => Path.Combine(ProtectedDataDirectory, "update-in-progress.marker");
 
     private static void WriteUpdateMarker(Action<string> log)
     {
         try
         {
-            Directory.CreateDirectory(DataDirectory);
+            PrepareProtectedDataDirectory();
             File.WriteAllText(UpdateMarkerPath, $"{DateTimeOffset.Now:O}|UpdateAgent");
             log($"Wrote update marker: {UpdateMarkerPath}");
         }
@@ -82,6 +86,21 @@ internal static class Program
         {
             log($"Failed to write update marker: {ex.Message}");
         }
+    }
+
+    private static void PrepareProtectedDataDirectory()
+    {
+        Directory.CreateDirectory(ProtectedDataDirectory);
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        var inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(ProtectedDataDirectory).SetAccessControl(security);
     }
 
     private static void ClearUpdateMarker()
@@ -161,11 +180,13 @@ internal static class Program
         return true;
     }
 
-    private static async Task<string> PrepareSourceAsync(string source, Action<string> log)
+    private static async Task<string> PrepareSourceAsync(string source, string? expectedSha256, Action<string> log)
     {
         if (Uri.TryCreate(source, UriKind.Absolute, out var uri) &&
-            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            uri.Scheme == Uri.UriSchemeHttps)
         {
+            if (string.IsNullOrWhiteSpace(expectedSha256) || expectedSha256.Length != 64 || expectedSha256.Any(c => !Uri.IsHexDigit(c)))
+                throw new InvalidOperationException("HTTPS updates require a valid SHA-256 hash.");
             var tempRoot = Path.Combine(Path.GetTempPath(), "DeviceMonUpdate", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempRoot);
             var zipPath = Path.Combine(tempRoot, "update.zip");
@@ -176,6 +197,14 @@ internal static class Program
             await using (var input = await response.Content.ReadAsStreamAsync())
             await using (var output = File.Create(zipPath))
                 await input.CopyToAsync(output);
+
+            await using (var package = File.OpenRead(zipPath))
+            {
+                var actualSha256 = Convert.ToHexString(await SHA256.HashDataAsync(package));
+                if (!actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"Update ZIP SHA-256 mismatch. Expected {expectedSha256}, got {actualSha256}.");
+                log($"Verified update ZIP SHA-256: {actualSha256}");
+            }
 
             var extractPath = Path.Combine(tempRoot, "extract");
             ZipFile.ExtractToDirectory(zipPath, extractPath);
@@ -388,6 +417,7 @@ internal sealed record UpdateOptions(
     bool Restart,
     string? Username,
     string? Password,
+    string? ExpectedSha256,
     string? RequestFile)
 {
     public static UpdateOptions? Parse(string[] args)
@@ -401,6 +431,7 @@ internal sealed record UpdateOptions(
         string? monitor = null;
         int? pid = null;
         var restart = false;
+        string? sha256 = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -414,6 +445,8 @@ internal sealed record UpdateOptions(
                 pid = parsedPid;
             else if (args[i].Equals("--restart", StringComparison.OrdinalIgnoreCase))
                 restart = true;
+            else if (args[i].Equals("--sha256", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                sha256 = args[++i];
         }
 
         if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(target))
@@ -424,7 +457,7 @@ internal sealed record UpdateOptions(
             ? Path.Combine(target, "DeviceMon.exe")
             : Path.GetFullPath(Environment.ExpandEnvironmentVariables(monitor));
 
-        return new UpdateOptions(source, target, monitor, pid, restart, null, null, null);
+        return new UpdateOptions(source, target, monitor, pid, restart, null, null, sha256, null);
     }
 
     public void DeleteRequestFile()
@@ -470,6 +503,7 @@ internal sealed record UpdateOptions(
             request.Restart,
             request.Username,
             request.Password,
+            request.Sha256,
             requestFile);
     }
 }
@@ -483,6 +517,7 @@ internal sealed class UpdateRequest
     public bool Restart { get; set; }
     public string? Username { get; set; }
     public string? Password { get; set; }
+    public string? Sha256 { get; set; }
 }
 
 internal static class NativeMethods

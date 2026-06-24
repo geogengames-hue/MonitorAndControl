@@ -132,8 +132,7 @@ form.addEventListener('submit', async event => {
       return;
     }
 
-    const auth = await response.json();
-    if (auth.token) sessionStorage.setItem('dashboardAdminToken', auth.token);
+    await response.json();
     window.location.replace('/index.html');
   } finally {
     button.disabled = false;

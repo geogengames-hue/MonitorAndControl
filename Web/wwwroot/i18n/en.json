@@ -14,5 +14,8 @@
   "Shared Group Usage": "Shared Group Usage",
   "Shared Total": "Shared Total",
   "Group totals are a shared pool and are not added to the individual-app total.": "Group totals are a shared pool and are not added to the individual-app total.",
-  "Historical shared-pool time is shown separately to avoid double-counting app usage.": "Historical shared-pool time is shown separately to avoid double-counting app usage."
+  "Historical shared-pool time is shown separately to avoid double-counting app usage.": "Historical shared-pool time is shown separately to avoid double-counting app usage.",
+  "Expected ZIP SHA-256 (required for HTTPS updates)": "Expected ZIP SHA-256 (required for HTTPS updates)",
+  "64-character SHA-256": "64-character SHA-256",
+  "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker."
 }

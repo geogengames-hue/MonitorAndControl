@@ -28,6 +28,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Monthly summaries clamp delivery days", TestMonthlySummaryDueTime),
     ("Limit enforcer rehydrates exceeded apps", TestLimitEnforcerRehydratesExceededApps),
     ("Limit enforcer rehydrates exceeded groups", TestLimitEnforcerRehydratesExceededGroups),
+    ("Limit enforcer blocks inactive group members without warnings", TestLimitEnforcerBlocksInactiveGroup),
+    ("Limit enforcer starts one countdown per breached group", TestLimitEnforcerStartsSingleGroupCountdown),
     ("Limit enforcer can pause and resume enforcement", TestLimitEnforcerPauseResume)
 };
 
@@ -283,9 +285,73 @@ static async Task TestUsageDatabaseStoresLimitGroups()
     AssertEqual("Games", history[0].GroupName, "Group history should include its name.");
     AssertEqual(45L, history[0].TotalSeconds, "Group history should preserve shared elapsed time.");
 
+    await db.ReplaceLimitGroupsAsync(new[]
+    {
+        new AppLimitGroup
+        {
+            Name = "Games",
+            DailyMaxMinutes = 120,
+            Enabled = true,
+            AppNames = new List<string> { "Chess" }
+        }
+    });
+    group = (await db.GetLimitGroupsAsync()).Single();
+    AssertEqual(45L, group.TodaySeconds, "Replacing group definitions must preserve today's shared usage.");
+    await db.RemoveAppFromLimitGroupsAsync("Chess");
+    group = (await db.GetLimitGroupsAsync()).Single();
+    AssertEqual(0, group.AppNames.Count, "Forgetting the last app mapping should remove stale group membership.");
+
     await db.ClearTodayUsageAsync();
     group = (await db.GetLimitGroupsAsync()).Single();
     AssertEqual(0L, group.TodaySeconds, "Clearing today should clear group usage.");
+}
+
+static async Task TestLimitEnforcerBlocksInactiveGroup()
+{
+    using var db = CreateTempDatabase();
+    using var tracker = new WindowTracker();
+    tracker.AddKnownApp("missing-chess.exe", "Chess");
+    tracker.AddKnownApp("missing-cards.exe", "Cards");
+    var enforcer = new LimitEnforcer(db, tracker);
+    var alerts = 0;
+    enforcer.OnBreachAlert += (_, _, _) => alerts++;
+
+    await enforcer.EnforceAsync(
+        new List<(string AppName, long UsedSecs, long MaxSecs)>(),
+        new List<GroupLimitBreach>
+        {
+            new(1, "Games", new[] { "Chess", "Cards" }, 60, 60)
+        },
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+    AssertTrue(enforcer.IsExceededToday("Chess"), "Inactive group members should be blocked immediately.");
+    AssertTrue(enforcer.IsExceededToday("Cards"), "Every inactive group member should be blocked.");
+    AssertEqual(0, alerts, "No warning should be shown when no group member is running.");
+}
+
+static async Task TestLimitEnforcerStartsSingleGroupCountdown()
+{
+    using var db = CreateTempDatabase();
+    using var tracker = new WindowTracker();
+    var currentProcess = Path.GetFileName(Environment.ProcessPath) ?? "MonitorAndControl.Tests.exe";
+    tracker.AddKnownApp(currentProcess, "Chess");
+    tracker.AddKnownApp("missing-cards.exe", "Cards");
+    var enforcer = new LimitEnforcer(db, tracker);
+    var alerts = new List<string>();
+    enforcer.OnBreachAlert += (name, _, _) => alerts.Add(name);
+
+    await enforcer.EnforceAsync(
+        new List<(string AppName, long UsedSecs, long MaxSecs)>(),
+        new List<GroupLimitBreach>
+        {
+            new(7, "Games", new[] { "Chess", "Cards" }, 60, 60)
+        },
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+    await Task.Delay(200);
+    enforcer.ClearGroup(7);
+
+    AssertEqual(1, alerts.Count, "A breached group should create exactly one warning countdown.");
+    AssertEqual("Games (group)", alerts[0], "The warning should identify the shared group.");
 }
 
 static async Task TestUsageDatabaseStoresTrackingPolicy()

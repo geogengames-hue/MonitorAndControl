@@ -6,6 +6,7 @@ using MailKit.Security;
 using MimeKit;
 using MonitorAndControl.Data;
 using MonitorAndControl.Models;
+using System.Collections.Concurrent;
 
 namespace MonitorAndControl.Services;
 
@@ -17,7 +18,10 @@ public class EmailService : IDisposable
     private readonly SchedulerService _scheduler;
     private readonly System.Threading.Timer _pollTimer;
     private readonly System.Threading.Timer _startAlertTimer;
-    private readonly HashSet<string> _startAlertsSentToday = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _startAlertsSentToday = new(StringComparer.OrdinalIgnoreCase);
+    private int _pollingInbox;
+    private int _pollingStarts;
+    private readonly object _startAlertDateSync = new();
     private bool _notifyEnabled;
     private bool _startNotifyEnabled;
     private bool _controlEnabled;
@@ -78,6 +82,7 @@ public class EmailService : IDisposable
     private async void PollRunningTrackedApps(object? state)
     {
         if (!_startNotifyEnabled || string.IsNullOrEmpty(_email)) return;
+        if (Interlocked.Exchange(ref _pollingStarts, 1) != 0) return;
 
         try
         {
@@ -94,6 +99,7 @@ public class EmailService : IDisposable
         {
             Logger.Instance.Error($"App-start email polling failed: {ex.Message}");
         }
+        finally { Volatile.Write(ref _pollingStarts, 0); }
     }
 
     public async Task<string?> SendAlertAsync(string subject, string body)
@@ -133,19 +139,24 @@ public class EmailService : IDisposable
             return "Email start alerts not configured";
 
         var today = DateTime.Now.ToString("yyyy-MM-dd");
-        if (_startAlertDate != today)
+        lock (_startAlertDateSync)
         {
-            _startAlertsSentToday.Clear();
-            _startAlertDate = today;
+            if (_startAlertDate != today)
+            {
+                _startAlertsSentToday.Clear();
+                _startAlertDate = today;
+            }
         }
 
-        if (!_startAlertsSentToday.Add(appName))
+        if (!_startAlertsSentToday.TryAdd(appName, 0))
             return null;
 
         var limits = await _db.GetLimitRulesAsync();
-        if (!limits.Any(l => l.Enabled && l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+        var groups = await _db.GetLimitGroupsAsync();
+        if (!limits.Any(l => l.Enabled && l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)) &&
+            !groups.Any(g => g.Enabled && g.AppNames.Contains(appName, StringComparer.OrdinalIgnoreCase)))
         {
-            _startAlertsSentToday.Remove(appName);
+            _startAlertsSentToday.TryRemove(appName, out _);
             return null;
         }
 
@@ -167,13 +178,17 @@ public class EmailService : IDisposable
 
     public void ResetStartEmailMarkers()
     {
-        _startAlertsSentToday.Clear();
-        _startAlertDate = DateTime.Now.ToString("yyyy-MM-dd");
+        lock (_startAlertDateSync)
+        {
+            _startAlertsSentToday.Clear();
+            _startAlertDate = DateTime.Now.ToString("yyyy-MM-dd");
+        }
     }
 
     private async void PollInbox(object? state)
     {
         if (!_controlEnabled || string.IsNullOrEmpty(_email)) return;
+        if (Interlocked.Exchange(ref _pollingInbox, 1) != 0) return;
         try
         {
             using var client = new ImapClient();
@@ -224,6 +239,7 @@ public class EmailService : IDisposable
         {
             Logger.Instance.Error($"Email command polling failed: {ex.Message}");
         }
+        finally { Volatile.Write(ref _pollingInbox, 0); }
     }
 
     private string[] GetAllowedSenders()

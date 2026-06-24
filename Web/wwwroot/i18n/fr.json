@@ -294,4 +294,7 @@
 , "Shared Total": "Total partagé"
 , "Group totals are a shared pool and are not added to the individual-app total.": "Les totaux de groupe forment un quota partagé et ne sont pas ajoutés au total des applications."
 , "Historical shared-pool time is shown separately to avoid double-counting app usage.": "Le temps partagé historique est affiché séparément pour éviter le double comptage."
+, "Expected ZIP SHA-256 (required for HTTPS updates)": "SHA-256 ZIP attendu (requis pour les mises à jour HTTPS)"
+, "64-character SHA-256": "SHA-256 de 64 caractères"
+, "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "Les mises à jour par URL exigent HTTPS et un SHA-256 exact. Le programme de mise à jour demande les droits administrateur pour protéger le marqueur du watchdog."
 }

@@ -228,6 +228,28 @@ internal static class Program
         catch
         {
         }
+        ProtectUpdateMarkerDirectory(Path.Combine(dataDirectory, "Protected"));
+    }
+
+    private static void ProtectUpdateMarkerDirectory(string path)
+    {
+        try
+        {
+            Directory.CreateDirectory(path);
+            var security = new DirectorySecurity();
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            var inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+                FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
+            new DirectoryInfo(path).SetAccessControl(security);
+        }
+        catch
+        {
+        }
     }
 }
 
@@ -453,7 +475,7 @@ internal sealed record WatchdogOptions(string MonitorPath, int IntervalSeconds, 
 {
     public string LogPath => Path.Combine(DataDirectory, "watchdog.log");
     public string RestartMarkerPath => Path.Combine(DataDirectory, "watchdog-restart.marker");
-    public string UpdateMarkerPath => Path.Combine(DataDirectory, "update-in-progress.marker");
+    public string UpdateMarkerPath => Path.Combine(DataDirectory, "Protected", "update-in-progress.marker");
 
     public static WatchdogOptions Parse(string[] args)
     {

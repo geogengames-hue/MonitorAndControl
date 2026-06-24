@@ -28,7 +28,14 @@ public class WindowTracker : IDisposable
 
     public event Action<string, string>? OnActiveWindowChanged;
 
-    public IReadOnlyDictionary<string, string> KnownApps => _knownApps;
+    public IReadOnlyDictionary<string, string> KnownApps
+    {
+        get
+        {
+            lock (_sync)
+                return new Dictionary<string, string>(_knownApps, StringComparer.OrdinalIgnoreCase);
+        }
+    }
 
     public WindowTracker()
     {
