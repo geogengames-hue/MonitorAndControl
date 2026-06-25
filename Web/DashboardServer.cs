@@ -924,6 +924,49 @@ public class DashboardServer
             return Results.Ok(new { status = "reset" });
         });
 
+        app.MapGet("/api/settings/update-status", (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+
+            var statusPath = Path.Combine(AppContext.BaseDirectory, "update-status.json");
+            var logPath = Path.Combine(AppContext.BaseDirectory, "update.log");
+            if (!File.Exists(statusPath))
+                return Results.Ok(new
+                {
+                    status = "none",
+                    message = "No update has been recorded yet.",
+                    logPath,
+                    logTail = ReadLogTail(logPath, 20)
+                });
+
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(statusPath));
+                var root = doc.RootElement;
+                return Results.Ok(new
+                {
+                    status = root.TryGetProperty("status", out var status) ? status.GetString() : "unknown",
+                    source = root.TryGetProperty("source", out var source) ? source.GetString() : "",
+                    startedAt = root.TryGetProperty("startedAt", out var startedAt) ? startedAt.GetString() : "",
+                    finishedAt = root.TryGetProperty("finishedAt", out var finishedAt) ? finishedAt.GetString() : "",
+                    message = root.TryGetProperty("message", out var message) ? message.GetString() : "",
+                    logPath = root.TryGetProperty("logPath", out var savedLogPath) ? savedLogPath.GetString() : logPath,
+                    logTail = ReadLogTail(logPath, 20)
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Ok(new
+                {
+                    status = "unknown",
+                    message = "Could not read update status: " + ex.Message,
+                    logPath,
+                    logTail = ReadLogTail(logPath, 20)
+                });
+            }
+        });
+
         app.MapPost("/api/settings/update", async (HttpContext ctx) =>
         {
             var auth = RequireWriteAccess(ctx);
@@ -962,6 +1005,17 @@ public class DashboardServer
             var targetDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var pid = Environment.ProcessId;
             var requestPath = Path.Combine(tempDir, "update-request.json");
+            var statusPath = Path.Combine(targetDir, "update-status.json");
+            WriteUpdateStatus(statusPath, new
+            {
+                status = "starting",
+                source,
+                startedAt = DateTimeOffset.Now,
+                finishedAt = (DateTimeOffset?)null,
+                message = "Starting updater silently.",
+                logPath = Path.Combine(targetDir, "update.log")
+            });
+
             await File.WriteAllTextAsync(requestPath, JsonSerializer.Serialize(new
             {
                 source,
@@ -974,15 +1028,33 @@ public class DashboardServer
                 sha256 = string.IsNullOrWhiteSpace(sha256) ? null : sha256
             }, JsonOpts));
 
-            Process.Start(new ProcessStartInfo
+            try
             {
-                FileName = tempUpdaterPath,
-                Arguments = $"--request \"{requestPath}\"",
-                WorkingDirectory = tempDir,
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden
-            });
+                var process = Process.Start(new ProcessStartInfo
+                {
+                    FileName = tempUpdaterPath,
+                    Arguments = $"--request \"{requestPath}\"",
+                    WorkingDirectory = tempDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                });
+                if (process == null)
+                    throw new InvalidOperationException("Windows did not start the updater process.");
+            }
+            catch (Exception ex)
+            {
+                WriteUpdateStatus(statusPath, new
+                {
+                    status = "failed",
+                    source,
+                    startedAt = DateTimeOffset.Now,
+                    finishedAt = DateTimeOffset.Now,
+                    message = "Could not start updater: " + ex.Message,
+                    logPath = Path.Combine(targetDir, "update.log")
+                });
+                return Results.Json(new { error = "Could not start updater: " + ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
+            }
 
             Logger.Instance.Warn($"Dashboard update started from source: {source}");
             Program.ShutdownSoon(1000);
@@ -1566,6 +1638,36 @@ public class DashboardServer
     {
         return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
             .Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
+    }
+
+    private static void WriteUpdateStatus(string path, object status)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, JsonSerializer.Serialize(status, JsonOpts));
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to write update status: {ex.Message}");
+        }
+    }
+
+    private static string[] ReadLogTail(string path, int count)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return [];
+
+            return File.ReadLines(path)
+                .TakeLast(Math.Max(1, count))
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            return [$"Could not read update log: {ex.Message}"];
+        }
     }
 
     public static async Task StopAsync()

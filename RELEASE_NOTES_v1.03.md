@@ -12,6 +12,7 @@
 - Added stronger tamper handling for missing data/configuration, watchdog failure/recovery, forced DeviceMon closure, clock jumps, and repeated dashboard login failures.
 - Improved email command handling so broadcast commands such as `mc: status` are processed once by every configured computer using the same inbox.
 - Redesigned the dashboard with a richer command-center layout, improved cards, buttons, motion, responsive behavior, and a cleaner backup/restore picker.
+- Added update result reporting in Settings, including success/failure status, timestamps, and the latest update log lines after the dashboard restarts.
 
 ## Fixes and hardening
 
@@ -24,7 +25,8 @@
 - Watchdog update-marker permissions were tightened so normal users cannot suppress watchdog restarts by touching the marker.
 - Email tamper recovery alerts are separated from normal app-start alerts so watchdog restarts are easier to identify.
 - Improved concurrency safety around known-app tracking data and email command processing.
-- Updater now runs as a windowless helper so updates do not show a console window; Windows UAC approval can still appear when administrator rights are required.
+- Updater now runs as a silent, windowless helper without a UAC prompt; if Windows permissions block part of the update, the dashboard records the failure in the update status.
+- Failed updates now record a visible error status and try to restart DeviceMon so the parent can read the failure reason.
 
 ## Upgrade notes
 

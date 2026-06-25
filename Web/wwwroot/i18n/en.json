@@ -32,7 +32,20 @@
   "Expected ZIP SHA-256 (required for HTTPS updates)": "Expected ZIP SHA-256 (required for HTTPS updates)",
   "64-character SHA-256": "64-character SHA-256",
   "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.",
+  "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.": "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.",
   "Send email when a limit is reached": "Send email when a limit is reached",
   "Send email when an app is closed by enforcement": "Send email when an app is closed by enforcement",
   "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.": "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures."
+, "No update has been recorded yet.": "No update has been recorded yet."
+, "Last update succeeded": "Last update succeeded"
+, "Last update failed": "Last update failed"
+, "Update is running": "Update is running"
+, "Update is starting": "Update is starting"
+, "Update status unknown": "Update status unknown"
+, "Update status": "Update status"
+, "Show update log": "Show update log"
+, "Started": "Started"
+, "Finished": "Finished"
+, "Source": "Source"
+, "Could not load update status.": "Could not load update status."
 }

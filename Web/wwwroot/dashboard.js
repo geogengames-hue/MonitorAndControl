@@ -1201,8 +1201,61 @@ async function loadSettings() {
     tokenNote.textContent = s.adminPasswordSet
       ? t('Dashboard changes and shutdown require the admin password.')
       : t('Set an admin password to protect dashboard changes and shutdown.');
+    loadUpdateStatus();
     loadHealth();
   } catch (e) { log(e); }
+}
+
+async function loadUpdateStatus() {
+  const el = document.getElementById('update-status');
+  if (!el) return;
+
+  try {
+    const status = await api('/api/settings/update-status');
+    const state = (status.status || 'none').toLowerCase();
+    if (state === 'none') {
+      el.className = 'update-status';
+      el.innerHTML = `<div class="update-status-empty">${t('No update has been recorded yet.')}</div>`;
+      return;
+    }
+
+    const titleMap = {
+      success: t('Last update succeeded'),
+      failed: t('Last update failed'),
+      running: t('Update is running'),
+      starting: t('Update is starting'),
+      unknown: t('Update status unknown')
+    };
+    const title = titleMap[state] || t('Update status');
+    const finished = status.finishedAt ? formatDateTime(status.finishedAt) : '';
+    const started = status.startedAt ? formatDateTime(status.startedAt) : '';
+    const logLines = Array.isArray(status.logTail) ? status.logTail : [];
+    const logHtml = logLines.length
+      ? `<details><summary>${t('Show update log')}</summary><pre>${esc(logLines.join('\n'))}</pre></details>`
+      : '';
+
+    el.className = `update-status update-status-${state}`;
+    el.innerHTML = `
+      <div class="update-status-title">${esc(title)}</div>
+      <div class="update-status-message">${esc(status.message || '')}</div>
+      <div class="update-status-meta">
+        ${started ? `<span>${t('Started')}: ${esc(started)}</span>` : ''}
+        ${finished ? `<span>${t('Finished')}: ${esc(finished)}</span>` : ''}
+      </div>
+      ${status.source ? `<div class="update-status-source">${t('Source')}: ${esc(status.source)}</div>` : ''}
+      ${logHtml}
+    `;
+  } catch (e) {
+    log(e);
+    el.className = 'update-status update-status-unknown';
+    el.textContent = t('Could not load update status.');
+  }
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || '');
+  return date.toLocaleString();
 }
 
 async function loadHealth() {
@@ -1481,9 +1534,11 @@ document.getElementById('settings-run-update').addEventListener('click', async (
     document.getElementById('set-update-password').value = '';
     el.style.color = '#44bb44';
     el.textContent = t('Update started. Reopen the dashboard after the app restarts.');
+    loadUpdateStatus();
   } catch (e) {
     el.style.color = '#ff4444';
     el.textContent = e.message || t('Update failed');
+    loadUpdateStatus();
   }
 });
 

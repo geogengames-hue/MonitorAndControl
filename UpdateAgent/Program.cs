@@ -13,6 +13,7 @@ internal static class Program
     private const string MonitorExeName = "DeviceMon.exe";
     private const string WatchdogExeName = "GameHost.exe";
     private const string ServiceName = "GameHost";
+    private static readonly JsonSerializerOptions StatusJsonOptions = new() { WriteIndented = true };
 
     public static async Task<int> Main(string[] args)
     {
@@ -24,6 +25,7 @@ internal static class Program
         }
 
         var logPath = Path.Combine(options.TargetDirectory, "update.log");
+        var statusPath = Path.Combine(options.TargetDirectory, "update-status.json");
         void Log(string message)
         {
             try
@@ -36,9 +38,17 @@ internal static class Program
             }
         }
 
+        var startedAt = DateTimeOffset.Now;
         try
         {
             Log($"Update started. Source={options.Source}");
+            WriteStatus(statusPath, new UpdateStatus(
+                "running",
+                options.Source,
+                startedAt,
+                null,
+                null,
+                logPath));
             ConnectNetworkShare(options, Log);
             WriteUpdateMarker(Log);
             StopWatchdog(Log);
@@ -53,17 +63,63 @@ internal static class Program
                 StartMonitor(options.MonitorPath, Log);
 
             Log("Update completed.");
+            WriteStatus(statusPath, new UpdateStatus(
+                "success",
+                options.Source,
+                startedAt,
+                DateTimeOffset.Now,
+                "Update completed successfully.",
+                logPath));
             return 0;
         }
         catch (Exception ex)
         {
             Log("Update failed: " + ex);
+            WriteStatus(statusPath, new UpdateStatus(
+                "failed",
+                options.Source,
+                startedAt,
+                DateTimeOffset.Now,
+                ex.Message,
+                logPath));
+            TryRestartMonitorAfterFailure(options, Log);
             return 1;
         }
         finally
         {
             ClearUpdateMarker();
             options.DeleteRequestFile();
+        }
+    }
+
+    private static void WriteStatus(string path, UpdateStatus status)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, JsonSerializer.Serialize(status, StatusJsonOptions));
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryRestartMonitorAfterFailure(UpdateOptions options, Action<string> log)
+    {
+        if (!options.Restart)
+            return;
+
+        try
+        {
+            if (File.Exists(options.MonitorPath))
+            {
+                StartMonitor(options.MonitorPath, log);
+                log("Monitor restarted after failed update.");
+            }
+        }
+        catch (Exception restartEx)
+        {
+            log("Failed to restart monitor after failed update: " + restartEx.Message);
         }
     }
 
@@ -408,6 +464,14 @@ internal static class Program
         }
     }
 }
+
+internal sealed record UpdateStatus(
+    string Status,
+    string Source,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? FinishedAt,
+    string? Message,
+    string LogPath);
 
 internal sealed record UpdateOptions(
     string Source,

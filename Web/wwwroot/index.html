@@ -341,9 +341,10 @@
         <input type="password" id="set-update-password" placeholder="Password for the update share" autocomplete="current-password" style="width:350px">
         <label>Expected ZIP SHA-256 (required for HTTPS updates)</label>
         <input type="text" id="set-update-sha256" placeholder="64-character SHA-256" autocomplete="off" style="width:620px">
-        <p style="font-size:12px;color:#888">URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.</p>
+        <p style="font-size:12px;color:#888">URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.</p>
         <button id="settings-run-update" class="btn-danger">Update App Now</button>
         <span id="update-result" style="margin-left:10px;font-size:13px"></span>
+        <div id="update-status" class="update-status"></div>
         <hr>
         <button id="settings-save">Save Settings</button>
         <button id="settings-webhook-test" class="btn-secondary">Test Webhook</button>

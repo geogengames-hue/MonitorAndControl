@@ -359,6 +359,19 @@ button.btn-danger:hover { background: linear-gradient(135deg,#d85b55,#a83e3a); b
 .backup-file-button { flex: 0 0 auto; padding: 7px 10px; border-radius: 5px; background: linear-gradient(135deg,rgba(155,130,209,.22),rgba(98,183,197,.13)); color: #d8d0ea; font-size: 11px; font-weight: 750; }
 #settings-import-file-label { min-width: 0; padding: 0 10px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .settings-result { min-width: 0; padding: 0 4px; overflow-wrap: anywhere; font-size: 12px; }
+.update-status { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,.035); color: var(--muted); }
+.update-status:empty { display: none; }
+.update-status-title { margin-bottom: 5px; color: var(--text); font-size: 15px; font-weight: 800; }
+.update-status-message { color: var(--text-soft); }
+.update-status-meta { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.update-status-source { margin-top: 8px; color: var(--muted); font-size: 12px; word-break: break-all; }
+.update-status-success { border-color: rgba(80,220,150,.35); background: linear-gradient(135deg,rgba(80,220,150,.12),rgba(255,255,255,.025)); }
+.update-status-failed { border-color: rgba(255,104,96,.38); background: linear-gradient(135deg,rgba(255,104,96,.12),rgba(255,255,255,.025)); }
+.update-status-running, .update-status-starting { border-color: rgba(250,190,95,.38); background: linear-gradient(135deg,rgba(250,190,95,.12),rgba(255,255,255,.025)); }
+.update-status details { margin-top: 10px; }
+.update-status summary { cursor: pointer; color: var(--text); font-weight: 700; }
+.update-status pre { max-height: 180px; overflow: auto; margin: 10px 0 0; padding: 12px; border-radius: 7px; background: rgba(0,0,0,.28); color: var(--muted); font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+.update-status-empty { color: var(--muted); font-size: 13px; }
 .health-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 8px; margin-top: 10px; }
 .health-item { padding: 11px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
 .health-item .value { margin-top: 4px; color: var(--text-soft); font-size: 12px; overflow-wrap: anywhere; }
