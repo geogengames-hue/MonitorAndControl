@@ -10,7 +10,7 @@
 <body>
 <div class="app">
   <aside class="sidebar">
-    <div class="logo">M&amp;C</div>
+    <div class="logo"><span>Monitor</span> &amp; Control<small>Family safety console</small></div>
     <nav>
       <a href="#" data-view="live" class="active">Live</a>
       <a href="#" data-view="today">Today</a>
@@ -21,45 +21,62 @@
       <a href="#" data-view="logs">Logs</a>
       <a href="#" data-view="settings">Settings</a>
     </nav>
+    <div class="sidebar-foot">
+      <span class="sidebar-pulse"></span>
+      <div><strong>Control panel</strong><small>Local device</small></div>
+    </div>
   </aside>
   <main class="main">
     <div id="alert-bar" class="alert-bar hidden"></div>
     <div id="error-bar" class="error-bar hidden"></div>
     <div id="view-live" class="view active">
-      <h2>Live Status</h2>
-      <div class="live-card">
-        <div class="live-label">Currently Active</div>
-        <div class="live-app" id="live-app">Waiting...</div>
-        <div class="live-proc" id="live-proc"></div>
-        <div class="live-status" id="enforcement-status"></div>
-      </div>
-      <div class="live-card">
-        <div class="live-label">Tracking Diagnostics</div>
-        <div class="tracking-summary" id="tracking-summary"></div>
-        <div class="tracking-diagnostics" id="tracking-diagnostics"></div>
-      </div>
-      <div class="live-card">
-        <div class="live-label">Quick Actions</div>
-        <div class="quick-actions">
-          <button id="action-pause-15" class="btn-secondary">Pause 15m</button>
-          <button id="action-pause-30" class="btn-secondary">Pause 30m</button>
-          <button id="action-resume" class="btn-secondary">Resume</button>
-          <button id="action-reset-today" class="btn-secondary">Reset Today</button>
-          <button id="action-block-all" class="btn-danger">Block All Now</button>
+      <div class="page-heading">
+        <div>
+          <span class="eyebrow">Control center</span>
+          <h2>Live Status</h2>
+          <p>What is happening on this device right now.</p>
         </div>
+        <div class="live-clock"><strong id="live-clock-time">--:--</strong><span id="live-clock-date">Local time</span></div>
       </div>
-      <div class="live-card">
-        <div class="live-label">Extend App Time</div>
-        <div class="quick-actions">
-          <select id="quick-extend-app"><option value="">Choose app</option></select>
-          <button id="quick-extend-15" class="btn-secondary">+15m</button>
-          <button id="quick-extend-30" class="btn-secondary">+30m</button>
-          <button id="quick-extend-bedtime" class="btn-secondary">Until Bedtime</button>
-        </div>
-      </div>
-      <div class="live-card">
-        <div class="live-label">Today's Usage</div>
-        <div id="live-today-list"></div>
+      <div class="live-dashboard">
+        <section class="live-card active-hero">
+          <div class="hero-glow"></div>
+          <div class="hero-content">
+            <div class="live-label">Currently Active</div>
+            <div class="live-app" id="live-app">Waiting...</div>
+            <div class="live-proc" id="live-proc"></div>
+            <div class="live-status" id="enforcement-status"></div>
+          </div>
+          <div class="hero-visual" aria-hidden="true"><i></i><i></i><i></i><span>LIVE</span></div>
+        </section>
+        <section class="live-card diagnostic-card">
+          <div class="card-heading"><div><div class="live-label">Tracking Diagnostics</div><p>How running applications are being counted</p></div><span class="card-mark">01</span></div>
+          <div class="tracking-summary" id="tracking-summary"></div>
+          <div class="tracking-diagnostics" id="tracking-diagnostics"></div>
+        </section>
+        <section class="live-card usage-card">
+          <div class="card-heading"><div><div class="live-label">Today's Usage</div><p>Accumulated activity</p></div><span class="card-mark">02</span></div>
+          <div id="live-today-list"></div>
+        </section>
+        <section class="live-card action-card">
+          <div class="card-heading"><div><div class="live-label">Quick Actions</div><p>Immediate controls</p></div><span class="card-mark">03</span></div>
+          <div class="quick-actions action-dock">
+            <button id="action-pause-15" class="btn-secondary">Pause 15m</button>
+            <button id="action-pause-30" class="btn-secondary">Pause 30m</button>
+            <button id="action-resume" class="btn-secondary">Resume</button>
+            <button id="action-reset-today" class="btn-secondary">Reset Today</button>
+            <button id="action-block-all" class="btn-danger">Block All Now</button>
+          </div>
+        </section>
+        <section class="live-card extend-card">
+          <div class="card-heading"><div><div class="live-label">Extend App Time</div><p>Grant a temporary exception</p></div><span class="card-mark">04</span></div>
+          <div class="quick-actions extend-dock">
+            <select id="quick-extend-app"><option value="">Choose app</option></select>
+            <button id="quick-extend-15" class="btn-secondary">+15m</button>
+            <button id="quick-extend-30" class="btn-secondary">+30m</button>
+            <button id="quick-extend-bedtime" class="btn-secondary">Until Bedtime</button>
+          </div>
+        </section>
       </div>
     </div>
     <div id="view-today" class="view">
@@ -257,7 +274,7 @@
         <p style="font-size:12px;color:#666">POST&#8203;ed with JSON when limits are breached. Use Discord webhooks, ntfy.sh, Pushover, or your own endpoint.</p>
         <hr>
         <h3>Email Notifications &amp; Control (Gmail)</h3>
-        <p style="font-size:12px;color:#888">Requires an <a href="https://support.google.com/accounts/answer/185833" target="_blank" style="color:#7c7cff">App Password</a> (enable 2FA, generate app password).</p>
+        <p style="font-size:12px;color:#888">Requires an <a href="https://support.google.com/accounts/answer/185833" target="_blank">App Password</a> (enable 2FA, generate app password).</p>
         <label>Gmail Address</label>
         <input type="email" id="set-email-addr" placeholder="you@gmail.com" style="width:350px">
         <label>App Password</label>
@@ -304,11 +321,16 @@
         <hr>
         <h3>Backup &amp; Restore</h3>
         <p style="font-size:12px;color:#888">Exports app mappings, limits, schedules, and non-sensitive settings. Admin passwords and email app passwords are not included.</p>
-        <button id="settings-export-config" class="btn-secondary">Export Config</button>
-        <input type="file" id="settings-import-file" accept="application/json,.json" style="width:350px">
-        <span id="settings-import-file-label" style="font-size:12px;color:#888">No file chosen</span>
-        <button id="settings-import-config" class="btn-secondary">Import Config</button>
-        <span id="config-backup-result" style="margin-left:10px;font-size:13px"></span>
+        <div class="backup-actions">
+          <button id="settings-export-config" class="btn-secondary">Export Config</button>
+          <label class="backup-file-control" for="settings-import-file">
+            <input type="file" id="settings-import-file" accept="application/json,.json">
+            <span class="backup-file-button">Choose backup</span>
+            <span id="settings-import-file-label">No file chosen</span>
+          </label>
+          <button id="settings-import-config" class="btn-secondary">Import Config</button>
+          <span id="config-backup-result" class="settings-result"></span>
+        </div>
         <hr>
         <h3>App Update</h3>
         <label>Update source</label>

@@ -459,20 +459,20 @@ function renderTodayChart(usage) {
   if (todayChart) todayChart.destroy();
   const labels = usage.map(u => u.appName);
   const breakdown = document.getElementById('today-breakdown').checked;
-  const colors = ['#7c7cff', '#ff7c7c', '#7cff7c', '#ffcc7c', '#7cffcc', '#cc7cff', '#ff7ccc', '#7cccff'];
+  const colors = ['#f0a45d', '#69a7a0', '#cf766d', '#8caf72', '#a887b8', '#d2bc68', '#c08a62', '#7893ad'];
   const hasLegacy = usage.some(u => u.unclassifiedSeconds > 0);
   const datasets = breakdown
     ? [
         {
           label: t('Foreground'),
           data: usage.map(u => +(u.foregroundSeconds / 60).toFixed(1)),
-          backgroundColor: '#7c7cff',
+          backgroundColor: '#f0a45d',
           borderRadius: 4
         },
         {
           label: t('Background'),
           data: usage.map(u => +(u.backgroundSeconds / 60).toFixed(1)),
-          backgroundColor: '#7cffcc',
+          backgroundColor: '#75a99b',
           borderRadius: 4
         },
         ...(hasLegacy ? [{
@@ -497,10 +497,11 @@ function renderTodayChart(usage) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: breakdown, labels: { color: '#888' } } },
+      animation: { duration: 700, easing: 'easeOutQuart' },
+      plugins: { legend: { display: breakdown, labels: { color: '#7f8b85' } } },
       scales: {
-        y: { stacked: breakdown, beginAtZero: true, ticks: { color: '#888' }, grid: { color: '#2a2a3e' } },
-        x: { stacked: breakdown, ticks: { color: '#888' }, grid: { display: false } }
+        y: { stacked: breakdown, beginAtZero: true, ticks: { color: '#7f8b85' }, grid: { color: '#2b3531' } },
+        x: { stacked: breakdown, ticks: { color: '#7f8b85' }, grid: { display: false } }
       }
     }
   });
@@ -710,7 +711,7 @@ function renderHistoryChart(usage) {
   });
   const dates = Object.keys(byDate).sort();
   const apps = [...new Set(usage.map(u => u.appName))];
-  const colors = ['#7c7cff', '#ff7c7c', '#7cff7c', '#ffcc7c', '#7cffcc', '#cc7cff', '#ff7ccc', '#7cccff'];
+  const colors = ['#f0a45d', '#69a7a0', '#cf766d', '#8caf72', '#a887b8', '#d2bc68', '#c08a62', '#7893ad'];
   const hasLegacy = usage.some(u => u.unclassifiedSeconds > 0);
   const sourceByDate = {};
   usage.forEach(u => {
@@ -721,15 +722,15 @@ function renderHistoryChart(usage) {
   });
   const datasets = breakdown
     ? [
-        { label: t('Foreground'), data: dates.map(d => sourceByDate[d]?.foreground || 0), backgroundColor: '#7c7cff', borderRadius: 3 },
-        { label: t('Background'), data: dates.map(d => sourceByDate[d]?.background || 0), backgroundColor: '#7cffcc', borderRadius: 3 },
+        { label: t('Foreground'), data: dates.map(d => sourceByDate[d]?.foreground || 0), backgroundColor: '#f0a45d', borderRadius: 3 },
+        { label: t('Background'), data: dates.map(d => sourceByDate[d]?.background || 0), backgroundColor: '#75a99b', borderRadius: 3 },
         ...(hasLegacy ? [{ label: t('Legacy / unclassified'), data: dates.map(d => sourceByDate[d]?.legacy || 0), backgroundColor: '#777', borderRadius: 3 }] : [])
       ]
     : mode === 'total'
     ? [{
         label: 'Total minutes',
         data: dates.map(d => Object.values(byDate[d]).reduce((sum, v) => sum + v, 0)),
-        backgroundColor: '#7c7cff',
+        backgroundColor: '#f0a45d',
         borderRadius: 4
       }]
     : apps.map((app, i) => ({
@@ -744,10 +745,11 @@ function renderHistoryChart(usage) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#888' } } },
+      animation: { duration: 700, easing: 'easeOutQuart' },
+      plugins: { legend: { labels: { color: '#7f8b85' } } },
       scales: {
-        x: { stacked: breakdown || mode !== 'total', ticks: { color: '#888' }, grid: { display: false } },
-        y: { stacked: breakdown || mode !== 'total', beginAtZero: true, ticks: { color: '#888' }, grid: { color: '#2a2a3e' }, title: { display: true, text: t('Minutes'), color: '#888' } }
+        x: { stacked: breakdown || mode !== 'total', ticks: { color: '#7f8b85' }, grid: { display: false } },
+        y: { stacked: breakdown || mode !== 'total', beginAtZero: true, ticks: { color: '#7f8b85' }, grid: { color: '#2b3531' }, title: { display: true, text: t('Minutes'), color: '#7f8b85' } }
       }
     }
   });
@@ -800,7 +802,7 @@ async function loadLimits() {
       html += `<tr data-tracking-row>
         <td><strong>${esc(app)}</strong></td>
         <td style="font-size:11px;color:#666;max-width:250px;word-break:break-all">${esc(procName) || '-'}</td>
-        <td>${group ? `<span style="color:#7c7cff">${esc(group.name)}</span>` : '-'}</td>
+        <td>${group ? `<span style="color:#f0a45d">${esc(group.name)}</span>` : '-'}</td>
         <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="background" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.countInBackground ? 'checked' : ''}>` : '-'}</td>
         <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="overlay" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.ignoreOverlayFocus ? 'checked' : ''}>` : '-'}</td>
         <td>${limit ? limit.dailyMaxMinutes + ' min' + (bonus ? ` <span style="color:#ffcc66">(+${bonus})</span>` : '') : `<span style="color:#666">${t('No limit')}</span>`}</td>
@@ -1499,11 +1501,72 @@ function renderTable(id, data, props, headers) {
   el.innerHTML = html;
 }
 
+function enhanceInterface() {
+  document.querySelectorAll('.view > h2').forEach(heading => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'page-heading simple';
+    heading.parentNode.insertBefore(wrapper, heading);
+    wrapper.appendChild(heading);
+  });
+
+  const form = document.querySelector('.settings-form');
+  if (form && !form.querySelector('.settings-panel')) {
+    const children = [...form.children];
+    let panel = document.createElement('section');
+    panel.className = 'settings-panel';
+    const generalHeading = document.createElement('h3');
+    generalHeading.textContent = t('General & Security');
+    panel.appendChild(generalHeading);
+
+    const finishPanel = () => {
+      if (panel.children.length) form.appendChild(panel);
+      panel = document.createElement('section');
+      panel.className = 'settings-panel';
+    };
+
+    children.forEach(child => {
+      if (child.tagName === 'HR') {
+        child.remove();
+        finishPanel();
+      } else {
+        panel.appendChild(child);
+      }
+    });
+    finishPanel();
+
+    const actionPanel = document.getElementById('settings-save')?.closest('.settings-panel');
+    if (actionPanel) actionPanel.classList.add('settings-actions');
+  }
+
+  const updateClock = () => {
+    const now = new Date();
+    const time = document.getElementById('live-clock-time');
+    const date = document.getElementById('live-clock-date');
+    if (time) time.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (date) date.textContent = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+  updateClock();
+  setInterval(updateClock, 30000);
+
+  document.addEventListener('pointerdown', event => {
+    const button = event.target.closest('button');
+    if (!button || button.disabled) return;
+    const rect = button.getBoundingClientRect();
+    const ripple = document.createElement('span');
+    ripple.className = 'button-ripple';
+    ripple.style.left = `${event.clientX - rect.left}px`;
+    ripple.style.top = `${event.clientY - rect.top}px`;
+    button.appendChild(ripple);
+    ripple.addEventListener('animationend', () => ripple.remove(), { once: true });
+  });
+}
+
 // Init
 (async function init() {
   await loadTranslations(uiLanguage);
   initHotkeyKeyOptions();
   applyTranslations();
+  enhanceInterface();
   startApp();
 })();
 

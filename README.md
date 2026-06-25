@@ -116,6 +116,10 @@ Tracking always pauses while the Windows desktop is locked. **Settings → Pause
 
 The Live tab's **Tracking Diagnostics** card explains each running configured process: counted as foreground, counted in background, not counted because background mode is disabled, or paused because Windows is locked/the user is idle.
 
+The dashboard uses a responsive premium control-console layout: a live activity hero, asymmetric diagnostics/usage cards, an action dock, icon navigation, grouped settings panels, compact data tables, and horizontal mobile navigation. Purpose-specific cyan, violet, amber, blue, green, and red accents distinguish content and actions. Staggered entrances, card depth, animated charts, button highlights/click ripples, and a gently animated live visual add polish while honoring the operating system's reduced-motion preference.
+
+Settings action rows are responsive, including a custom backup-file picker that shows one truncated filename without duplicating the browser's native file status.
+
 ### Scheduled summaries and tamper alerts
 
 Both features are disabled by default and configured under **Settings → Scheduled Reports & Security Alerts**. Summaries support daily, weekly, or monthly delivery using the computer's local time. Weekly reports have a weekday selector; monthly reports accept days 1–31 and automatically use the month's last valid day when necessary.
