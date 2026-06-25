@@ -24,6 +24,7 @@
 - Watchdog update-marker permissions were tightened so normal users cannot suppress watchdog restarts by touching the marker.
 - Email tamper recovery alerts are separated from normal app-start alerts so watchdog restarts are easier to identify.
 - Improved concurrency safety around known-app tracking data and email command processing.
+- Updater now runs as a windowless helper so updates do not show a console window; Windows UAC approval can still appear when administrator rights are required.
 
 ## Upgrade notes
 
