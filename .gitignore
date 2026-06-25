@@ -13,6 +13,7 @@ obj/
 
 # Release archives
 *.zip
+*.zip.sha256
 
 # OS
 Thumbs.db

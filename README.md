@@ -225,7 +225,7 @@ Opens the dashboard at `http://localhost:5000` and runs in the system tray.
 
 ### Quick start
 
-1. **Download** the latest release from the [Releases](https://github.com/geogengames-hue/MonitorAndControl/releases) page (all three `.exe` files must be kept together in the same folder)
+1. **Download** the latest release from the [Releases](https://github.com/geogengames-hue/MonitorAndControl/releases) page (`DeviceMon.exe`, `GameHost.exe`, `PopupHost.exe`, and `UpdateAgent.exe` must be kept together in the same folder)
 2. **Extract** the zip to a folder (e.g. `C:\MonitorAndControl`)
 3. **Run `DeviceMon.exe`** (no admin required for basic usage)
    - On first run, it will detect `GameHost.exe` and ask for **administrator elevation** via a UAC prompt to install the watchdog service. This is optional — click **Yes** to enable auto-restart on crash, or **No** to skip (the app will still run normally)
@@ -414,7 +414,7 @@ A: Confirm nothing else is using port 5000. Run `netstat -aon | findstr :5000` i
 A: Add `"DashboardPort": 5001` (or any free port) to `appsettings.json` and restart DeviceMon. Then open `http://localhost:5001`.
 
 **Q: How do I update to a newer version?**
-A: Download the latest release ZIP, extract it to a folder. Go to **Settings → App Update** on the dashboard, point to the folder/UNC path/HTTP zip URL, and click Update. The app will close itself, copy the new files, and restart. See [App update](#using-the-dashboard) for details.
+A: Download the latest release ZIP, extract it to a folder. Go to **Settings → App Update** on the dashboard, point to the folder/UNC path or HTTPS ZIP URL with its exact SHA-256, and click Update. The app will close itself, copy the new files, and restart. See [App update](#using-the-dashboard) for details.
 
 **Q: Some games/apps show as "Unknown App" even though they're running.**
 A: The app only recognizes processes it has seen before. Add the unknown process from the **Discover** tab (auto-detect) or manually via **Limits → Add App**. You can also pre-map them in `appsettings.json` under `KnownApps`.
