@@ -175,6 +175,10 @@ document.querySelectorAll('.sidebar nav a').forEach(a => {
 
 let liveTimer = null;
 let todayTimer = null;
+let authPromptPromise = null;
+let activeViewTimer = null;
+let activeViewRefreshRunning = false;
+let limitsUsageTimer = null;
 
 // SSE alerts
 function connectSSE() {
@@ -230,22 +234,35 @@ function handleAlert(data) {
   }
 }
 
+async function ensureSession() {
+  if (authPromptPromise) return authPromptPromise;
+  authPromptPromise = (async () => {
+    const password = prompt(t('Admin password required'));
+    if (!password) return false;
+    const login = await fetch('/api/auth/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    if (!login.ok) throw new Error(await login.text());
+    await login.json();
+    return true;
+  })();
+  try {
+    return await authPromptPromise;
+  } finally {
+    authPromptPromise = null;
+  }
+}
+
 async function api(url, opts) {
   opts = opts || {};
   opts.headers = opts.headers || {};
+  opts.credentials = opts.credentials || 'same-origin';
   let r = await fetch(url, opts);
-  if (r.status === 401) {
-    const password = prompt(t('Admin password required'));
-    if (password) {
-      const login = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
-      });
-      if (login.ok) await login.json();
-      r = await fetch(url, opts);
-    }
-  }
+  if (r.status === 401 && await ensureSession())
+    r = await fetch(url, opts);
   if (!r.ok) throw new Error(await r.text());
   return r.headers.get('content-type')?.includes('json') ? r.json() : r;
 }
@@ -267,10 +284,42 @@ async function startApp() {
   }
   if (!liveTimer) liveTimer = setInterval(loadLive, 2000);
   if (!todayTimer) todayTimer = setInterval(loadLiveToday, 5000);
+  if (!activeViewTimer) activeViewTimer = setInterval(refreshActiveView, 10000);
+  if (!limitsUsageTimer) limitsUsageTimer = setInterval(refreshVisibleLimitUsage, 2000);
   loadLive();
   loadLiveToday();
   connectSSE();
   loadToday();
+}
+
+function getActiveViewName() {
+  return document.querySelector('.sidebar nav a.active')?.dataset.view || 'live';
+}
+
+function isEditingActiveView() {
+  const active = document.activeElement;
+  if (!active) return false;
+  if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)) return false;
+  return !!active.closest('.view.active');
+}
+
+async function refreshActiveView() {
+  if (document.hidden || activeViewRefreshRunning || isEditingActiveView()) return;
+  activeViewRefreshRunning = true;
+  try {
+    const view = getActiveViewName();
+    if (view === 'today') await loadToday();
+    else if (view === 'history') await loadHistory(currentDays);
+    else if (view === 'limits') await loadLimits();
+    else if (view === 'schedule') await loadSchedule();
+    else if (view === 'logs') await loadLogs(false);
+    else if (view === 'settings') {
+      await loadUpdateStatus();
+      await loadHealth();
+    }
+  } finally {
+    activeViewRefreshRunning = false;
+  }
 }
 
 // Live
@@ -799,15 +848,15 @@ async function loadLimits() {
       const exceeded = max > 0 && used >= max;
       const enabled = limit ? limit.enabled : false;
       const group = groups.find(g => g.appNames.some(name => name.toLowerCase() === app.toLowerCase()));
-      html += `<tr data-tracking-row>
+      html += `<tr data-tracking-row data-app="${escAttr(app)}">
         <td><strong>${esc(app)}</strong></td>
         <td style="font-size:11px;color:#666;max-width:250px;word-break:break-all">${esc(procName) || '-'}</td>
         <td>${group ? `<span style="color:#f0a45d">${esc(group.name)}</span>` : '-'}</td>
         <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="background" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.countInBackground ? 'checked' : ''}>` : '-'}</td>
         <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="overlay" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.ignoreOverlayFocus ? 'checked' : ''}>` : '-'}</td>
         <td>${limit ? limit.dailyMaxMinutes + ' min' + (bonus ? ` <span style="color:#ffcc66">(+${bonus})</span>` : '') : `<span style="color:#666">${t('No limit')}</span>`}</td>
-        <td>${usage ? esc(usage.durationFormatted) : '0m'}</td>
-        <td>${enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : (pct > 80 ? '<span style="color:#ff8800">' + pct + '%</span>' : '<span style="color:#44bb44">' + pct + '%</span>')) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
+        <td data-limit-today>${usage ? esc(usage.durationFormatted) : '0m'}</td>
+        <td data-limit-status>${enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : (pct > 80 ? '<span style="color:#ff8800">' + pct + '%</span>' : '<span style="color:#44bb44">' + pct + '%</span>')) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
         <td class="actions">
           ${limit ? `<button onclick="editLimit('${escAttr(app)}')">${t('Edit')}</button>` : ''}
           ${limit ? `<button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',15)">+15m</button><button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',30)">+30m</button>` : ''}
@@ -821,6 +870,70 @@ async function loadLimits() {
     table.querySelectorAll('.tracking-policy').forEach(checkbox =>
       checkbox.addEventListener('change', saveTrackingPolicy));
   } catch (e) { log(e); }
+}
+
+async function refreshVisibleLimitUsage() {
+  if (document.hidden || getActiveViewName() !== 'limits') return;
+  const table = document.getElementById('limits-table');
+  if (!table || !table.querySelector('[data-limit-today]')) return;
+
+  try {
+    const [limits, today, bonuses, groups] = await Promise.all([
+      api('/api/limits'),
+      api('/api/usage/today'),
+      api('/api/bonus/today'),
+      api('/api/limit-groups')
+    ]);
+    const limitsByApp = new Map(limits.map(limit => [limit.appName.toLowerCase(), limit]));
+    const usageByApp = new Map(today.map(usage => [usage.appName.toLowerCase(), usage]));
+    const bonusByApp = new Map(bonuses.map(bonus => [bonus.appName.toLowerCase(), bonus.bonusMinutes || 0]));
+
+    table.querySelectorAll('[data-tracking-row][data-app]').forEach(row => {
+      const app = row.dataset.app || '';
+      const key = app.toLowerCase();
+      const limit = limitsByApp.get(key);
+      const usage = usageByApp.get(key);
+      const bonus = bonusByApp.get(key) || 0;
+      const used = usage ? usage.totalSeconds : 0;
+      const max = limit ? (limit.dailyMaxMinutes + bonus) * 60 : 0;
+      const pct = max > 0 ? Math.round((used / max) * 100) : 0;
+      const exceeded = max > 0 && used >= max;
+      const enabled = limit ? limit.enabled : false;
+      const todayCell = row.querySelector('[data-limit-today]');
+      const statusCell = row.querySelector('[data-limit-status]');
+      if (todayCell) todayCell.textContent = usage ? usage.durationFormatted : '0m';
+      if (statusCell) {
+        statusCell.innerHTML = enabled
+          ? exceeded
+            ? `<span style="color:#ff4444">${t('Exceeded')}</span>`
+            : pct > 80
+              ? `<span style="color:#ff8800">${pct}%</span>`
+              : `<span style="color:#44bb44">${pct}%</span>`
+          : `<span style="color:#666">${t('Disabled')}</span>`;
+      }
+    });
+
+    const groupsById = new Map(groups.map(group => [String(group.id), group]));
+    document.querySelectorAll('#limit-groups-table [data-group-id]').forEach(row => {
+      const group = groupsById.get(row.dataset.groupId || '');
+      if (!group) return;
+      const max = group.dailyMaxMinutes * 60;
+      const pct = max ? Math.round(group.todaySeconds / max * 100) : 0;
+      const exceeded = group.enabled && group.todaySeconds >= max;
+      const todayCell = row.querySelector('[data-group-today]');
+      const statusCell = row.querySelector('[data-group-status]');
+      if (todayCell) todayCell.textContent = formatDuration(group.todaySeconds);
+      if (statusCell) {
+        statusCell.innerHTML = group.enabled
+          ? exceeded
+            ? `<span style="color:#ff4444">${t('Exceeded')}</span>`
+            : `<span style="color:${pct > 80 ? '#ff8800' : '#44bb44'}">${pct}%</span>`
+          : `<span style="color:#666">${t('Disabled')}</span>`;
+      }
+    });
+  } catch (e) {
+    log(e);
+  }
 }
 
 function renderLimitGroups(groups, known, limits) {
@@ -839,12 +952,12 @@ function renderLimitGroups(groups, known, limits) {
       const max = group.dailyMaxMinutes * 60;
       const pct = max ? Math.round(group.todaySeconds / max * 100) : 0;
       const exceeded = group.enabled && group.todaySeconds >= max;
-      html += `<tr>
+      html += `<tr data-group-id="${group.id}">
         <td><strong>${esc(group.name)}</strong></td>
         <td>${group.appNames.map(esc).join(', ')}</td>
         <td>${group.dailyMaxMinutes} ${t('min')}</td>
-        <td>${formatDuration(group.todaySeconds)}</td>
-        <td>${group.enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : `<span style="color:${pct > 80 ? '#ff8800' : '#44bb44'}">${pct}%</span>`) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
+        <td data-group-today>${formatDuration(group.todaySeconds)}</td>
+        <td data-group-status>${group.enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : `<span style="color:${pct > 80 ? '#ff8800' : '#44bb44'}">${pct}%</span>`) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
         <td class="actions"><button onclick="editLimitGroup(${group.id})">${t('Edit')}</button><button class="btn-danger" onclick="deleteLimitGroup(${group.id})">${t('Remove')}</button></td>
       </tr>`;
     });

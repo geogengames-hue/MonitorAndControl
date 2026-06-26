@@ -65,11 +65,18 @@ public class NotificationService : IDisposable
         {
             var url = await GetWebhookUrlAsync();
             if (string.IsNullOrWhiteSpace(url)) return false;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+                await IsBlockedWebhookTargetAsync(uri))
+            {
+                Logger.Instance.Warn($"Blocked unsafe webhook target: {url}");
+                return false;
+            }
 
             var json = JsonSerializer.Serialize(payload, JsonOpts);
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            using var response = await _http.PostAsync(url, content);
+            using var response = await _http.PostAsync(uri, content);
             if (!response.IsSuccessStatusCode)
             {
                 System.Diagnostics.Debug.WriteLine(
@@ -82,6 +89,44 @@ public class NotificationService : IDisposable
             System.Diagnostics.Debug.WriteLine($"Webhook error: {ex.Message}");
             return false;
         }
+    }
+
+    private static async Task<bool> IsBlockedWebhookTargetAsync(Uri uri)
+    {
+        if (uri.IsLoopback || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        try
+        {
+            var addresses = await System.Net.Dns.GetHostAddressesAsync(uri.Host);
+            return addresses.Length == 0 || addresses.Any(IsLocalOnlyAddress);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static bool IsLocalOnlyAddress(System.Net.IPAddress address)
+    {
+        if (System.Net.IPAddress.IsLoopback(address) ||
+            address.Equals(System.Net.IPAddress.Any) ||
+            address.Equals(System.Net.IPAddress.IPv6Any) ||
+            address.Equals(System.Net.IPAddress.Broadcast) ||
+            address.IsIPv6LinkLocal ||
+            address.IsIPv6SiteLocal)
+            return true;
+
+        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            var bytes = address.GetAddressBytes();
+            return (bytes[0] & 0xfe) == 0xfc;
+        }
+
+        var b = address.GetAddressBytes();
+        return b[0] == 0 ||
+            b[0] == 127 ||
+            (b[0] == 169 && b[1] == 254);
     }
 
     public async Task TestWebhookAsync()

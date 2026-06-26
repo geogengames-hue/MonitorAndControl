@@ -258,7 +258,7 @@ internal sealed class WatchdogService : ServiceBase
     private readonly WatchdogOptions _options;
     private readonly System.Threading.Timer _timer;
     private bool _hadSeenMonitor;
-    private bool _checking;
+    private int _checking;
 
     public WatchdogService(WatchdogOptions options)
     {
@@ -287,8 +287,7 @@ internal sealed class WatchdogService : ServiceBase
 
     private void CheckMonitor(object? state)
     {
-        if (_checking) return;
-        _checking = true;
+        if (Interlocked.Exchange(ref _checking, 1) != 0) return;
         try
         {
             if (IsUpdateInProgress())
@@ -315,7 +314,7 @@ internal sealed class WatchdogService : ServiceBase
         }
         finally
         {
-            _checking = false;
+            Volatile.Write(ref _checking, 0);
         }
     }
 
@@ -356,6 +355,10 @@ internal sealed class WatchdogService : ServiceBase
             catch
             {
                 return true;
+            }
+            finally
+            {
+                process.Dispose();
             }
         }
 

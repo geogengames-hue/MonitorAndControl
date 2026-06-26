@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 using System.Text.Json;
 
 namespace MonitorAndControl.UpdateAgent;
@@ -566,9 +567,22 @@ internal sealed record UpdateOptions(
             request.MonitorPid,
             request.Restart,
             request.Username,
-            request.Password,
+            !string.IsNullOrWhiteSpace(request.ProtectedPassword)
+                ? UnprotectSecret(request.ProtectedPassword)
+                : request.Password,
             request.Sha256,
             requestFile);
+    }
+
+    private static string UnprotectSecret(string value)
+    {
+        const string prefix = "dpapi:";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal))
+            return value;
+
+        var protectedBytes = Convert.FromBase64String(value[prefix.Length..]);
+        var bytes = ProtectedData.Unprotect(protectedBytes, optionalEntropy: null, DataProtectionScope.CurrentUser);
+        return Encoding.UTF8.GetString(bytes);
     }
 }
 
@@ -581,6 +595,7 @@ internal sealed class UpdateRequest
     public bool Restart { get; set; }
     public string? Username { get; set; }
     public string? Password { get; set; }
+    public string? ProtectedPassword { get; set; }
     public string? Sha256 { get; set; }
 }
 

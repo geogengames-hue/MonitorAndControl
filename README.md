@@ -282,7 +282,7 @@ Place this file alongside `DeviceMon.exe`. All settings are optional — default
 | `DefaultLimits` | `[]` | Daily limits imported only when the database is first created |
 | `Schedule` | `[]` | Allowed-hours rules imported only when the database is first created |
 
-> **Security note:** When remote access is enabled, remote users cannot open the dashboard until an admin password has been created from a trusted local dashboard. After setup, remote users are redirected to the login page. Successful authentication creates an HTTP-only session cookie; use **Settings → Logout** to end that browser session.
+> **Security note:** When remote access is enabled, remote users cannot open the dashboard until an admin password has been created from a trusted local dashboard. After setup, remote users are redirected to the login page. Successful authentication creates an HTTP-only session cookie; use **Settings → Logout** to end that browser session. The built-in dashboard listener is HTTP only; do not expose it beyond a trusted LAN unless you put it behind a TLS reverse proxy, VPN/tunnel, or a trusted local certificate setup.
 
 ### Installing the Watchdog (optional, requires admin)
 
@@ -330,6 +330,15 @@ Once installed, the `GameHost` service runs under the SYSTEM account and automat
 **Reset Today:** Resetting today's usage is synchronized with the tracking flush and clears both persisted and pending app/group counters, so pre-reset seconds cannot reappear later.
 
 **Remote access:** Settings show the computer name and IP addresses. From another PC, open `http://CHILD_PC_NAME:5000` or `http://192.168.x.x:5000`.
+
+**LAN HTTPS:** HTTPS always requires a certificate. For a local LAN, use one of these approaches:
+
+- Put DeviceMon behind a reverse proxy with a certificate trusted by the parent devices.
+- Use a real domain name that resolves to the LAN IP and issue a certificate with DNS validation.
+- Use a private CA/self-signed certificate and install that CA/certificate as trusted on every parent device.
+- Use a VPN/tunnel product that provides HTTPS at its edge.
+
+Without one of those trust models, browsers will show certificate warnings because they cannot verify the local server identity.
 
 ### Email control (optional)
 

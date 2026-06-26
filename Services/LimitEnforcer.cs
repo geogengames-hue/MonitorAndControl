@@ -366,6 +366,10 @@ public class LimitEnforcer
                 {
                     Logger.Instance.Error($"Failed to close process {proc.ProcessName} ({proc.Id}): {ex.Message}");
                 }
+                finally
+                {
+                    proc.Dispose();
+                }
             }
         }
         catch (Exception ex)

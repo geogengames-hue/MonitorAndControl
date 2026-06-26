@@ -112,8 +112,7 @@ public class WarningPopup : Form
         _checkTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         _checkTimer.Tick += (s, e) =>
         {
-            if (!string.IsNullOrEmpty(_processName) &&
-                Process.GetProcessesByName(Path.GetFileNameWithoutExtension(_processName)).Length == 0)
+            if (!string.IsNullOrEmpty(_processName) && !IsProcessRunning(_processName))
             {
                 _checkTimer.Stop();
                 _timer.Stop();
@@ -146,6 +145,17 @@ public class WarningPopup : Form
             var closeTimer = new System.Windows.Forms.Timer { Interval = 7000 };
             closeTimer.Tick += (_, __) => { closeTimer.Stop(); Close(); };
             closeTimer.Start();
+        }
+    }
+
+    private static bool IsProcessRunning(string processName)
+    {
+        var processes = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(processName));
+        try { return processes.Length > 0; }
+        finally
+        {
+            foreach (var process in processes)
+                process.Dispose();
         }
     }
 

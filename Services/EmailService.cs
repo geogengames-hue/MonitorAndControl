@@ -35,6 +35,7 @@ public class EmailService : IDisposable
     private string _allowedSender = "";
     private string _deviceId = Environment.MachineName;
     private string _startAlertDate = DateTime.Now.ToString("yyyy-MM-dd");
+    private const int MaxCommandScanMessages = 25;
     private const string SmtpHost = "smtp.gmail.com";
     private const int SmtpPort = 587;
     private const string ImapHost = "imap.gmail.com";
@@ -234,37 +235,49 @@ public class EmailService : IDisposable
             // be used as command-delivery state because the first computer would hide a
             // broadcast from all the others. Each installation keeps its own receipt list.
             var allUids = await client.Inbox.SearchAsync(fromQuery);
-            var uids = allUids.Skip(Math.Max(0, allUids.Count - 250)).ToList();
+            var uids = allUids.Skip(Math.Max(0, allUids.Count - MaxCommandScanMessages)).ToList();
             if (uids.Count == 0) { await client.DisconnectAsync(true); return; }
 
-            var items = await client.Inbox.FetchAsync(uids, new MailKit.FetchRequest(MailKit.MessageSummaryItems.Full));
+            var summaryItems =
+                MailKit.MessageSummaryItems.UniqueId |
+                MailKit.MessageSummaryItems.Envelope |
+                MailKit.MessageSummaryItems.Flags |
+                MailKit.MessageSummaryItems.InternalDate;
+            var items = await client.Inbox.FetchAsync(uids, new MailKit.FetchRequest(summaryItems));
             var initialized = (await _db.GetSettingAsync("EmailCommandTrackingInitialized", "false")) == "true";
             foreach (var item in items)
             {
-                var mime = await client.Inbox.GetMessageAsync(item.UniqueId);
-                var from = mime.From.Mailboxes.FirstOrDefault()?.Address ?? "";
-                var subject = mime.Subject ?? "";
-                var body = (mime.TextBody ?? mime.HtmlBody ?? "").Trim();
+                var from = item.Envelope?.From.Mailboxes.FirstOrDefault()?.Address ?? "";
+                var subject = item.Envelope?.Subject ?? "";
                 if (!allowedSenders.Contains(from, StringComparer.OrdinalIgnoreCase))
                     continue;
 
-                var commandText = ExtractCommandText(subject, body);
-                if (commandText == null)
-                    continue;
-
-                var messageKey = !string.IsNullOrWhiteSpace(mime.MessageId)
-                    ? $"message-id:{mime.MessageId.Trim()}"
+                var messageId = item.Envelope?.MessageId;
+                var messageKey = !string.IsNullOrWhiteSpace(messageId)
+                    ? $"message-id:{messageId.Trim()}"
                     : $"imap:{client.Inbox.UidValidity}:{item.UniqueId.Id}";
                 if (await _db.IsEmailCommandProcessedAsync(messageKey))
                     continue;
 
-                var receivedAt = item.InternalDate ?? mime.Date;
+                var receivedAt = item.InternalDate ?? item.Envelope?.Date ?? DateTimeOffset.UtcNow;
                 var tooOld = receivedAt < DateTimeOffset.UtcNow.AddDays(-30);
                 var predatesUpgrade = !initialized
                     && item.Flags.HasValue
                     && item.Flags.Value.HasFlag(MailKit.MessageFlags.Seen)
                     && receivedAt < _commandPollingStartedAt.AddMinutes(-2);
                 if (tooOld || predatesUpgrade)
+                {
+                    await _db.MarkEmailCommandProcessedAsync(messageKey);
+                    continue;
+                }
+
+                var subjectCommand = ExtractCommandText(subject, "");
+                var mime = subjectCommand == null
+                    ? await client.Inbox.GetMessageAsync(item.UniqueId)
+                    : null;
+                var body = mime == null ? "" : (mime.TextBody ?? mime.HtmlBody ?? "").Trim();
+                var commandText = subjectCommand ?? ExtractCommandText(subject, body);
+                if (commandText == null)
                 {
                     await _db.MarkEmailCommandProcessedAsync(messageKey);
                     continue;
@@ -429,8 +442,11 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
             var setMatch = Regex.Match(line, @"^set\s+(.+?)\s+(\d+)\s*min", RegexOptions.IgnoreCase);
             if (setMatch.Success)
             {
-                var appName = setMatch.Groups[1].Value.Trim();
+                var appName = InputValidation.Clean(setMatch.Groups[1].Value);
                 var minutes = int.Parse(setMatch.Groups[2].Value);
+                if (!InputValidation.IsValidAppName(appName) || !InputValidation.IsValidLimitMinutes(minutes))
+                    return "Error: Limit requires a valid app name and 1-1440 minutes.";
+
                 await _db.SaveLimitRuleAsync(new AppLimitRule
                 {
                     AppName = appName,
@@ -445,10 +461,10 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
             var bonusMatch = Regex.Match(line, @"^(?:bonus|extend)\s+(.+?)\s+(\d+)\s*min", RegexOptions.IgnoreCase);
             if (bonusMatch.Success)
             {
-                var appName = bonusMatch.Groups[1].Value.Trim();
+                var appName = InputValidation.Clean(bonusMatch.Groups[1].Value);
                 var minutes = int.Parse(bonusMatch.Groups[2].Value);
-                if (minutes is < 1 or > 240)
-                    return "Error: Bonus minutes must be between 1 and 240.";
+                if (!InputValidation.IsValidAppName(appName) || !InputValidation.IsValidBonusMinutes(minutes))
+                    return "Error: Bonus requires a valid app name and 1-240 minutes.";
 
                 var limits = await _db.GetLimitRulesAsync();
                 if (!limits.Any(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)))
@@ -462,7 +478,10 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
             var bedtimeMatch = Regex.Match(line, @"^(?:bonus|extend|allow)\s+(.+?)\s+(?:until\s+)?bedtime$", RegexOptions.IgnoreCase);
             if (bedtimeMatch.Success)
             {
-                var appName = bedtimeMatch.Groups[1].Value.Trim();
+                var appName = InputValidation.Clean(bedtimeMatch.Groups[1].Value);
+                if (!InputValidation.IsValidAppName(appName))
+                    return "Error: Invalid app name.";
+
                 var limits = await _db.GetLimitRulesAsync();
                 var limit = limits.FirstOrDefault(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
                 if (limit == null)
@@ -491,17 +510,23 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
             {
                 var day = schedMatch.Groups[1].Value;
                 day = char.ToUpper(day[0]) + day.Substring(1).ToLower();
+                var startTime = schedMatch.Groups[2].Value;
+                var endTime = schedMatch.Groups[3].Value;
+                if (!TimeSpan.TryParse(startTime, out var start) || start < TimeSpan.Zero || start >= TimeSpan.FromDays(1) ||
+                    !TimeSpan.TryParse(endTime, out var end) || end < TimeSpan.Zero || end >= TimeSpan.FromDays(1))
+                    return "Error: Invalid schedule time.";
+
                 if (day is "Weekday" or "Weekend" or "Everyday" or "Monday" or "Tuesday" or "Wednesday" or "Thursday" or "Friday" or "Saturday" or "Sunday")
                 {
                     await _db.SaveScheduleRuleAsync(new ScheduleRule
                     {
                         DayOfWeek = day,
-                        StartTime = schedMatch.Groups[2].Value,
-                        EndTime = schedMatch.Groups[3].Value,
+                        StartTime = startTime,
+                        EndTime = endTime,
                         Enabled = true
                     });
                     _scheduler.InvalidateCache();
-                    return $"OK: Schedule added: {day} {schedMatch.Groups[2].Value}-{schedMatch.Groups[3].Value}";
+                    return $"OK: Schedule added: {day} {startTime}-{endTime}";
                 }
                 return $"Error: Invalid day: {day}. Use: Weekday, Weekend, Everyday, or day name.";
             }
@@ -511,6 +536,9 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
             if (delayMatch.Success)
             {
                 var secs = int.Parse(delayMatch.Groups[1].Value);
+                if (!InputValidation.IsValidKillDelaySeconds(secs))
+                    return "Error: Kill delay must be between 5 and 300 seconds.";
+
                 await _db.SetKillDelayAsync(secs);
                 return $"OK: Kill delay set to {secs}s";
             }
@@ -519,8 +547,11 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
             var addMatch = Regex.Match(line, @"^add\s+(\S+)\s+(.+)", RegexOptions.IgnoreCase);
             if (addMatch.Success)
             {
-                var proc = addMatch.Groups[1].Value;
-                var name = addMatch.Groups[2].Value.Trim();
+                var proc = InputValidation.Clean(addMatch.Groups[1].Value);
+                var name = InputValidation.Clean(addMatch.Groups[2].Value);
+                if (!InputValidation.IsValidProcessName(proc) || !InputValidation.IsValidAppName(name))
+                    return "Error: Invalid process or app name.";
+
                 var existing = (await _db.GetAppMappingsAsync()).FirstOrDefault(mapping =>
                     mapping.ProcessName.Equals(proc, StringComparison.OrdinalIgnoreCase));
                 var countInBackground = existing?.CountInBackground ?? false;

@@ -48,6 +48,93 @@ public class UsageTracker : IDisposable
             _limitGroups = groups;
     }
 
+    public async Task<List<AppUsageRecord>> GetTodayUsageIncludingPendingAsync()
+    {
+        var usage = await _db.GetTodayUsageAsync();
+        List<(string AppName, string ProcessName, int ForegroundSeconds, int BackgroundSeconds)> pending;
+        lock (_usageSync)
+        {
+            pending = _pendingUsage
+                .Select(kvp => (
+                    AppName: kvp.Key,
+                    ProcessName: kvp.Value.ProcessName,
+                    ForegroundSeconds: (int)(kvp.Value.ForegroundMilliseconds / 1000),
+                    BackgroundSeconds: (int)(kvp.Value.BackgroundMilliseconds / 1000)))
+                .Where(item => item.ForegroundSeconds > 0 || item.BackgroundSeconds > 0)
+                .ToList();
+        }
+
+        foreach (var item in pending)
+        {
+            var existing = usage.FirstOrDefault(record =>
+                record.AppName.Equals(item.AppName, StringComparison.OrdinalIgnoreCase));
+            if (existing == null)
+            {
+                usage.Add(new AppUsageRecord
+                {
+                    AppName = item.AppName,
+                    ProcessName = item.ProcessName,
+                    Date = DateTime.Today
+                });
+                existing = usage[^1];
+            }
+
+            existing.ProcessName = item.ProcessName;
+            existing.ForegroundSeconds += item.ForegroundSeconds;
+            existing.BackgroundSeconds += item.BackgroundSeconds;
+            existing.TotalSeconds += item.ForegroundSeconds + item.BackgroundSeconds;
+        }
+
+        return usage.OrderByDescending(record => record.TotalSeconds).ToList();
+    }
+
+    public async Task<List<AppLimitGroup>> GetLimitGroupsIncludingPendingAsync()
+    {
+        var groups = await _db.GetLimitGroupsAsync();
+        Dictionary<int, int> pending;
+        lock (_usageSync)
+        {
+            pending = _pendingGroupMilliseconds
+                .Where(kvp => kvp.Value >= 1000)
+                .ToDictionary(kvp => kvp.Key, kvp => (int)(kvp.Value / 1000));
+        }
+
+        foreach (var group in groups)
+        {
+            if (pending.TryGetValue(group.Id, out var seconds))
+                group.TodaySeconds += seconds;
+        }
+
+        return groups;
+    }
+
+    public async Task<List<LimitGroupUsageRecord>> GetTodayGroupUsageIncludingPendingAsync()
+    {
+        var records = await _db.GetLimitGroupUsageRangeAsync(DateTime.Today, DateTime.Today);
+        var groups = await GetLimitGroupsIncludingPendingAsync();
+        foreach (var group in groups)
+        {
+            var record = records.FirstOrDefault(item => item.GroupId == group.Id);
+            if (record == null && group.TodaySeconds > 0)
+            {
+                records.Add(new LimitGroupUsageRecord
+                {
+                    GroupId = group.Id,
+                    GroupName = group.Name,
+                    Date = DateTime.Today,
+                    TotalSeconds = group.TodaySeconds
+                });
+            }
+            else if (record != null)
+            {
+                record.TotalSeconds = group.TodaySeconds;
+                record.GroupName = group.Name;
+            }
+        }
+
+        return records.OrderByDescending(record => record.TotalSeconds).ToList();
+    }
+
     public async Task ResetTodayAsync()
     {
         await _flushLock.WaitAsync();

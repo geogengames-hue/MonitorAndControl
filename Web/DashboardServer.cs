@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Threading.Channels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -135,9 +136,11 @@ public class DashboardServer
             {
                 if (!IsLocalSetupAllowed(ctx))
                     return Results.Json(new { error = "Admin password has not been set locally yet." }, statusCode: StatusCodes.Status403Forbidden);
-                SetAdminCookie(ctx);
                 return Results.Ok(new { passwordSet = false });
             }
+
+            if (password.Length > 128)
+                return Results.BadRequest(new { error = "Admin password is too long." });
 
             if (!PasswordHasher.Verify(password, storedHash))
             {
@@ -146,6 +149,7 @@ public class DashboardServer
             }
 
             ResetLoginRateLimit(ctx);
+            await RotateAdminTokenAsync(db);
             SetAdminCookie(ctx);
             return Results.Ok(new { passwordSet = true });
         });
@@ -186,8 +190,10 @@ public class DashboardServer
             if (!string.IsNullOrEmpty(storedHash))
             {
                 var auth = RequireWriteAccess(ctx);
-                if (auth != null && !PasswordHasher.Verify(currentPassword, storedHash))
+                if (auth != null)
                     return auth;
+                if (!PasswordHasher.Verify(currentPassword, storedHash))
+                    return Results.Json(new { error = "Current admin password is incorrect." }, statusCode: StatusCodes.Status401Unauthorized);
             }
             else if (!IsLocalSetupAllowed(ctx))
             {
@@ -198,6 +204,7 @@ public class DashboardServer
 
             await db.SetSettingAsync("DashboardAdminPasswordHash", PasswordHasher.Hash(newPassword));
             _adminPasswordSet = true;
+            await RotateAdminTokenAsync(db);
             SetAdminCookie(ctx);
             return Results.Ok(new { status = "password_set" });
         });
@@ -207,18 +214,17 @@ public class DashboardServer
             var auth = RequireWriteAccess(ctx);
             if (auth != null) return auth;
 
-            _adminToken = CreateAdminToken();
-            await db.SetSettingAsync("DashboardAdminToken", _adminToken);
+            await RotateAdminTokenAsync(db);
             SetAdminCookie(ctx);
             Logger.Instance.Warn("Dashboard admin token rotated");
             return Results.Ok(new { status = "rotated" });
         });
 
         app.MapGet("/api/usage/today", async () =>
-            Results.Json(await db.GetTodayUsageAsync(), JsonOpts));
+            Results.Json(await usageTracker.GetTodayUsageIncludingPendingAsync(), JsonOpts));
 
         app.MapGet("/api/usage/groups/today", async () =>
-            Results.Json(await db.GetLimitGroupUsageRangeAsync(DateTime.Today, DateTime.Today), JsonOpts));
+            Results.Json(await usageTracker.GetTodayGroupUsageIncludingPendingAsync(), JsonOpts));
 
         app.MapGet("/api/usage/history", async (int days = 7, string? from = null, string? to = null) =>
         {
@@ -413,33 +419,30 @@ public class DashboardServer
             try
             {
                 var knownKeys = new HashSet<string>(tracker.KnownApps.Keys, StringComparer.OrdinalIgnoreCase);
-                var result = System.Diagnostics.Process.GetProcesses()
-                    .Where(p =>
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var result = new List<object>();
+                foreach (var process in System.Diagnostics.Process.GetProcesses())
+                {
+                    try
                     {
-                        try
-                        {
-                            var name = p.ProcessName + ".exe";
-                            return !string.IsNullOrEmpty(p.MainWindowTitle) &&
-                                   !knownKeys.Contains(name);
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.Instance.Error($"Failed to inspect process {p.Id}: {ex.Message}");
-                            return false;
-                        }
-                    })
-                    .Select(p =>
+                        var name = process.ProcessName + ".exe";
+                        if (string.IsNullOrEmpty(process.MainWindowTitle) || knownKeys.Contains(name))
+                            continue;
+                        if (!seen.Add(name))
+                            continue;
+
+                        result.Add(new { name, title = process.MainWindowTitle ?? "", pid = process.Id });
+                    }
+                    catch (Exception ex)
                     {
-                        try { return new { name = p.ProcessName + ".exe", title = p.MainWindowTitle ?? "", pid = p.Id }; }
-                        catch (Exception ex)
-                        {
-                            Logger.Instance.Error($"Failed to read process details for {p.Id}: {ex.Message}");
-                            return null;
-                        }
-                    })
-                    .Where(x => x != null)
-                    .DistinctBy(x => x!.name)
-                    .ToList();
+                        Logger.Instance.Error($"Failed to inspect process {process.Id}: {ex.Message}");
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                }
+
                 return Results.Json(result, JsonOpts);
             }
             catch (Exception ex)
@@ -454,7 +457,7 @@ public class DashboardServer
 
         app.MapGet("/api/limit-groups", async () =>
         {
-            var groups = await db.GetLimitGroupsAsync();
+            var groups = await usageTracker.GetLimitGroupsIncludingPendingAsync();
             return Results.Json(groups.Select(group => new
             {
                 group.Id,
@@ -1024,7 +1027,7 @@ public class DashboardServer
                 monitorPid = pid,
                 restart = true,
                 username = string.IsNullOrWhiteSpace(username) ? null : username,
-                password = string.IsNullOrWhiteSpace(password) ? null : password,
+                protectedPassword = string.IsNullOrWhiteSpace(password) ? null : SecretProtector.Protect(password),
                 sha256 = string.IsNullOrWhiteSpace(sha256) ? null : sha256
             }, JsonOpts));
 
@@ -1172,6 +1175,11 @@ public class DashboardServer
             ctx.Response.Headers.Append("X-Accel-Buffering", "no");
 
             var ct = ctx.RequestAborted;
+            var alerts = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false
+            });
 
             void SendAlert(string type, string appName, int? extra = null)
             {
@@ -1181,12 +1189,11 @@ public class DashboardServer
                     var data = extra.HasValue
                         ? $"{{\"type\":\"{type}\",\"appName\":\"{EscapeJson(appName)}\",\"value\":{extra}}}"
                         : $"{{\"type\":\"{type}\",\"appName\":\"{EscapeJson(appName)}\"}}";
-                    ctx.Response.WriteAsync($"event: {type}\ndata: {data}\n\n", ct).Wait();
-                    ctx.Response.Body.FlushAsync(ct).Wait();
+                    alerts.Writer.TryWrite($"event: {type}\ndata: {data}\n\n");
                 }
                 catch (Exception ex)
                 {
-                    Logger.Instance.Error($"SSE send failed for {type}/{appName}: {ex.Message}");
+                    Logger.Instance.Error($"SSE queue failed for {type}/{appName}: {ex.Message}");
                 }
             }
 
@@ -1202,11 +1209,16 @@ public class DashboardServer
 
             try
             {
-                await Task.Delay(Timeout.Infinite, ct);
+                await foreach (var alert in alerts.Reader.ReadAllAsync(ct))
+                {
+                    await ctx.Response.WriteAsync(alert, ct);
+                    await ctx.Response.Body.FlushAsync(ct);
+                }
             }
             catch (OperationCanceledException) { }
             finally
             {
+                alerts.Writer.TryComplete();
                 enforcer.OnBreachAlert -= breachHandler;
                 enforcer.OnCountdownTick -= countdownHandler;
                 enforcer.OnAppKilled -= killedHandler;
@@ -1217,17 +1229,26 @@ public class DashboardServer
 
     private static async Task<string> GetOrCreateAdminTokenAsync(UsageDatabase db)
     {
-        var token = await db.GetSettingAsync("DashboardAdminToken", "");
-        if (!string.IsNullOrWhiteSpace(token))
-            return token;
-
-        token = CreateAdminToken();
-        await db.SetSettingAsync("DashboardAdminToken", token);
+        var token = CreateAdminToken();
+        await PersistAdminTokenHashAsync(db, token);
         return token;
     }
 
     private static string CreateAdminToken() =>
         Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+
+    private static async Task RotateAdminTokenAsync(UsageDatabase db)
+    {
+        _adminToken = CreateAdminToken();
+        await PersistAdminTokenHashAsync(db, _adminToken);
+    }
+
+    private static async Task PersistAdminTokenHashAsync(UsageDatabase db, string token)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+        await db.SetSettingAsync("DashboardAdminTokenHash", hash);
+        await db.SetSettingAsync("DashboardAdminToken", "");
+    }
 
     private static IResult? CheckLoginRateLimit(HttpContext ctx)
     {
@@ -1282,14 +1303,14 @@ public class DashboardServer
 
     private static IResult? RequireWriteAccess(HttpContext ctx)
     {
-        if (!_adminPasswordSet && IsLocalSetupAllowed(ctx))
-            return null;
-
-        if (IsLocalSetupAllowed(ctx))
+        if (!_adminPasswordSet)
         {
-            var setupToken = ctx.Request.Headers["X-Admin-Token"].FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(setupToken) && !_adminPasswordSet)
+            if (IsLocalSetupAllowed(ctx) && HttpMethods.IsGet(ctx.Request.Method))
                 return null;
+
+            return Results.Json(
+                new { error = "Set an admin password locally before using dashboard actions." },
+                statusCode: StatusCodes.Status403Forbidden);
         }
 
         var provided = GetProvidedAdminToken(ctx);
@@ -1374,20 +1395,13 @@ public class DashboardServer
         return ip == null || System.Net.IPAddress.IsLoopback(ip);
     }
 
-    private static string Clean(string? value) => (value ?? "").Trim();
+    private static string Clean(string? value) => InputValidation.Clean(value);
 
-    private static bool IsValidAppName(string value) =>
-        value.Length is > 0 and <= 120 && !value.Any(char.IsControl);
+    private static bool IsValidAppName(string value) => InputValidation.IsValidAppName(value);
 
-    private static bool IsValidProcessName(string value) =>
-        value.Length is > 4 and <= 260 &&
-        value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
-        Path.GetFileName(value).Equals(value, StringComparison.OrdinalIgnoreCase) &&
-        !value.Any(char.IsControl);
+    private static bool IsValidProcessName(string value) => InputValidation.IsValidProcessName(value);
 
-    private static bool IsHttpUrl(string value) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+    private static bool IsHttpUrl(string value) => InputValidation.IsValidHttpUrl(value);
 
     private static bool IsValidUpdateSource(string source, string username, string sha256, out string error)
     {

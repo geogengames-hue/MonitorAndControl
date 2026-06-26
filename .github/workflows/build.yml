@@ -24,6 +24,9 @@ jobs:
     - name: Build (Release)
       run: dotnet build .\MonitorAndControl.csproj -c Release --no-restore
 
+    - name: Run tests
+      run: dotnet run --project .\Tests\MonitorAndControl.Tests.csproj -c Release
+
     - name: Publish Monitor
       run: dotnet publish .\MonitorAndControl.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
 
@@ -32,6 +35,15 @@ jobs:
 
     - name: Publish PopupHost
       run: dotnet publish .\PopupHost\PopupHost.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
+
+    - name: Publish UpdateAgent
+      run: dotnet publish .\UpdateAgent\UpdateAgent.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
+
+    - name: Copy install scripts
+      shell: pwsh
+      run: |
+        Copy-Item .\install-watchdog.ps1 publish\
+        Copy-Item .\uninstall-watchdog.ps1 publish\
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4

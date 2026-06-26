@@ -123,6 +123,10 @@ public class DiscoveryService
                     results.TryAdd(procName, new DiscoveredApp(procName, title, path, "Running"));
                 }
                 catch { }
+                finally
+                {
+                    proc.Dispose();
+                }
             }
         }
         catch { }
