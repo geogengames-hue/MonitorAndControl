@@ -16,7 +16,8 @@ if (-not (Test-Path -LiteralPath $monitorExe)) {
     throw "Monitor executable not found: $monitorExe. Run publish.ps1 first."
 }
 
-$binPath = "`"$watchdogExe`" --monitor `"$monitorExe`" --interval $IntervalSeconds"
+# Keep binPath as the executable only; GameHost resolves DeviceMon.exe from the same folder.
+$binPath = "`"$watchdogExe`""
 $dataDir = 'C:\ProgramData\SystemHelper'
 New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
 icacls.exe $dataDir /grant 'Users:(OI)(CI)M' | Out-Null

@@ -429,6 +429,7 @@ internal static class Program
         var startInfo = new ProcessStartInfo
         {
             FileName = monitorPath,
+            Arguments = "--autostart",
             WorkingDirectory = Path.GetDirectoryName(monitorPath) ?? AppContext.BaseDirectory,
             UseShellExecute = false
         };

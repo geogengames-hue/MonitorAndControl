@@ -407,7 +407,7 @@ internal sealed class WatchdogService : ServiceBase
                     startupInfo.lpDesktop = "winsta0\\default";
 
                     var processInfo = new NativeMethods.PROCESS_INFORMATION();
-                    var commandLine = $"\"{_options.MonitorPath}\"";
+                    var commandLine = $"\"{_options.MonitorPath}\" --autostart";
                     var workingDirectory = Path.GetDirectoryName(_options.MonitorPath) ?? AppContext.BaseDirectory;
 
                     var created = NativeMethods.CreateProcessAsUser(

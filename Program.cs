@@ -31,6 +31,7 @@ internal static class Program
     private static CancellationTokenSource? _cts;
 
     private static Mutex? _instanceMutex;
+    private static bool _isAutoStartLaunch;
 
     [STAThread]
     static void Main(string[] args)
@@ -42,6 +43,8 @@ internal static class Program
             Logger.Instance.Warn("Another instance already running - exiting");
             return;
         }
+
+        _isAutoStartLaunch = IsAutoStartLaunch(args);
 
         ApplicationConfiguration.Initialize();
         _cts = new CancellationTokenSource();
@@ -140,7 +143,7 @@ internal static class Program
                 var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
                 if (exePath != null)
                 {
-                    key.SetValue(AppName, $"\"{exePath}\"");
+                    key.SetValue(AppName, $"\"{exePath}\" --autostart");
                     key.DeleteValue(LegacyAppName, false);
                 }
             }
@@ -173,7 +176,7 @@ internal static class Program
                 using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
                     $@"SYSTEM\CurrentControlSet\Services\{WatchdogServiceName}");
                 var currentBinPath = key?.GetValue("ImagePath") as string ?? "";
-                if (currentBinPath.Trim('"').Equals(watchdogPath, StringComparison.OrdinalIgnoreCase))
+                if (ServicePointsToWatchdog(currentBinPath, watchdogPath))
                 {
                     StartWatchdogServiceIfNeeded(sc, watchdogPath, exePath);
                     return; // Path matches, nothing to do
@@ -183,6 +186,7 @@ internal static class Program
                 if (SuppressWatchdogElevation())
                 {
                     Logger.Instance.Warn("Skipping elevated watchdog service path update because elevation is disabled for this run.");
+                    StartWatchdogServiceIfNeeded(sc, watchdogPath, exePath);
                     return;
                 }
 
@@ -240,9 +244,54 @@ internal static class Program
         }
     }
 
-    private static bool SuppressWatchdogElevation()
+    private static bool IsAutoStartLaunch(string[] args)
     {
-        return string.Equals(Environment.GetEnvironmentVariable("DEVICEMON_SUPPRESS_WATCHDOG_UAC"), "1", StringComparison.Ordinal);
+        if (args.Contains("--autostart", StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        if (string.Equals(Environment.GetEnvironmentVariable("DEVICEMON_SUPPRESS_WATCHDOG_UAC"), "1", StringComparison.Ordinal))
+            return true;
+
+        // Covers existing Run-key entries that have not yet picked up --autostart.
+        if (GetAutoStart() && Environment.TickCount64 < 120_000)
+            return true;
+
+        return false;
+    }
+
+    private static bool SuppressWatchdogElevation() => _isAutoStartLaunch;
+
+    private static string ExtractServiceExecutable(string imagePath)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath))
+            return "";
+
+        var trimmed = imagePath.Trim();
+        if (trimmed.StartsWith('"'))
+        {
+            var closingQuote = trimmed.IndexOf('"', 1);
+            if (closingQuote > 1)
+                return trimmed[1..closingQuote];
+        }
+
+        var spaceIndex = trimmed.IndexOf(' ');
+        return spaceIndex >= 0 ? trimmed[..spaceIndex].Trim('"') : trimmed.Trim('"');
+    }
+
+    private static bool ServicePointsToWatchdog(string imagePath, string watchdogPath)
+    {
+        var serviceExe = ExtractServiceExecutable(imagePath);
+        if (string.IsNullOrEmpty(serviceExe))
+            return false;
+
+        try
+        {
+            return Path.GetFullPath(serviceExe).Equals(Path.GetFullPath(watchdogPath), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return serviceExe.Equals(watchdogPath, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private static void StartWatchdogServiceIfNeeded(System.ServiceProcess.ServiceController sc, string watchdogPath, string monitorPath)
