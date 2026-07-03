@@ -271,7 +271,7 @@ Place this file alongside `DeviceMon.exe`. All settings are optional — default
 |-----|---------|-------------|
 | `DashboardPort` | `5000` | Port for the web dashboard |
 | `EnableRemoteDashboard` | `false` | Allow access from other PCs on the network |
-| `DashboardBindAddress` | `127.0.0.1` | Bind address (`0.0.0.0` for all interfaces) |
+| `DashboardBindAddress` | `127.0.0.1` | Bind address. When remote access is enabled, blank/localhost values are treated as `0.0.0.0` for LAN access |
 | `KillDelaySeconds` | `30` | Seconds between limit breach warning and closing the app |
 | `ShowWarningOnChildPc` | `true` | Show full‑screen popup before killing an app |
 | `PollIntervalMs` | `1000` | Foreground window check interval (ms) |
@@ -402,7 +402,7 @@ A: Your JSON translation files may have been saved with the wrong encoding. Ensu
 A: Run PowerShell **as Administrator**. The service requires elevation to create a Windows service.
 
 **Q: I can't access the dashboard from another PC.**
-A: Set `EnableRemoteDashboard` to `true` and `DashboardBindAddress` to `"0.0.0.0"` in `appsettings.json`. Ensure the Windows Firewall allows port 5000.
+A: Set `EnableRemoteDashboard` to `true` in the `appsettings.json` beside `DeviceMon.exe`, then restart DeviceMon. The app binds to all LAN interfaces when remote mode is enabled. Ensure the Windows Firewall allows port 5000.
 
 **Q: How do I reset all usage data?**
 A: Delete the SQLite database at `%LOCALAPPDATA%\SystemHelper\monitor.db` while the monitor is not running. It will be recreated on next launch.

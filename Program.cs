@@ -324,7 +324,7 @@ internal static class Program
 
             if (SuppressWatchdogElevation())
             {
-                Logger.Instance.Warn("Skipping elevated watchdog service repair/start because elevation is disabled for this run.");
+                Logger.Instance.Warn("Skipping elevated watchdog service repair/start during autostart. Start DeviceMon manually to repair GameHost.");
                 return;
             }
 

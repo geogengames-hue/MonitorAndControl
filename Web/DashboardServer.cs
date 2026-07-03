@@ -34,6 +34,25 @@ public class DashboardServer
     private const string AdminCookieName = "DeviceMonAdminToken";
     public static Action<string>? LoginLockoutDetected { get; set; }
 
+    private static string ResolveDashboardBindAddress(AppConfig config)
+    {
+        if (!config.EnableRemoteDashboard)
+            return "127.0.0.1";
+
+        var configured = config.DashboardBindAddress?.Trim();
+        if (string.IsNullOrWhiteSpace(configured) ||
+            configured.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+            configured.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            configured.Equals("::1", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(configured))
+                Logger.Instance.Warn($"EnableRemoteDashboard is true but DashboardBindAddress is '{configured}'; binding to 0.0.0.0 for LAN access.");
+            return "0.0.0.0";
+        }
+
+        return configured;
+    }
+
     public static async Task StartAsync(UsageDatabase db, WindowTracker tracker, LimitEnforcer enforcer,
         SchedulerService scheduler, UsageTracker usageTracker, EmailService emailService, AppConfig config)
     {
@@ -53,10 +72,9 @@ public class DashboardServer
             EnvironmentName = "Production"
         });
 
-        var bindAddress = config.EnableRemoteDashboard
-            ? (string.IsNullOrWhiteSpace(config.DashboardBindAddress) ? "0.0.0.0" : config.DashboardBindAddress)
-            : "127.0.0.1";
+        var bindAddress = ResolveDashboardBindAddress(config);
         builder.WebHost.UseSetting("urls", $"http://{bindAddress}:{port}");
+        Logger.Instance.Info($"Dashboard listening on http://{bindAddress}:{port} (remote enabled: {config.EnableRemoteDashboard})");
         builder.Logging.ClearProviders();
         builder.Logging.AddFilter((provider, category, logLevel) => false);
 
