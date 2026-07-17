@@ -78,17 +78,27 @@ Monitor & Control consists of three executables:
 
 When you run `DeviceMon.exe`, it automatically looks for `GameHost.exe` in the same folder. If the watchdog service is not installed (or needs updating), DeviceMon silently asks for administrator privileges via a UAC prompt and installs/updates it. After that:
 - The watchdog runs as a Windows service named `GameHost`
-- It checks every 15 seconds whether `DeviceMon.exe` is still running
+- It checks every 5 seconds whether `DeviceMon.exe` is still running
 - If the monitor process is missing, the watchdog relaunches it in the active user session
 - No further UAC prompts — the service runs under the SYSTEM account
 - If you ever want to remove it, see the [Watchdog uninstall](#installing-the-watchdog-optional-requires-admin) section
 
 ### Data storage
 
-- **SQLite database** at `%LOCALAPPDATA%\SystemHelper\monitor.db` — usage records, limits, schedules, app tracking policies, settings
-- **Log file** at `%LOCALAPPDATA%\SystemHelper\monitor.log`
+- **SQLite database** at `C:\ProgramData\SystemHelper\monitor.db` — usage records, limits, schedules, app tracking policies, settings
+- **Log file** at `C:\ProgramData\SystemHelper\events.log`
 - **Watchdog log** at `C:\ProgramData\SystemHelper\watchdog.log`
 - **Configuration** at `appsettings.json` (alongside the exe)
+
+> **Tamper protection:** The GameHost watchdog (running as SYSTEM) locks `monitor.db`
+> and `events.log` so a standard (child) user can read/write them but **cannot delete
+> or rename them** — closing DeviceMon no longer lets them wipe usage history. The
+> watchdog also keeps SYSTEM-only backups under `C:\ProgramData\SystemHelper\Protected\`
+> and restores the database (and `DeviceMon.exe`) if either goes missing. This
+> protection is released automatically when GameHost is uninstalled.
+>
+> *(Older installs stored these files under `%LOCALAPPDATA%\SystemHelper\`; they are
+> migrated to the protected location automatically on first launch of this version.)*
 
 ### Usage tracking modes
 
@@ -140,7 +150,7 @@ Usage recorded by an older release has only a total and cannot be reconstructed 
 
 Existing databases are upgraded automatically. Tracking policies are also included in configuration exports and restored during import.
 
-`DefaultLimits` and `Schedule` from `appsettings.json` are imported only when the SQLite database is created for the first time. After initialization, the database is authoritative: limits or schedules removed in the dashboard remain removed after restart. Delete `%LOCALAPPDATA%\SystemHelper\monitor.db` only when you intentionally want a fresh first-start import.
+`DefaultLimits` and `Schedule` from `appsettings.json` are imported only when the SQLite database is created for the first time. After initialization, the database is authoritative: limits or schedules removed in the dashboard remain removed after restart. To force a fresh first-start import, delete `C:\ProgramData\SystemHelper\monitor.db` — but note the watchdog protects this file (see [Data storage](#data-storage)), so you must first uninstall GameHost (as admin) to release the lock.
 
 ---
 
@@ -284,11 +294,43 @@ Place this file alongside `DeviceMon.exe`. All settings are optional — default
 
 > **Security note:** When remote access is enabled, remote users cannot open the dashboard until an admin password has been created from a trusted local dashboard. After setup, remote users are redirected to the login page. Successful authentication creates an HTTP-only session cookie; use **Settings → Logout** to end that browser session. The built-in dashboard listener is HTTP only; do not expose it beyond a trusted LAN unless you put it behind a TLS reverse proxy, VPN/tunnel, or a trusted local certificate setup.
 
-### Installing the Watchdog (optional, requires admin)
+### Recommended install: protected Program Files location (requires admin)
 
-**Normally you don't need to do this manually** — when you run `DeviceMon.exe`, it auto-detects `GameHost.exe` in the same folder and offers to install the watchdog service with a single UAC prompt.
+For a child's PC, install DeviceMon into `C:\Program Files\DeviceMon` so the child **cannot delete or modify the application files**. Program Files grants standard users read-and-execute only, so the child can still be forced to close DeviceMon (Windows always allows ending your own process), but they cannot delete `DeviceMon.exe`, `GameHost.exe`, the DLLs, or `appsettings.json` — and the watchdog relaunches DeviceMon within ~5 seconds.
 
-Manual install is only needed if you want to install the watchdog separately (e.g., deploying to a different folder after the fact):
+```powershell
+# Run PowerShell as Administrator from the publish folder, then:
+.\install.ps1
+
+# Or specify source/target explicitly:
+.\install.ps1 -SourceDir "C:\path\to\publish" -InstallDir "C:\Program Files\DeviceMon"
+```
+
+This copies the app to the protected folder and installs the `GameHost` watchdog pointing at it. The usage database and logs stay in `C:\ProgramData\SystemHelper` (writable so usage can be recorded, but protected against deletion — see [Data storage](#data-storage)).
+
+#### Updating a Program Files install
+
+Because the app folder is read-only to standard users, the in-dashboard updater can't write to it directly. You have two options:
+
+1. **Re-run `install.ps1`** as Administrator against the new publish folder — it stops the watchdog, replaces the files, and restarts everything.
+
+2. **Quiet updates from the dashboard** (no admin prompt, works remotely) — configure a trusted update source at install time:
+
+   ```powershell
+   # HTTPS zip (SHA-256 required):
+   .\install.ps1 -UpdateSource "https://example.com/MonitorAndControl-v1.05.zip" -UpdateSha256 "<hash>"
+
+   # …or a folder / network share:
+   .\install.ps1 -UpdateSource "\\server\share\DeviceMon" -UpdateUsername "user" -UpdatePassword "pw"
+   ```
+
+   The source is stored in a SYSTEM-only file (`C:\ProgramData\SystemHelper\Protected\update-source.json`) that the child cannot read or change. When you click **Settings → Update**, the dashboard just *triggers* an update; the `GameHost` service (running as SYSTEM) performs it silently from that fixed source and relaunches DeviceMon in the child's session. Because the source is fixed, the child cannot redirect updates to malicious files — the dashboard never gets to choose where SYSTEM pulls from.
+
+### Installing only the Watchdog (optional, requires admin)
+
+**If you are not using `install.ps1`,** you normally don't need to do this manually either — when you run `DeviceMon.exe`, it auto-detects `GameHost.exe` in the same folder and offers to install the watchdog service with a single UAC prompt.
+
+Manual watchdog install is only needed if you want to install it separately (e.g., deploying to a different folder after the fact):
 
 ```powershell
 # Run PowerShell as Administrator, then:
@@ -405,10 +447,10 @@ A: Run PowerShell **as Administrator**. The service requires elevation to create
 A: Set `EnableRemoteDashboard` to `true` in the `appsettings.json` beside `DeviceMon.exe`, then restart DeviceMon. The app binds to all LAN interfaces when remote mode is enabled. Ensure the Windows Firewall allows port 5000.
 
 **Q: How do I reset all usage data?**
-A: Delete the SQLite database at `%LOCALAPPDATA%\SystemHelper\monitor.db` while the monitor is not running. It will be recreated on next launch.
+A: The database is tamper-protected while GameHost is installed (a standard user, and even an admin, cannot delete it). To wipe it, uninstall the GameHost watchdog as administrator (this releases the lock), then delete `C:\ProgramData\SystemHelper\monitor.db` while DeviceMon is not running. It is recreated on next launch.
 
 **Q: Where are logs stored?**
-A: `%LOCALAPPDATA%\SystemHelper\monitor.log` for the main app, and `C:\ProgramData\SystemHelper\watchdog.log` for the watchdog service.
+A: `C:\ProgramData\SystemHelper\events.log` for the main app, and `C:\ProgramData\SystemHelper\watchdog.log` for the watchdog service.
 
 **Q: Can I run it without the web dashboard?**
 A: No. The web dashboard is the primary UI.
@@ -462,7 +504,7 @@ A: The **watchdog service** (`GameHost.exe`) runs under SYSTEM account and track
 A: Yes. Click the **Pause** button on the dashboard **Live** tab or from the system tray icon context menu. Click **Resume** to continue tracking.
 
 **Q: What happens when I close DeviceMon.exe?**
-A: If the watchdog is installed, it restarts DeviceMon.exe within 15 seconds. To fully stop, uninstall the watchdog first (`GameHost.exe --uninstall` as Admin), then close DeviceMon.
+A: If the watchdog is installed, it restarts DeviceMon.exe within ~5 seconds. To fully stop, uninstall the watchdog first (`GameHost.exe --uninstall` as Admin), then close DeviceMon.
 
 **Q: Does the app work offline / without internet?**
 A: Yes. The dashboard and all monitoring features work entirely locally. Only email notifications/control require internet access.

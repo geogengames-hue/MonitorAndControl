@@ -96,15 +96,70 @@ internal static class Program
     private static AppConfig LoadConfig()
     {
         var path = GetConfigPath();
+        var lkgPath = Path.Combine(AppPaths.DataDir, "appsettings.lkg.json");
 
+        // Primary source: the on-disk appsettings.json. A corrupt or unreadable
+        // file must never crash startup - a crash here just makes the watchdog
+        // relaunch DeviceMon into the same crash, disabling monitoring entirely.
         if (File.Exists(path))
         {
-            var json = File.ReadAllText(path);
-            _cachedConfig = JsonSerializer.Deserialize<AppConfig>(json) ?? new AppConfig();
-            return _cachedConfig;
+            try
+            {
+                var json = File.ReadAllText(path);
+                var config = JsonSerializer.Deserialize<AppConfig>(json)
+                    ?? throw new InvalidOperationException("Configuration deserialized to null.");
+                _cachedConfig = config;
+                SaveLastKnownGoodConfig(lkgPath, json);
+                return _cachedConfig;
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.Error($"appsettings.json is invalid ({ex.Message}); falling back to last-known-good or defaults.");
+            }
         }
+        else
+        {
+            Logger.Instance.Warn("appsettings.json not found; using last-known-good configuration or defaults.");
+        }
+
+        // Fallback 1: the last-known-good copy saved after the most recent valid load.
+        if (File.Exists(lkgPath))
+        {
+            try
+            {
+                var config = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(lkgPath));
+                if (config != null)
+                {
+                    _cachedConfig = config;
+                    Logger.Instance.Info("Loaded configuration from last-known-good backup.");
+                    return _cachedConfig;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.Error($"Last-known-good configuration is unusable ({ex.Message}); using defaults.");
+            }
+        }
+
+        // Fallback 2: built-in defaults. Most runtime settings live in the database
+        // (which is authoritative after first run), so DeviceMon keeps working.
         _cachedConfig = new AppConfig();
         return _cachedConfig;
+    }
+
+    private static void SaveLastKnownGoodConfig(string lkgPath, string json)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(lkgPath);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+            File.WriteAllText(lkgPath, json);
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to save last-known-good configuration: {ex.Message}");
+        }
     }
 
     private static string GetConfigPath()

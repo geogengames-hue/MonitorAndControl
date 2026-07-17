@@ -61,13 +61,22 @@ public class DashboardServer
         _adminToken = await GetOrCreateAdminTokenAsync(db);
         _adminPasswordSet = !string.IsNullOrEmpty(await db.GetSettingAsync("DashboardAdminPasswordHash", ""));
 
-        var contentRoot = AppContext.BaseDirectory;
-        var wwwroot = Path.Combine(contentRoot, "wwwroot");
+        var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
         Directory.CreateDirectory(wwwroot);
+
+        // ASP.NET's default host eagerly loads appsettings.json from the content
+        // root while CreateBuilder runs and throws if it is malformed - which would
+        // take the dashboard down whenever appsettings.json is corrupt or tampered
+        // with. DeviceMon passes its own AppConfig, so the host does not need that
+        // file: point the content root at a dedicated empty directory (so the
+        // optional appsettings load finds nothing) while still serving the real
+        // wwwroot via WebRootPath and the explicit file provider below.
+        var hostRoot = Path.Combine(AppPaths.DataDir, "webhost");
+        Directory.CreateDirectory(hostRoot);
 
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
-            ContentRootPath = contentRoot,
+            ContentRootPath = hostRoot,
             WebRootPath = wwwroot,
             EnvironmentName = "Production"
         });
@@ -993,6 +1002,25 @@ public class DashboardServer
             var auth = RequireWriteAccess(ctx);
             if (auth != null) return auth;
 
+            // Protected (Program Files) installs update via the SYSTEM watchdog using a
+            // pre-configured trusted source: the standard-user dashboard can't write to
+            // Program Files, and letting it hand SYSTEM an arbitrary source would be a
+            // privilege-escalation hole. We only queue a trigger; the source is fixed.
+            if (GetUpdateChannelMode() == "system")
+            {
+                try
+                {
+                    var triggerPath = Path.Combine(AppPaths.DataDir, "update.trigger");
+                    await File.WriteAllTextAsync(triggerPath, DateTimeOffset.Now.ToString("O"));
+                    Logger.Instance.Warn("Dashboard queued a SYSTEM update via the watchdog.");
+                    return Results.Ok(new { status = "update_queued", mode = "system" });
+                }
+                catch (Exception ex)
+                {
+                    return Results.Json(new { error = "Could not queue update: " + ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
+                }
+            }
+
             string source = "";
             string username = "";
             string password = "";
@@ -1670,6 +1698,24 @@ public class DashboardServer
     {
         return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
             .Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
+    }
+
+    // "system" when the SYSTEM watchdog has a trusted update source configured
+    // (protected install); "local" otherwise. Published by GameHost; read-only here.
+    private static string GetUpdateChannelMode()
+    {
+        try
+        {
+            var path = Path.Combine(AppPaths.DataDir, "update-channel.json");
+            if (!File.Exists(path))
+                return "local";
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            return doc.RootElement.TryGetProperty("mode", out var m) ? (m.GetString() ?? "local") : "local";
+        }
+        catch
+        {
+            return "local";
+        }
     }
 
     private static void WriteUpdateStatus(string path, object status)

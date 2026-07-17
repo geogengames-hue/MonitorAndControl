@@ -13,11 +13,9 @@ public class Logger
 
     private Logger()
     {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SystemHelper");
-        Directory.CreateDirectory(dir);
-        _logPath = Path.Combine(dir, "events.log");
+        // Stored in the SYSTEM-protected data directory (see AppPaths) so the log
+        // cannot be deleted by a standard user once the watchdog has hardened it.
+        _logPath = AppPaths.LogPath;
     }
 
     public void Info(string message) => Write("INFO", message);
@@ -80,7 +78,9 @@ public class Logger
     {
         lock (_lock)
         {
-            try { File.Delete(_logPath); } catch { }
+            // Truncate rather than delete: the watchdog denies Delete on this file
+            // to standard users, but writing/truncating is still permitted.
+            try { File.WriteAllText(_logPath, string.Empty); } catch { }
             _recent.Clear();
         }
     }

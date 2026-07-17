@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using MonitorAndControl.Models;
+using MonitorAndControl.Services;
 
 namespace MonitorAndControl.Data;
 
@@ -14,11 +15,9 @@ public class UsageDatabase : IDisposable
     {
         if (string.IsNullOrWhiteSpace(dbPath))
         {
-            var folder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "SystemHelper");
-            Directory.CreateDirectory(folder);
-            dbPath = Path.Combine(folder, "monitor.db");
+            // SYSTEM-protected data directory (see AppPaths) - the watchdog denies
+            // Delete on monitor.db so a standard user cannot wipe usage history.
+            dbPath = AppPaths.DatabasePath;
         }
         else
         {

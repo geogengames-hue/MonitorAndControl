@@ -5,6 +5,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text;
+using System.Text.Json;
 
 namespace MonitorAndControlWatchdog;
 
@@ -175,6 +176,14 @@ internal static class Program
             return;
         }
 
+        // Release the deny-delete protection so an administrator can manage or
+        // reset the data now that the watchdog will no longer re-assert it.
+        var dataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "SystemHelper");
+        UnprotectFile(Path.Combine(dataDir, "monitor.db"));
+        UnprotectFile(Path.Combine(dataDir, "events.log"));
+
         RunSc($"stop {ServiceName}");
         RunSc($"stop {LegacyServiceName}");
         RunSc($"stop {OlderServiceName}");
@@ -231,6 +240,79 @@ internal static class Program
         ProtectUpdateMarkerDirectory(Path.Combine(dataDirectory, "Protected"));
     }
 
+    internal static readonly SecurityIdentifier SystemSid = new(WellKnownSidType.LocalSystemSid, null);
+    internal static readonly SecurityIdentifier AdminsSid = new(WellKnownSidType.BuiltinAdministratorsSid, null);
+    internal static readonly SecurityIdentifier UsersSid = new(WellKnownSidType.BuiltinUsersSid, null);
+    // S-1-3-4 = OWNER RIGHTS. Present in a DACL, it overrides the implicit rights
+    // an owner normally gets (READ_CONTROL + WRITE_DAC). We use it to stop the
+    // child - who created and therefore owns monitor.db / events.log - from
+    // rewriting the file's ACL to grant themselves Delete back.
+    internal static readonly SecurityIdentifier OwnerRightsSid = new("S-1-3-4");
+
+    /// <summary>
+    /// Locks a single data file so standard users can read and write it (the child's
+    /// DeviceMon still records usage and appends logs) but cannot delete or rename it,
+    /// and cannot re-grant themselves delete via file ownership. SYSTEM and
+    /// Administrators keep full control so the watchdog can re-assert this each cycle.
+    /// </summary>
+    internal static void HardenFile(string path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+
+            var fi = new FileInfo(path);
+            var security = new FileSecurity();
+            // Drop inherited permissions (the parent folder grants Users Modify,
+            // which includes Delete) and replace with an explicit, minimal set.
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+
+            security.AddAccessRule(new FileSystemAccessRule(
+                SystemSid, FileSystemRights.FullControl, AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                AdminsSid, FileSystemRights.FullControl, AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                UsersSid, FileSystemRights.ReadAndExecute | FileSystemRights.Write, AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                OwnerRightsSid, FileSystemRights.ReadAndExecute | FileSystemRights.Write, AccessControlType.Allow));
+            // Explicit deny defeats the parent folder's FILE_DELETE_CHILD grant.
+            security.AddAccessRule(new FileSystemAccessRule(
+                UsersSid,
+                FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles,
+                AccessControlType.Deny));
+
+            fi.SetAccessControl(security);
+        }
+        catch
+        {
+            // Best-effort; the file may briefly be unavailable. Re-tried next cycle.
+        }
+    }
+
+    /// <summary>
+    /// Removes the deny-delete hardening from a data file and restores normal
+    /// inheritance from the parent folder. Called during uninstall (elevated) so an
+    /// administrator can manage or reset the data once GameHost is gone.
+    /// </summary>
+    internal static void UnprotectFile(string path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+
+            var fi = new FileInfo(path);
+            var security = fi.GetAccessControl();
+            // Re-enable inheritance and strip the explicit ACEs we added.
+            security.SetAccessRuleProtection(isProtected: false, preserveInheritance: false);
+            foreach (FileSystemAccessRule rule in security.GetAccessRules(true, false, typeof(SecurityIdentifier)))
+                security.RemoveAccessRule(rule);
+            fi.SetAccessControl(security);
+        }
+        catch
+        {
+        }
+    }
+
     private static void ProtectUpdateMarkerDirectory(string path)
     {
         try
@@ -259,6 +341,12 @@ internal sealed class WatchdogService : ServiceBase
     private readonly System.Threading.Timer _timer;
     private bool _hadSeenMonitor;
     private int _checking;
+    private DateTime _lastProtectUtc = DateTime.MinValue;
+    private DateTime _lastUpdateKickUtc = DateTime.MinValue;
+
+    private string TriggerPath => Path.Combine(_options.DataDirectory, "update.trigger");
+    private string ChannelFlagPath => Path.Combine(_options.DataDirectory, "update-channel.json");
+    private string UpdateSourceConfigPath => Path.Combine(_options.DataDirectory, "Protected", "update-source.json");
 
     public WatchdogService(WatchdogOptions options)
     {
@@ -275,6 +363,7 @@ internal sealed class WatchdogService : ServiceBase
     protected override void OnStart(string[] args)
     {
         Program.PrepareDataDirectory(_options.DataDirectory);
+        ProtectAndMaintainData(force: true, updateInProgress: IsUpdateInProgress());
         Log($"Watchdog started. Monitor={_options.MonitorPath}");
         _timer.Change(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(_options.IntervalSeconds));
     }
@@ -290,7 +379,20 @@ internal sealed class WatchdogService : ServiceBase
         if (Interlocked.Exchange(ref _checking, 1) != 0) return;
         try
         {
-            if (IsUpdateInProgress())
+            var updating = IsUpdateInProgress();
+
+            // Re-assert file protection and restore any missing data / executable
+            // before deciding whether the monitor needs relaunching. The executable
+            // is left alone during updates (the UpdateAgent is swapping it out).
+            ProtectAndMaintainData(force: false, updateInProgress: updating);
+
+            // Advertise whether a trusted (SYSTEM) update source is configured, and
+            // service a dashboard-requested update from that source.
+            MaintainUpdateChannel();
+            if (!updating)
+                ProcessUpdateTrigger();
+
+            if (updating)
             {
                 Log("Update marker present; monitor restart paused.");
                 return;
@@ -447,6 +549,208 @@ internal sealed class WatchdogService : ServiceBase
         }
     }
 
+    /// <summary>
+    /// Keeps the tamper-sensitive files protected and recoverable:
+    ///   * restores monitor.db / DeviceMon.exe from the SYSTEM-only backup if the
+    ///     live copy has gone missing (belt-and-suspenders behind the deny-delete ACL),
+    ///   * re-applies the deny-delete hardening to monitor.db and events.log,
+    ///   * refreshes the protected backups.
+    /// The heavy work (ACL writes, file copies) is throttled; the cheap
+    /// "restore if missing" check runs every cycle.
+    /// </summary>
+    /// <summary>
+    /// Publishes a small, non-secret flag telling the (standard-user) dashboard
+    /// whether quiet SYSTEM updates are available. "system" means a trusted update
+    /// source is configured and the dashboard should queue updates through the
+    /// watchdog; "local" means it should use the in-process updater as before.
+    /// </summary>
+    private void MaintainUpdateChannel()
+    {
+        try
+        {
+            var mode = File.Exists(UpdateSourceConfigPath) ? "system" : "local";
+            var json = "{\"mode\":\"" + mode + "\"}";
+            if (!File.Exists(ChannelFlagPath) || File.ReadAllText(ChannelFlagPath) != json)
+                File.WriteAllText(ChannelFlagPath, json);
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>
+    /// If the dashboard dropped an update trigger, run an update from the
+    /// pre-configured trusted source. The trigger carries no source data, so a
+    /// forged trigger can only cause a legitimate update - it cannot redirect where
+    /// the update is pulled from.
+    /// </summary>
+    private void ProcessUpdateTrigger()
+    {
+        try
+        {
+            if (!File.Exists(TriggerPath))
+                return;
+
+            // Consume the trigger no matter what, so it cannot loop.
+            try { File.Delete(TriggerPath); } catch { }
+
+            if ((DateTime.UtcNow - _lastUpdateKickUtc) < TimeSpan.FromSeconds(90))
+            {
+                Log("Update trigger ignored (rate limited).");
+                return;
+            }
+
+            if (!File.Exists(UpdateSourceConfigPath))
+            {
+                Log("Update requested but no trusted update source is configured; ignoring.");
+                return;
+            }
+
+            _lastUpdateKickUtc = DateTime.UtcNow;
+            KickOffTrustedUpdate();
+        }
+        catch (Exception ex)
+        {
+            Log("Failed to process update trigger: " + ex.Message);
+        }
+    }
+
+    private void KickOffTrustedUpdate()
+    {
+        var cfg = JsonSerializer.Deserialize<UpdateSourceConfig>(
+            File.ReadAllText(UpdateSourceConfigPath),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (cfg == null || string.IsNullOrWhiteSpace(cfg.Source))
+        {
+            Log("Trusted update source config is empty; ignoring update request.");
+            return;
+        }
+
+        var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var updaterSrc = Path.Combine(installDir, "UpdateAgent.exe");
+        if (!File.Exists(updaterSrc))
+        {
+            Log("UpdateAgent.exe not found next to the watchdog; cannot run update.");
+            return;
+        }
+
+        // Stage the updater and its request in a SYSTEM-only working directory the
+        // child cannot read or tamper with.
+        var workDir = Path.Combine(_options.DataDirectory, "Protected", "updater");
+        Directory.CreateDirectory(workDir);
+        var updaterExe = Path.Combine(workDir, "UpdateAgent.exe");
+        File.Copy(updaterSrc, updaterExe, overwrite: true);
+
+        var requestPath = Path.Combine(workDir, "update-request.json");
+        var request = new
+        {
+            source = cfg.Source,
+            targetDirectory = installDir,
+            monitorPath = _options.MonitorPath,
+            monitorPid = (int?)null,
+            restart = false, // GameHost relaunches DeviceMon in the child session afterwards.
+            username = string.IsNullOrWhiteSpace(cfg.Username) ? null : cfg.Username,
+            password = string.IsNullOrWhiteSpace(cfg.Password) ? null : cfg.Password,
+            sha256 = string.IsNullOrWhiteSpace(cfg.Sha256) ? null : cfg.Sha256
+        };
+        File.WriteAllText(requestPath, JsonSerializer.Serialize(request));
+
+        // Pause monitor relaunch across the update (this watchdog and the one that
+        // the updater restarts both honour this marker).
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_options.UpdateMarkerPath)!);
+            File.WriteAllText(_options.UpdateMarkerPath, $"{DateTimeOffset.Now:O}|GameHost-update");
+        }
+        catch (Exception ex)
+        {
+            Log("Failed to write update marker before update: " + ex.Message);
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = updaterExe,
+            Arguments = $"--request \"{requestPath}\"",
+            WorkingDirectory = workDir,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        });
+        Log($"Started SYSTEM update from trusted source: {cfg.Source}");
+    }
+
+    private void ProtectAndMaintainData(bool force, bool updateInProgress)
+    {
+        try
+        {
+            var dbPath = Path.Combine(_options.DataDirectory, "monitor.db");
+            var logPath = Path.Combine(_options.DataDirectory, "events.log");
+            var protectedDir = Path.Combine(_options.DataDirectory, "Protected");
+            Directory.CreateDirectory(protectedDir);
+
+            // Cheap every-cycle safety net: put back anything that disappeared.
+            RestoreIfMissing(Path.Combine(protectedDir, "monitor.db.bak"), dbPath, "monitor.db");
+            if (!updateInProgress)
+                RestoreIfMissing(Path.Combine(protectedDir, "DeviceMon.exe.bak"), _options.MonitorPath, "DeviceMon.exe");
+
+            var now = DateTime.UtcNow;
+            if (!force && (now - _lastProtectUtc) < TimeSpan.FromSeconds(60))
+                return;
+            _lastProtectUtc = now;
+
+            Program.HardenFile(dbPath);
+            Program.HardenFile(logPath);
+            Program.HardenFile(Path.Combine(_options.DataDirectory, "appsettings.lkg.json"));
+
+            BackupFile(dbPath, Path.Combine(protectedDir, "monitor.db.bak"));
+            BackupFile(logPath, Path.Combine(protectedDir, "events.log.bak"));
+            if (!updateInProgress)
+                BackupFile(_options.MonitorPath, Path.Combine(protectedDir, "DeviceMon.exe.bak"));
+        }
+        catch (Exception ex)
+        {
+            Log("Data protection cycle failed: " + ex.Message);
+        }
+    }
+
+    private void RestoreIfMissing(string backupPath, string livePath, string label)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(livePath) || File.Exists(livePath) || !File.Exists(backupPath))
+                return;
+
+            var dir = Path.GetDirectoryName(livePath);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            File.Copy(backupPath, livePath, overwrite: false);
+            Log($"Restored missing {label} from protected backup.");
+            WriteRestartMarker($"{label} was missing and the watchdog restored it from the protected backup.");
+        }
+        catch (Exception ex)
+        {
+            Log($"Failed to restore {label}: " + ex.Message);
+        }
+    }
+
+    private static void BackupFile(string livePath, string backupPath)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(livePath) || !File.Exists(livePath)) return;
+            if (File.Exists(backupPath) &&
+                File.GetLastWriteTimeUtc(livePath) <= File.GetLastWriteTimeUtc(backupPath))
+                return;
+
+            File.Copy(livePath, backupPath, overwrite: true);
+        }
+        catch
+        {
+            // The file may be momentarily locked (e.g. mid-write); retried next cycle.
+        }
+    }
+
     private void WriteRestartMarker(string reason)
     {
         try
@@ -474,6 +778,14 @@ internal sealed class WatchdogService : ServiceBase
     }
 }
 
+internal sealed class UpdateSourceConfig
+{
+    public string Source { get; set; } = "";
+    public string? Sha256 { get; set; }
+    public string? Username { get; set; }
+    public string? Password { get; set; }
+}
+
 internal sealed record WatchdogOptions(string MonitorPath, int IntervalSeconds, string DataDirectory)
 {
     public string LogPath => Path.Combine(DataDirectory, "watchdog.log");
@@ -483,7 +795,7 @@ internal sealed record WatchdogOptions(string MonitorPath, int IntervalSeconds, 
     public static WatchdogOptions Parse(string[] args)
     {
         var monitorPath = Path.Combine(AppContext.BaseDirectory, Program.MonitorExeName);
-        var interval = 15;
+        var interval = 5;
         var dataDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "SystemHelper");

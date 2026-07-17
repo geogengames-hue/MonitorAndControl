@@ -24,6 +24,7 @@ if ($LASTEXITCODE -ne 0) { throw "PopupHost publish failed with exit code $LASTE
 dotnet publish .\UpdateAgent\UpdateAgent.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o $publishDir
 if ($LASTEXITCODE -ne 0) { throw "UpdateAgent publish failed with exit code $LASTEXITCODE." }
 
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1') -Destination $publishDir -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-watchdog.ps1') -Destination $publishDir -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall-watchdog.ps1') -Destination $publishDir -Force
 
