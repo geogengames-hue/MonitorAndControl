@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
+using Microsoft.Win32;
 
 namespace MonitorAndControl.Services;
 
@@ -15,6 +17,7 @@ public class DiscoveryService
         ScanStartMenu(results);
         ScanRunningProcesses(results);
         ScanCommonGameDirs(results);
+        ScanLooseGameFolders(results);
 
         return results.Values
             .OrderBy(a => a.DisplayName)
@@ -134,69 +137,228 @@ public class DiscoveryService
 
     private void ScanCommonGameDirs(Dictionary<string, DiscoveredApp> results)
     {
-        var dirs = new[]
+        var dirs = new List<string>
         {
-            @"C:\Program Files\Steam\steamapps\common",
-            @"C:\Program Files (x86)\Steam\steamapps\common",
             @"C:\Program Files\Epic Games",
             @"C:\Program Files (x86)\Epic Games",
             @"C:\Program Files\Origin Games",
             @"C:\Program Files (x86)\Origin Games",
+            @"C:\Program Files\EA Games",
+            @"C:\Program Files (x86)\EA Games",
             @"C:\Program Files\Ubisoft\Ubisoft Game Launcher\games",
             @"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games",
             @"C:\Program Files\Battle.net\Games",
             @"C:\Program Files (x86)\Battle.net\Games",
+            @"C:\Program Files\GOG Galaxy\Games",
+            @"C:\Program Files (x86)\GOG Galaxy\Games",
             @"C:\Program Files\WindowsApps",
             @"C:\Program Files\ModifiableWindowsApps"
         };
 
-        foreach (var dir in dirs.Where(Directory.Exists))
+        // Steam games can live on any drive - resolve every configured Steam
+        // library from libraryfolders.vdf, not just the default C:\ install.
+        dirs.AddRange(GetSteamLibraryCommonDirs());
+
+        foreach (var dir in dirs.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+            ScanGameContainerDir(results, dir, "Game Directory");
+    }
+
+    /// <summary>
+    /// Scans folders where manually-installed or repacked/"cracked" games commonly
+    /// land: the user's Downloads folder and any top-level "Games" folder on each
+    /// fixed drive. Each immediate subfolder is treated as a candidate game.
+    /// </summary>
+    private void ScanLooseGameFolders(Dictionary<string, DiscoveredApp> results)
+    {
+        var roots = new List<string>();
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrEmpty(userProfile))
+        {
+            roots.Add(Path.Combine(userProfile, "Downloads"));
+            roots.Add(Path.Combine(userProfile, "Games"));
+        }
+
+        var publicDir = Environment.GetEnvironmentVariable("PUBLIC");
+        if (!string.IsNullOrEmpty(publicDir))
+            roots.Add(Path.Combine(publicDir, "Games"));
+
+        try
+        {
+            foreach (var drive in DriveInfo.GetDrives()
+                         .Where(d => d.DriveType == DriveType.Fixed && d.IsReady))
+            {
+                roots.Add(Path.Combine(drive.RootDirectory.FullName, "Games"));
+                roots.Add(Path.Combine(drive.RootDirectory.FullName, "Downloads"));
+            }
+        }
+        catch { }
+
+        foreach (var root in roots.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+            ScanGameContainerDir(results, root, "Games Folder");
+    }
+
+    /// <summary>
+    /// Treats each immediate subfolder of <paramref name="containerDir"/> as a game
+    /// and adds up to a few likely game executables found within it.
+    /// </summary>
+    private void ScanGameContainerDir(Dictionary<string, DiscoveredApp> results, string containerDir, string source)
+    {
+        try
+        {
+            foreach (var subDir in Directory.EnumerateDirectories(containerDir))
+            {
+                try
+                {
+                    var dirName = Path.GetFileName(subDir);
+                    var candidates = Directory.EnumerateFiles(subDir, "*.exe", SearchOption.AllDirectories)
+                        .Where(IsLikelyGameExe)
+                        .Take(40)
+                        .ToList();
+                    if (candidates.Count == 0) continue;
+
+                    // A folder is one game: report only its main executable (the one
+                    // whose name matches the folder, else the largest binary) instead
+                    // of every helper/tool exe, which otherwise floods Downloads.
+                    var exe = PickMainExe(candidates, dirName);
+                    var procName = ExtractProcessName(exe);
+                    if (string.IsNullOrEmpty(procName)) continue;
+                    if (results.ContainsKey(procName)) continue;
+                    if (IsSystemApp(procName, exe)) continue;
+
+                    var displayName = FriendlyNameFromExe(procName);
+                    if (!string.IsNullOrEmpty(dirName) && dirName.Length > 2 && dirName.Length < 50)
+                        displayName = dirName;
+
+                    results[procName] = new DiscoveredApp(procName, displayName, exe, source);
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
+    private static string PickMainExe(List<string> exes, string dirName)
+    {
+        if (exes.Count == 1) return exes[0];
+
+        static string Norm(string s) => new(s.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+        var dn = Norm(dirName);
+
+        // Prefer an executable whose name matches (or is contained in) the folder name.
+        if (!string.IsNullOrEmpty(dn))
+        {
+            var match = exes.FirstOrDefault(e =>
+            {
+                var n = Norm(Path.GetFileNameWithoutExtension(e));
+                return n.Length > 2 && (dn.Contains(n) || n.Contains(dn));
+            });
+            if (match != null) return match;
+        }
+
+        // Otherwise the largest executable - main game binaries dwarf helpers.
+        return exes
+            .OrderByDescending(e => { try { return new FileInfo(e).Length; } catch { return 0L; } })
+            .First();
+    }
+
+    private static bool IsLikelyGameExe(string path)
+    {
+        var lower = path.ToLowerInvariant();
+        return !lower.Contains("_commonredist") &&
+               !lower.Contains("\\redist\\") &&
+               !lower.Contains("vc_redist") &&
+               !lower.Contains("dxwebsetup") &&
+               !lower.Contains("dxsetup") &&
+               !lower.Contains("\\eossdk\\") &&
+               !lower.Contains("\\epic\\") &&
+               !lower.Contains("\\easyanticheat\\") &&
+               !lower.Contains("\\battleye\\") &&
+               !lower.Contains("\\support\\") &&
+               !lower.Contains("\\pdb\\") &&
+               !lower.Contains("\\crash\\") &&
+               !lower.Contains("\\dotnet\\") &&
+               !lower.Contains("\\vs_") &&
+               !lower.Contains("\\_installer\\") &&
+               !lower.Contains("\\python_embeded\\") &&
+               !lower.Contains("\\python\\") &&
+               !lower.Contains("\\scripts\\") &&
+               !lower.Contains("\\site-packages\\") &&
+               !lower.Contains("\\node_modules\\") &&
+               !lower.Contains("\\__pycache__\\") &&
+               !lower.Contains("unins") &&
+               !lower.EndsWith("\\setup.exe");
+    }
+
+    /// <summary>
+    /// Returns the <c>steamapps\common</c> folder of every configured Steam library
+    /// (across all drives), resolved from Steam's <c>libraryfolders.vdf</c>.
+    /// </summary>
+    private static IEnumerable<string> GetSteamLibraryCommonDirs()
+    {
+        var steamPaths = new List<string>();
+        try
+        {
+            if (Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam")?.GetValue("SteamPath") is string p1 && !string.IsNullOrWhiteSpace(p1))
+                steamPaths.Add(p1);
+        }
+        catch { }
+        try
+        {
+            if (Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Valve\Steam")?.GetValue("InstallPath") is string p2 && !string.IsNullOrWhiteSpace(p2))
+                steamPaths.Add(p2);
+        }
+        catch { }
+        steamPaths.Add(@"C:\Program Files (x86)\Steam");
+        steamPaths.Add(@"C:\Program Files\Steam");
+
+        var libraries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var steam in steamPaths.Select(s => s.Replace('/', '\\')).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            libraries.Add(steam); // The Steam install folder is itself a library.
+            foreach (var vdf in new[]
+                     {
+                         Path.Combine(steam, "steamapps", "libraryfolders.vdf"),
+                         Path.Combine(steam, "config", "libraryfolders.vdf")
+                     })
+            {
+                try
+                {
+                    if (!File.Exists(vdf)) continue;
+                    foreach (var libPath in ParseSteamLibraryPaths(File.ReadAllText(vdf)))
+                        libraries.Add(libPath);
+                }
+                catch { }
+            }
+        }
+
+        var commonDirs = new List<string>();
+        foreach (var lib in libraries)
         {
             try
             {
-                foreach (var subDir in Directory.EnumerateDirectories(dir))
-                {
-                    try
-                    {
-                        var exes = Directory.EnumerateFiles(subDir, "*.exe", SearchOption.AllDirectories)
-                            .Where(f => {
-                                var lower = f.ToLowerInvariant();
-                                return !lower.Contains("_commonredist") &&
-                                       !lower.Contains("\\redist\\") &&
-                                       !lower.Contains("vc_redist") &&
-                                       !lower.Contains("dxwebsetup") &&
-                                       !lower.Contains("\\eossdk\\") &&
-                                       !lower.Contains("\\epic\\") &&
-                                       !lower.Contains("\\easyanticheat\\") &&
-                                       !lower.Contains("\\battleye\\") &&
-                                       !lower.Contains("\\support\\") &&
-                                       !lower.Contains("\\pdb\\") &&
-                                       !lower.Contains("\\crash\\") &&
-                                       !lower.Contains("\\dotnet\\") &&
-                                       !lower.Contains("\\vs_") &&
-                                       !lower.Contains("\\_installer\\");
-                            })
-                            .Take(3);
-
-                        foreach (var exe in exes)
-                        {
-                            var procName = ExtractProcessName(exe);
-                            if (string.IsNullOrEmpty(procName)) continue;
-                            if (results.ContainsKey(procName)) continue;
-                            if (IsSystemApp(procName, exe)) continue;
-
-                            var displayName = FriendlyNameFromExe(procName);
-                            var dirName = Path.GetFileName(subDir);
-                            if (!string.IsNullOrEmpty(dirName) && dirName.Length > 2 && dirName.Length < 50)
-                                displayName = dirName;
-
-                            results[procName] = new DiscoveredApp(procName, displayName, exe, "Game Directory");
-                        }
-                    }
-                    catch { }
-                }
+                var common = Path.Combine(lib, "steamapps", "common");
+                if (Directory.Exists(common))
+                    commonDirs.Add(common);
             }
             catch { }
+        }
+        return commonDirs;
+    }
+
+    /// <summary>
+    /// Parses the <c>"path"  "…"</c> entries out of a Steam <c>libraryfolders.vdf</c>
+    /// file, unescaping the doubled backslashes Steam writes.
+    /// </summary>
+    public static IEnumerable<string> ParseSteamLibraryPaths(string vdfContent)
+    {
+        if (string.IsNullOrEmpty(vdfContent))
+            yield break;
+
+        foreach (Match m in Regex.Matches(vdfContent, "\"path\"\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase))
+        {
+            var raw = m.Groups[1].Value.Replace(@"\\", @"\").Trim();
+            if (!string.IsNullOrWhiteSpace(raw))
+                yield return raw;
         }
     }
 

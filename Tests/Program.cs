@@ -24,6 +24,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Usage database replaces backup-managed config tables", TestUsageDatabaseReplacesConfigTables),
     ("Window tracker returns every process mapped to an app", TestWindowTrackerReturnsAllAppProcesses),
     ("Window tracker validates idle tracking settings", TestWindowTrackerIdleSettings),
+    ("Steam library folders are parsed from libraryfolders.vdf", TestSteamLibraryVdfParsing),
     ("Daily summaries calculate latest missed delivery", TestDailySummaryDueTime),
     ("Weekly summaries calculate latest missed delivery", TestWeeklySummaryDueTime),
     ("Monthly summaries clamp delivery days", TestMonthlySummaryDueTime),
@@ -132,6 +133,24 @@ static Task TestSchedulerCurrentAllowedWindowEnd()
 
     AssertEqual(new DateTime(2026, 6, 16, 22, 0, 0), end, "Expected app-specific later window end.");
     AssertEqual(null, SchedulerService.GetCurrentAllowedWindowEnd(rules, "Chess", new DateTime(2026, 6, 16, 23, 0, 0)), "Expected no active allowed window.");
+
+    return Task.CompletedTask;
+}
+
+static Task TestSteamLibraryVdfParsing()
+{
+    var vdf = "\"libraryfolders\"\n{\n" +
+              "\t\"0\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\Program Files (x86)\\\\Steam\"\n\t}\n" +
+              "\t\"1\"\n\t{\n\t\t\"path\"\t\t\"D:\\\\SteamLibrary\"\n\t}\n" +
+              "\t\"2\"\n\t{\n\t\t\"path\"\t\t\"E:\\\\Games\\\\Steam\"\n\t}\n}\n";
+
+    var paths = DiscoveryService.ParseSteamLibraryPaths(vdf).ToList();
+
+    AssertEqual(3, paths.Count, "Expected three library paths.");
+    AssertTrue(paths.Contains(@"C:\Program Files (x86)\Steam"), "Expected the default Steam path (backslashes unescaped).");
+    AssertTrue(paths.Contains(@"D:\SteamLibrary"), "Expected the D: library path.");
+    AssertTrue(paths.Contains(@"E:\Games\Steam"), "Expected the E: library path.");
+    AssertEqual(0, DiscoveryService.ParseSteamLibraryPaths("").Count(), "Empty content yields no paths.");
 
     return Task.CompletedTask;
 }
