@@ -15,12 +15,16 @@
   `C:\Program Files\DeviceMon`, where standard users have read-and-execute only -
   the child can close DeviceMon but cannot delete or modify the application files
   (`.exe`s, DLLs, `appsettings.json`). Re-run `install.ps1` as admin to update.
-- **Quiet SYSTEM updates for protected installs.** When a trusted update source is
-  configured (`install.ps1 -UpdateSource ...`), the dashboard **Update** button
-  queues a silent update performed by the `GameHost` service as SYSTEM - no UAC
-  prompt, works remotely, and installs into the protected folder. The source is
-  stored in a SYSTEM-only file the child cannot read or redirect, so a standard
-  user cannot point updates at malicious files.
+- **Quiet remote updates for protected installs.** When a trusted update source is
+  configured (`install.ps1 -UpdateSource ...`), the `GameHost` service (SYSTEM)
+  performs updates - no UAC prompt, works remotely, installs into the protected
+  folder, and relaunches DeviceMon in the child's session. The source is stored in
+  a SYSTEM-only file the child cannot read or redirect.
+- **Auto-update to new versions.** Point the source at a stable "latest" URL and
+  GameHost fetches the companion `.sha256` on each check, installing only when the
+  hash differs from what is running. Triggered by the dashboard **Update** button
+  and/or a background schedule (`-AutoCheckHours`). This lets you publish a new
+  release and have child PCs upgrade themselves without physical access.
 - **Corrupt-config resilience.** A malformed `appsettings.json` no longer crashes
   DeviceMon or takes down the dashboard. Configuration now falls back to a
   last-known-good backup (and then built-in defaults), and the web host no longer

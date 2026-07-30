@@ -314,17 +314,26 @@ Because the app folder is read-only to standard users, the in-dashboard updater 
 
 1. **Re-run `install.ps1`** as Administrator against the new publish folder — it stops the watchdog, replaces the files, and restarts everything.
 
-2. **Quiet updates from the dashboard** (no admin prompt, works remotely) — configure a trusted update source at install time:
+2. **Quiet remote updates** (no admin prompt, no physical access) — configure a trusted update source at install time. The `GameHost` service (SYSTEM) performs updates, so it can write to Program Files; the child-facing dashboard can only *trigger* a check, never choose the source.
 
+   **Recommended — a stable "latest" URL so you can push *new* versions remotely:**
    ```powershell
-   # HTTPS zip (SHA-256 required):
-   .\install.ps1 -UpdateSource "https://example.com/MonitorAndControl-v1.05.zip" -UpdateSha256 "<hash>"
+   .\install.ps1 `
+     -UpdateSource "https://github.com/<you>/<repo>/releases/latest/download/DeviceMon.zip" `
+     -AutoCheckHours 24
+   ```
+   Upload two assets to each GitHub release with **stable names**: `DeviceMon.zip` and `DeviceMon.zip.sha256`. GameHost fetches the `.sha256` (default `<source>.sha256`, or set `-UpdateSha256Url`), and installs **only when the hash differs** from what's running — on the dashboard **Update** button and/or every `AutoCheckHours` (omit or `0` for button-only).
 
-   # …or a folder / network share:
+   **Alternative — pin one fixed version:**
+   ```powershell
+   .\install.ps1 -UpdateSource "https://…/MonitorAndControl-v1.05.zip" -UpdateSha256 "<hash>"
+   # …or a folder / network share (button-only, no version check):
    .\install.ps1 -UpdateSource "\\server\share\DeviceMon" -UpdateUsername "user" -UpdatePassword "pw"
    ```
 
-   The source is stored in a SYSTEM-only file (`C:\ProgramData\SystemHelper\Protected\update-source.json`) that the child cannot read or change. When you click **Settings → Update**, the dashboard just *triggers* an update; the `GameHost` service (running as SYSTEM) performs it silently from that fixed source and relaunches DeviceMon in the child's session. Because the source is fixed, the child cannot redirect updates to malicious files — the dashboard never gets to choose where SYSTEM pulls from.
+   The config is stored in a SYSTEM-only file (`C:\ProgramData\SystemHelper\Protected\update-source.json`) the child cannot read or change. After an update, GameHost relaunches DeviceMon in the child's session.
+
+   **Your release workflow becomes:** build → upload `DeviceMon.zip` + `.sha256` to the release → (optionally) click **Update** from your own PC → it installs silently within seconds, or on its own within `AutoCheckHours`.
 
 ### Installing only the Watchdog (optional, requires admin)
 

@@ -14,12 +14,19 @@ param(
     [int]$IntervalSeconds = 5,
 
     # Optional: configure quiet, admin-level updates for this protected install.
-    # $UpdateSource may be an HTTPS .zip URL (then $UpdateSha256 is required), a
-    # local folder, or a UNC share. Stored in a SYSTEM-only file so the child
-    # cannot read or redirect it; the dashboard 'Update' button then triggers a
-    # silent update from this fixed source via the GameHost service.
+    # $UpdateSource may be an HTTPS .zip URL, a local folder, or a UNC share.
+    # Stored in a SYSTEM-only file so the child cannot read or redirect it.
+    #
+    # For remote silent upgrades to NEW versions, point $UpdateSource at a STABLE
+    # "latest" URL (e.g. a GitHub releases/latest/download/<name>.zip asset) and
+    # leave $UpdateSha256 empty: GameHost then fetches the companion .sha256 each
+    # check (default "<source>.sha256", or set $UpdateSha256Url) and only installs
+    # when it differs from what is running. Set $UpdateSha256 instead to pin one
+    # fixed version. $AutoCheckHours > 0 enables background checks (0 = button only).
     [string]$UpdateSource = '',
     [string]$UpdateSha256 = '',
+    [string]$UpdateSha256Url = '',
+    [int]$AutoCheckHours = 0,
     [string]$UpdateUsername = '',
     [string]$UpdatePassword = ''
 )
@@ -79,8 +86,11 @@ icacls.exe $dataDir /grant 'Users:(OI)(CI)M' | Out-Null
 
 # --- Optional: configure the trusted update source for quiet SYSTEM updates ---
 if (-not [string]::IsNullOrWhiteSpace($UpdateSource)) {
-    if ($UpdateSource -match '^https://' -and [string]::IsNullOrWhiteSpace($UpdateSha256)) {
-        throw 'An HTTPS update source requires -UpdateSha256 (the SHA-256 of the update .zip).'
+    $isHttps = $UpdateSource -match '^https://'
+    # HTTPS with no fixed hash uses the companion .sha256 (explicit or derived), so
+    # only a non-HTTPS source (folder/UNC) with no hash is unverifiable.
+    if (-not $isHttps -and [string]::IsNullOrWhiteSpace($UpdateSha256)) {
+        Write-Host "Note: non-HTTPS source without -UpdateSha256; updates run on the dashboard button only (no version check)."
     }
 
     $protectedDir = Join-Path $dataDir 'Protected'
@@ -90,12 +100,34 @@ if (-not [string]::IsNullOrWhiteSpace($UpdateSource)) {
     icacls.exe $protectedDir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' | Out-Null
 
     $cfg = [ordered]@{ source = $UpdateSource }
-    if (-not [string]::IsNullOrWhiteSpace($UpdateSha256))   { $cfg.sha256 = $UpdateSha256.ToUpperInvariant() }
-    if (-not [string]::IsNullOrWhiteSpace($UpdateUsername)) { $cfg.username = $UpdateUsername }
-    if (-not [string]::IsNullOrWhiteSpace($UpdatePassword)) { $cfg.password = $UpdatePassword }
+    if (-not [string]::IsNullOrWhiteSpace($UpdateSha256))    { $cfg.sha256 = $UpdateSha256.ToUpperInvariant() }
+    if (-not [string]::IsNullOrWhiteSpace($UpdateSha256Url)) { $cfg.sha256Url = $UpdateSha256Url }
+    if ($AutoCheckHours -gt 0)                               { $cfg.autoCheckHours = $AutoCheckHours }
+    if (-not [string]::IsNullOrWhiteSpace($UpdateUsername))  { $cfg.username = $UpdateUsername }
+    if (-not [string]::IsNullOrWhiteSpace($UpdatePassword))  { $cfg.password = $UpdatePassword }
 
     ($cfg | ConvertTo-Json) | Out-File -FilePath (Join-Path $protectedDir 'update-source.json') -Encoding utf8 -Force
-    Write-Host "Configured trusted update source (quiet SYSTEM updates enabled): $UpdateSource"
+
+    # Seed the installed-hash with the currently published hash so the first
+    # auto-check doesn't redownload the build we just installed. (Assumes the files
+    # you install here match the zip you published at the "latest" URL.)
+    $seedHash = $UpdateSha256
+    if ([string]::IsNullOrWhiteSpace($seedHash) -and $isHttps) {
+        $hashUrl = if (-not [string]::IsNullOrWhiteSpace($UpdateSha256Url)) { $UpdateSha256Url } else { "$UpdateSource.sha256" }
+        try {
+            $txt = (Invoke-WebRequest -Uri $hashUrl -UseBasicParsing -TimeoutSec 20).Content
+            $tok = (($txt -split '\s+') | Where-Object { $_ }) | Select-Object -First 1
+            if ($tok -and $tok.Length -eq 64) { $seedHash = $tok }
+        } catch {
+            Write-Host "Note: could not fetch $hashUrl to seed the installed hash; the first check may reinstall the current build once."
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($seedHash)) {
+        Set-Content -LiteralPath (Join-Path $protectedDir 'installed.hash') -Value $seedHash.ToUpperInvariant() -Encoding ascii
+    }
+
+    $mode = if ($AutoCheckHours -gt 0) { "dashboard button + auto-check every $AutoCheckHours h" } else { "dashboard button" }
+    Write-Host "Configured trusted update source (quiet SYSTEM updates: $mode): $UpdateSource"
 }
 
 # --- (Re)install the watchdog service pointing at the protected location ---

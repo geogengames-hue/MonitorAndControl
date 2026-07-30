@@ -6,6 +6,7 @@ using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text;
 using System.Text.Json;
+using System.Net.Http;
 
 namespace MonitorAndControlWatchdog;
 
@@ -343,10 +344,13 @@ internal sealed class WatchdogService : ServiceBase
     private int _checking;
     private DateTime _lastProtectUtc = DateTime.MinValue;
     private DateTime _lastUpdateKickUtc = DateTime.MinValue;
+    private DateTime _lastAutoCheckUtc = DateTime.MinValue;
 
     private string TriggerPath => Path.Combine(_options.DataDirectory, "update.trigger");
     private string ChannelFlagPath => Path.Combine(_options.DataDirectory, "update-channel.json");
     private string UpdateSourceConfigPath => Path.Combine(_options.DataDirectory, "Protected", "update-source.json");
+    private string InstalledHashPath => Path.Combine(_options.DataDirectory, "Protected", "installed.hash");
+    private string LastCheckPath => Path.Combine(_options.DataDirectory, "Protected", "update-lastcheck.txt");
 
     public WatchdogService(WatchdogOptions options)
     {
@@ -364,6 +368,7 @@ internal sealed class WatchdogService : ServiceBase
     {
         Program.PrepareDataDirectory(_options.DataDirectory);
         ProtectAndMaintainData(force: true, updateInProgress: IsUpdateInProgress());
+        LoadLastAutoCheck();
         Log($"Watchdog started. Monitor={_options.MonitorPath}");
         _timer.Change(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(_options.IntervalSeconds));
     }
@@ -390,7 +395,10 @@ internal sealed class WatchdogService : ServiceBase
             // service a dashboard-requested update from that source.
             MaintainUpdateChannel();
             if (!updating)
+            {
                 ProcessUpdateTrigger();
+                MaybeAutoCheck();
+            }
 
             if (updating)
             {
@@ -579,10 +587,9 @@ internal sealed class WatchdogService : ServiceBase
     }
 
     /// <summary>
-    /// If the dashboard dropped an update trigger, run an update from the
-    /// pre-configured trusted source. The trigger carries no source data, so a
-    /// forged trigger can only cause a legitimate update - it cannot redirect where
-    /// the update is pulled from.
+    /// If the dashboard dropped an update trigger, check the trusted source for a
+    /// new version. The trigger carries no source data, so a forged trigger can only
+    /// cause a legitimate update-check - it cannot redirect where updates come from.
     /// </summary>
     private void ProcessUpdateTrigger()
     {
@@ -593,21 +600,7 @@ internal sealed class WatchdogService : ServiceBase
 
             // Consume the trigger no matter what, so it cannot loop.
             try { File.Delete(TriggerPath); } catch { }
-
-            if ((DateTime.UtcNow - _lastUpdateKickUtc) < TimeSpan.FromSeconds(90))
-            {
-                Log("Update trigger ignored (rate limited).");
-                return;
-            }
-
-            if (!File.Exists(UpdateSourceConfigPath))
-            {
-                Log("Update requested but no trusted update source is configured; ignoring.");
-                return;
-            }
-
-            _lastUpdateKickUtc = DateTime.UtcNow;
-            KickOffTrustedUpdate();
+            TryRunUpdateCheck("dashboard");
         }
         catch (Exception ex)
         {
@@ -615,17 +608,155 @@ internal sealed class WatchdogService : ServiceBase
         }
     }
 
-    private void KickOffTrustedUpdate()
+    /// <summary>
+    /// Periodically checks the trusted source for a newer version when the config
+    /// enables it (AutoCheckHours &gt; 0). The last check time is persisted so a
+    /// service restart does not reset the schedule.
+    /// </summary>
+    private void MaybeAutoCheck()
     {
-        var cfg = JsonSerializer.Deserialize<UpdateSourceConfig>(
-            File.ReadAllText(UpdateSourceConfigPath),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        if (cfg == null || string.IsNullOrWhiteSpace(cfg.Source))
+        try
         {
-            Log("Trusted update source config is empty; ignoring update request.");
+            var cfg = ReadUpdateConfig();
+            if (cfg == null || cfg.AutoCheckHours <= 0)
+                return;
+            if ((DateTime.UtcNow - _lastAutoCheckUtc) < TimeSpan.FromHours(cfg.AutoCheckHours))
+                return;
+
+            _lastAutoCheckUtc = DateTime.UtcNow;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(LastCheckPath)!);
+                File.WriteAllText(LastCheckPath, DateTimeOffset.UtcNow.ToString("O"));
+            }
+            catch { }
+
+            TryRunUpdateCheck("auto");
+        }
+        catch (Exception ex)
+        {
+            Log("Auto update-check failed: " + ex.Message);
+        }
+    }
+
+    private void LoadLastAutoCheck()
+    {
+        try
+        {
+            if (File.Exists(LastCheckPath) &&
+                DateTimeOffset.TryParse(File.ReadAllText(LastCheckPath).Trim(), out var t))
+                _lastAutoCheckUtc = t.UtcDateTime;
+        }
+        catch { }
+    }
+
+    private UpdateSourceConfig? ReadUpdateConfig()
+    {
+        try
+        {
+            if (!File.Exists(UpdateSourceConfigPath))
+                return null;
+            return JsonSerializer.Deserialize<UpdateSourceConfig>(
+                File.ReadAllText(UpdateSourceConfigPath),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private string? ReadInstalledHash()
+    {
+        try
+        {
+            return File.Exists(InstalledHashPath)
+                ? File.ReadAllText(InstalledHashPath).Trim().ToUpperInvariant()
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Resolves the expected package hash (a fixed one, or fetched from the
+    /// companion .sha256), and only launches an update when it differs from the
+    /// currently installed package - so a check when already current is a no-op.
+    /// </summary>
+    private void TryRunUpdateCheck(string reason)
+    {
+        if ((DateTime.UtcNow - _lastUpdateKickUtc) < TimeSpan.FromSeconds(90))
+        {
+            Log($"Update check ({reason}) skipped (rate limited).");
             return;
         }
 
+        var cfg = ReadUpdateConfig();
+        if (cfg == null || string.IsNullOrWhiteSpace(cfg.Source))
+        {
+            Log($"Update check ({reason}): no trusted update source is configured.");
+            return;
+        }
+
+        var isHttps = cfg.Source.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+        string? expectedHash = !string.IsNullOrWhiteSpace(cfg.Sha256)
+            ? cfg.Sha256!.Trim().ToUpperInvariant()
+            : null;
+
+        if (expectedHash == null && isHttps)
+        {
+            var hashUrl = !string.IsNullOrWhiteSpace(cfg.Sha256Url) ? cfg.Sha256Url! : cfg.Source + ".sha256";
+            expectedHash = FetchExpectedHash(hashUrl);
+            if (expectedHash == null)
+            {
+                Log($"Update check ({reason}): could not fetch a valid SHA-256 from {hashUrl}; skipping.");
+                return;
+            }
+        }
+
+        var installedHash = ReadInstalledHash();
+        if (expectedHash != null && string.Equals(expectedHash, installedHash, StringComparison.OrdinalIgnoreCase))
+        {
+            Log($"Update check ({reason}): already up to date.");
+            return;
+        }
+
+        if (expectedHash == null && reason != "dashboard")
+        {
+            // A folder/UNC source with no hash can't be version-compared; only act
+            // on an explicit dashboard request, never on the automatic schedule.
+            Log($"Update check ({reason}): source has no hash to compare; skipping auto-check.");
+            return;
+        }
+
+        _lastUpdateKickUtc = DateTime.UtcNow;
+        Log($"Update check ({reason}): newer package detected; starting update.");
+        KickOffTrustedUpdate(cfg, expectedHash);
+    }
+
+    private static string? FetchExpectedHash(string url)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+            var text = http.GetStringAsync(url).GetAwaiter().GetResult();
+            var token = text.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault();
+            if (token is { Length: 64 } && token.All(Uri.IsHexDigit))
+                return token.ToUpperInvariant();
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void KickOffTrustedUpdate(UpdateSourceConfig cfg, string? expectedHash)
+    {
         var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var updaterSrc = Path.Combine(installDir, "UpdateAgent.exe");
         if (!File.Exists(updaterSrc))
@@ -651,7 +782,7 @@ internal sealed class WatchdogService : ServiceBase
             restart = false, // GameHost relaunches DeviceMon in the child session afterwards.
             username = string.IsNullOrWhiteSpace(cfg.Username) ? null : cfg.Username,
             password = string.IsNullOrWhiteSpace(cfg.Password) ? null : cfg.Password,
-            sha256 = string.IsNullOrWhiteSpace(cfg.Sha256) ? null : cfg.Sha256
+            sha256 = string.IsNullOrWhiteSpace(expectedHash) ? null : expectedHash
         };
         File.WriteAllText(requestPath, JsonSerializer.Serialize(request));
 
@@ -781,7 +912,9 @@ internal sealed class WatchdogService : ServiceBase
 internal sealed class UpdateSourceConfig
 {
     public string Source { get; set; } = "";
-    public string? Sha256 { get; set; }
+    public string? Sha256 { get; set; }       // Fixed hash (pins one version).
+    public string? Sha256Url { get; set; }     // Companion .sha256 URL for a "latest" source.
+    public int AutoCheckHours { get; set; }    // >0 enables periodic auto-checks.
     public string? Username { get; set; }
     public string? Password { get; set; }
 }

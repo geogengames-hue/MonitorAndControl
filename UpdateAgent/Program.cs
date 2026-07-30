@@ -60,6 +60,7 @@ internal static class Program
             CopyDirectory(preparedSource, options.TargetDirectory, Log);
 
             RepairWatchdog(options.TargetDirectory, options.MonitorPath, Log);
+            RecordInstalledHash(options.ExpectedSha256, Log);
             if (options.Restart)
                 StartMonitor(options.MonitorPath, Log);
 
@@ -130,6 +131,23 @@ internal static class Program
 
     private static string ProtectedDataDirectory => Path.Combine(DataDirectory, "Protected");
     private static string UpdateMarkerPath => Path.Combine(ProtectedDataDirectory, "update-in-progress.marker");
+
+    // Records the hash of the package just installed so the watchdog's update-check
+    // can tell it is up to date and avoid reinstalling the same version. Best-effort:
+    // only the SYSTEM-run update path can write to the protected directory.
+    private static void RecordInstalledHash(string? sha256, Action<string> log)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(sha256)) return;
+            Directory.CreateDirectory(ProtectedDataDirectory);
+            File.WriteAllText(Path.Combine(ProtectedDataDirectory, "installed.hash"), sha256!.Trim().ToUpperInvariant());
+        }
+        catch (Exception ex)
+        {
+            log("Could not record installed hash: " + ex.Message);
+        }
+    }
 
     private static void WriteUpdateMarker(Action<string> log)
     {
