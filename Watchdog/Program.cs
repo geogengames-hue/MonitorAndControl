@@ -343,8 +343,10 @@ internal sealed class WatchdogService : ServiceBase
     private bool _hadSeenMonitor;
     private int _checking;
     private DateTime _lastProtectUtc = DateTime.MinValue;
-    private DateTime _lastUpdateKickUtc = DateTime.MinValue;
     private DateTime _lastAutoCheckUtc = DateTime.MinValue;
+    private DateTime _lastCheckAttemptUtc = DateTime.MinValue;
+
+    private enum UpdateCheckResult { Done, TransientFailure, RateLimited }
 
     private string TriggerPath => Path.Combine(_options.DataDirectory, "update.trigger");
     private string ChannelFlagPath => Path.Combine(_options.DataDirectory, "update-channel.json");
@@ -623,15 +625,29 @@ internal sealed class WatchdogService : ServiceBase
             if ((DateTime.UtcNow - _lastAutoCheckUtc) < TimeSpan.FromHours(cfg.AutoCheckHours))
                 return;
 
-            _lastAutoCheckUtc = DateTime.UtcNow;
+            var result = TryRunUpdateCheck("auto");
+
+            // Only consume the full interval when the check actually reached a
+            // decision. A transient failure (or a momentary rate limit) retries
+            // soon instead of burning the whole AutoCheckHours window.
+            DateTime nextBaseline;
+            if (result == UpdateCheckResult.Done)
+            {
+                nextBaseline = DateTime.UtcNow;
+            }
+            else
+            {
+                var retryIn = TimeSpan.FromHours(Math.Min(1, cfg.AutoCheckHours));
+                nextBaseline = DateTime.UtcNow - (TimeSpan.FromHours(cfg.AutoCheckHours) - retryIn);
+            }
+
+            _lastAutoCheckUtc = nextBaseline;
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(LastCheckPath)!);
-                File.WriteAllText(LastCheckPath, DateTimeOffset.UtcNow.ToString("O"));
+                File.WriteAllText(LastCheckPath, nextBaseline.ToString("O"));
             }
             catch { }
-
-            TryRunUpdateCheck("auto");
         }
         catch (Exception ex)
         {
@@ -685,21 +701,29 @@ internal sealed class WatchdogService : ServiceBase
     /// companion .sha256), and only launches an update when it differs from the
     /// currently installed package - so a check when already current is a no-op.
     /// </summary>
-    private void TryRunUpdateCheck(string reason)
+    private UpdateCheckResult TryRunUpdateCheck(string reason)
     {
-        if ((DateTime.UtcNow - _lastUpdateKickUtc) < TimeSpan.FromSeconds(90))
+        // Throttle every attempt (not only successful updates): the update trigger
+        // is writable by the monitored user, so without this a spammed trigger would
+        // force repeated blocking network fetches on the watchdog timer thread.
+        if ((DateTime.UtcNow - _lastCheckAttemptUtc) < TimeSpan.FromSeconds(90))
         {
             Log($"Update check ({reason}) skipped (rate limited).");
-            return;
+            return UpdateCheckResult.RateLimited;
         }
+        _lastCheckAttemptUtc = DateTime.UtcNow;
 
         var cfg = ReadUpdateConfig();
         if (cfg == null || string.IsNullOrWhiteSpace(cfg.Source))
         {
             Log($"Update check ({reason}): no trusted update source is configured.");
-            return;
+            return UpdateCheckResult.Done;
         }
 
+        // The dashboard button is an explicit admin action: install from the trusted
+        // source regardless of the recorded hash, so it is never silently a no-op.
+        // The automatic schedule instead installs only on a genuine version change.
+        var force = reason == "dashboard";
         var isHttps = cfg.Source.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
         string? expectedHash = !string.IsNullOrWhiteSpace(cfg.Sha256)
@@ -708,33 +732,41 @@ internal sealed class WatchdogService : ServiceBase
 
         if (expectedHash == null && isHttps)
         {
-            var hashUrl = !string.IsNullOrWhiteSpace(cfg.Sha256Url) ? cfg.Sha256Url! : cfg.Source + ".sha256";
+            var hashUrl = !string.IsNullOrWhiteSpace(cfg.Sha256Url) ? cfg.Sha256Url! : DeriveSha256Url(cfg.Source);
             expectedHash = FetchExpectedHash(hashUrl);
             if (expectedHash == null)
             {
-                Log($"Update check ({reason}): could not fetch a valid SHA-256 from {hashUrl}; skipping.");
-                return;
+                Log($"Update check ({reason}): could not fetch a valid SHA-256 from {hashUrl}; will retry.");
+                return UpdateCheckResult.TransientFailure;
             }
         }
 
-        var installedHash = ReadInstalledHash();
-        if (expectedHash != null && string.Equals(expectedHash, installedHash, StringComparison.OrdinalIgnoreCase))
+        if (!force)
         {
-            Log($"Update check ({reason}): already up to date.");
-            return;
+            if (expectedHash == null)
+            {
+                // A folder/UNC source with no hash can't be version-compared.
+                Log($"Update check ({reason}): source has no hash to compare; skipping auto-check.");
+                return UpdateCheckResult.Done;
+            }
+            if (string.Equals(expectedHash, ReadInstalledHash(), StringComparison.OrdinalIgnoreCase))
+            {
+                Log($"Update check ({reason}): already up to date.");
+                return UpdateCheckResult.Done;
+            }
         }
 
-        if (expectedHash == null && reason != "dashboard")
-        {
-            // A folder/UNC source with no hash can't be version-compared; only act
-            // on an explicit dashboard request, never on the automatic schedule.
-            Log($"Update check ({reason}): source has no hash to compare; skipping auto-check.");
-            return;
-        }
-
-        _lastUpdateKickUtc = DateTime.UtcNow;
-        Log($"Update check ({reason}): newer package detected; starting update.");
+        Log($"Update check ({reason}): starting update{(expectedHash != null ? $" (sha {expectedHash[..8]})" : "")}.");
         KickOffTrustedUpdate(cfg, expectedHash);
+        return UpdateCheckResult.Done;
+    }
+
+    // Appends ".sha256" to the file portion of a URL, preserving any query string
+    // (e.g. a SAS / pre-signed token) so the companion-hash fetch still resolves.
+    private static string DeriveSha256Url(string url)
+    {
+        var q = url.IndexOf('?');
+        return q >= 0 ? url[..q] + ".sha256" + url[q..] : url + ".sha256";
     }
 
     private static string? FetchExpectedHash(string url)
@@ -777,6 +809,7 @@ internal sealed class WatchdogService : ServiceBase
         {
             source = cfg.Source,
             targetDirectory = installDir,
+            dataDirectory = _options.DataDirectory, // so UpdateAgent records installed.hash where we read it
             monitorPath = _options.MonitorPath,
             monitorPid = (int?)null,
             restart = false, // GameHost relaunches DeviceMon in the child session afterwards.

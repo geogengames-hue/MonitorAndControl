@@ -8,7 +8,13 @@
 # DeviceMon.exe inside the child's session.
 
 param(
-    [string]$SourceDir = (Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\win-x64\publish'),
+    # Auto-detect the published files: alongside this script (the usual case when run
+    # from an extracted DeviceMon.zip), else the repo's publish output.
+    [string]$SourceDir = $(
+        if (Test-Path (Join-Path $PSScriptRoot 'DeviceMon.exe')) { $PSScriptRoot }
+        elseif (Test-Path (Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\win-x64\publish\DeviceMon.exe')) { Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\win-x64\publish' }
+        else { $PSScriptRoot }
+    ),
     [string]$InstallDir = (Join-Path $env:ProgramFiles 'DeviceMon'),
     [string]$ServiceName = 'GameHost',
     [int]$IntervalSeconds = 5,
@@ -72,8 +78,13 @@ Start-Sleep -Seconds 1
 # default - that inherited permission is exactly what protects the app files, so
 # we deliberately do NOT loosen it here.
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-robocopy $sourcePath $InstallDir /E /NFL /NDL /NJH /NJS /NP /R:3 /W:2 | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "File copy (robocopy) failed with exit code $LASTEXITCODE." }
+# Strip trailing backslashes: a quoted path ending in "\" (e.g. a spaced source like
+# "...\New folder (2)\") makes robocopy read the closing quote as escaped, mangling
+# its arguments and returning exit code 16 (copied nothing).
+$srcArg = $sourcePath.TrimEnd('\')
+$dstArg = $InstallDir.TrimEnd('\')
+robocopy $srcArg $dstArg /E /NFL /NDL /NJH /NJS /NP /R:3 /W:2 | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "File copy (robocopy) failed with exit code $LASTEXITCODE (source: $srcArg)." }
 
 $watchdogExe = Join-Path $InstallDir 'GameHost.exe'
 $monitorExe = Join-Path $InstallDir 'DeviceMon.exe'
@@ -108,23 +119,13 @@ if (-not [string]::IsNullOrWhiteSpace($UpdateSource)) {
 
     ($cfg | ConvertTo-Json) | Out-File -FilePath (Join-Path $protectedDir 'update-source.json') -Encoding utf8 -Force
 
-    # Seed the installed-hash with the currently published hash so the first
-    # auto-check doesn't redownload the build we just installed. (Assumes the files
-    # you install here match the zip you published at the "latest" URL.)
-    $seedHash = $UpdateSha256
-    if ([string]::IsNullOrWhiteSpace($seedHash) -and $isHttps) {
-        $hashUrl = if (-not [string]::IsNullOrWhiteSpace($UpdateSha256Url)) { $UpdateSha256Url } else { "$UpdateSource.sha256" }
-        try {
-            $txt = (Invoke-WebRequest -Uri $hashUrl -UseBasicParsing -TimeoutSec 20).Content
-            $tok = (($txt -split '\s+') | Where-Object { $_ }) | Select-Object -First 1
-            if ($tok -and $tok.Length -eq 64) { $seedHash = $tok }
-        } catch {
-            Write-Host "Note: could not fetch $hashUrl to seed the installed hash; the first check may reinstall the current build once."
-        }
-    }
-    if (-not [string]::IsNullOrWhiteSpace($seedHash)) {
-        Set-Content -LiteralPath (Join-Path $protectedDir 'installed.hash') -Value $seedHash.ToUpperInvariant() -Encoding ascii
-    }
+    # Do NOT seed installed.hash here: this script installs from a folder, and we
+    # can't honestly prove it matches the zip published at the source URL. The first
+    # check will (re)install the current published build once and UpdateAgent then
+    # records the real verified hash, so later checks are accurate. Clear any stale
+    # value from a previous install so a genuine update is never skipped.
+    $installedHashFile = Join-Path $protectedDir 'installed.hash'
+    if (Test-Path -LiteralPath $installedHashFile) { Remove-Item -LiteralPath $installedHashFile -Force -ErrorAction SilentlyContinue }
 
     $mode = if ($AutoCheckHours -gt 0) { "dashboard button + auto-check every $AutoCheckHours h" } else { "dashboard button" }
     Write-Host "Configured trusted update source (quiet SYSTEM updates: $mode): $UpdateSource"

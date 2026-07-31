@@ -21,9 +21,12 @@ internal static class Program
         var options = UpdateOptions.Parse(args);
         if (options == null)
         {
-            Console.Error.WriteLine("Usage: UpdateAgent --source <folder-or-https-zip-url> --target <install-folder> --monitor <DeviceMon.exe> [--sha256 <hash>] [--pid <pid>] [--restart]");
+            Console.Error.WriteLine("Usage: UpdateAgent --source <folder-or-https-zip-url> --target <install-folder> --monitor <DeviceMon.exe> [--sha256 <hash>] [--data <dir>] [--pid <pid>] [--restart]");
             return 2;
         }
+
+        if (!string.IsNullOrWhiteSpace(options.DataDirectory))
+            _dataDirOverride = options.DataDirectory;
 
         var logPath = Path.Combine(options.TargetDirectory, "update.log");
         var statusPath = Path.Combine(options.TargetDirectory, "update-status.json");
@@ -60,7 +63,13 @@ internal static class Program
             CopyDirectory(preparedSource, options.TargetDirectory, Log);
 
             RepairWatchdog(options.TargetDirectory, options.MonitorPath, Log);
-            RecordInstalledHash(options.ExpectedSha256, Log);
+            // Only record the hash when the package was actually verified against it.
+            // PrepareSourceAsync verifies the SHA-256 for HTTPS sources only; folder /
+            // UNC sources are trusted-by-path and never hash-checked, so recording a
+            // configured hash there would assert a verification that never happened.
+            var httpsVerified = Uri.TryCreate(options.Source, UriKind.Absolute, out var srcUri)
+                && srcUri.Scheme == Uri.UriSchemeHttps;
+            RecordInstalledHash(httpsVerified ? options.ExpectedSha256 : null, Log);
             if (options.Restart)
                 StartMonitor(options.MonitorPath, Log);
 
@@ -125,7 +134,11 @@ internal static class Program
         }
     }
 
-    private static string DataDirectory => Path.Combine(
+    private static string? _dataDirOverride;
+
+    // Honour the caller's data directory (the watchdog passes it) so installed.hash
+    // is written where the watchdog reads it, even if the default ever diverges.
+    private static string DataDirectory => _dataDirOverride ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "SystemHelper");
 
@@ -502,7 +515,8 @@ internal sealed record UpdateOptions(
     string? Username,
     string? Password,
     string? ExpectedSha256,
-    string? RequestFile)
+    string? RequestFile,
+    string? DataDirectory)
 {
     public static UpdateOptions? Parse(string[] args)
     {
@@ -516,6 +530,7 @@ internal sealed record UpdateOptions(
         int? pid = null;
         var restart = false;
         string? sha256 = null;
+        string? dataDir = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -525,6 +540,8 @@ internal sealed record UpdateOptions(
                 target = args[++i];
             else if (args[i].Equals("--monitor", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                 monitor = args[++i];
+            else if (args[i].Equals("--data", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                dataDir = args[++i];
             else if (args[i].Equals("--pid", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length && int.TryParse(args[++i], out var parsedPid))
                 pid = parsedPid;
             else if (args[i].Equals("--restart", StringComparison.OrdinalIgnoreCase))
@@ -541,7 +558,7 @@ internal sealed record UpdateOptions(
             ? Path.Combine(target, "DeviceMon.exe")
             : Path.GetFullPath(Environment.ExpandEnvironmentVariables(monitor));
 
-        return new UpdateOptions(source, target, monitor, pid, restart, null, null, sha256, null);
+        return new UpdateOptions(source, target, monitor, pid, restart, null, null, sha256, null, dataDir);
     }
 
     public void DeleteRequestFile()
@@ -590,7 +607,10 @@ internal sealed record UpdateOptions(
                 ? UnprotectSecret(request.ProtectedPassword)
                 : request.Password,
             request.Sha256,
-            requestFile);
+            requestFile,
+            string.IsNullOrWhiteSpace(request.DataDirectory)
+                ? null
+                : Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.DataDirectory)));
     }
 
     private static string UnprotectSecret(string value)
@@ -609,6 +629,7 @@ internal sealed class UpdateRequest
 {
     public string Source { get; set; } = "";
     public string TargetDirectory { get; set; } = "";
+    public string? DataDirectory { get; set; }
     public string MonitorPath { get; set; } = "";
     public int? MonitorPid { get; set; }
     public bool Restart { get; set; }
