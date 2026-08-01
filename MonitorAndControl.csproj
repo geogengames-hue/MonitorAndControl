@@ -14,9 +14,9 @@
     <Product>DeviceMon</Product>
     <Description>Local parental monitoring and app limit dashboard</Description>
     <AssemblyTitle>DeviceMon</AssemblyTitle>
-    <Version>1.6.1</Version>
-    <AssemblyVersion>1.6.1.0</AssemblyVersion>
-    <FileVersion>1.6.1.0</FileVersion>
+    <Version>1.6.2</Version>
+    <AssemblyVersion>1.6.2.0</AssemblyVersion>
+    <FileVersion>1.6.2.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

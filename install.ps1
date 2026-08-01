@@ -83,7 +83,15 @@ New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 # its arguments and returning exit code 16 (copied nothing).
 $srcArg = $sourcePath.TrimEnd('\')
 $dstArg = $InstallDir.TrimEnd('\')
-robocopy $srcArg $dstArg /E /NFL /NDL /NJH /NJS /NP /R:3 /W:2 | Out-Null
+# Preserve an existing appsettings.json so a reinstall/upgrade doesn't reset user
+# configuration (remote dashboard, bind address, port, ...). Seed it only when the
+# target doesn't already have one.
+$robocopyExtra = @()
+if (Test-Path -LiteralPath (Join-Path $InstallDir 'appsettings.json')) {
+    Write-Host "Preserving existing appsettings.json (keeping your dashboard/remote settings)."
+    $robocopyExtra += @('/XF', 'appsettings.json')
+}
+robocopy $srcArg $dstArg /E /NFL /NDL /NJH /NJS /NP /R:3 /W:2 @robocopyExtra | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "File copy (robocopy) failed with exit code $LASTEXITCODE (source: $srcArg)." }
 
 $watchdogExe = Join-Path $InstallDir 'GameHost.exe'

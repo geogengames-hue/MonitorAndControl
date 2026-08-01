@@ -417,6 +417,16 @@ internal static class Program
             var target = Path.Combine(targetDirectory, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
 
+            // Never overwrite an existing appsettings.json: it holds user
+            // configuration (EnableRemoteDashboard, DashboardBindAddress, port, etc.)
+            // that must survive updates. Only seed it on a fresh install.
+            if (string.Equals(relative, "appsettings.json", StringComparison.OrdinalIgnoreCase)
+                && File.Exists(target))
+            {
+                log("Preserved existing appsettings.json.");
+                continue;
+            }
+
             for (var attempt = 1; attempt <= 8; attempt++)
             {
                 try
