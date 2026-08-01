@@ -43,6 +43,7 @@ internal static class Program
         }
 
         var startedAt = DateTimeOffset.Now;
+        var watchdogStopped = false;
         try
         {
             Log($"Update started. Source={options.Source}");
@@ -55,11 +56,19 @@ internal static class Program
                 logPath));
             ConnectNetworkShare(options, Log);
             WriteUpdateMarker(Log);
-            StopWatchdog(Log);
-            await WaitForMonitorExitAsync(options.MonitorPid, options.MonitorPath, Log);
 
+            // Download and VERIFY before disturbing the running app. A failed or
+            // hash-mismatched download must leave GameHost and DeviceMon running -
+            // otherwise a bad package would stop the watchdog and kill the monitor
+            // with nothing to bring them back.
             var preparedSource = await PrepareSourceAsync(options.Source, options.ExpectedSha256, Log);
             ValidateSource(preparedSource);
+
+            // Package is valid - now stop the running components to swap files.
+            StopWatchdog(Log);
+            watchdogStopped = true;
+            await WaitForMonitorExitAsync(options.MonitorPid, options.MonitorPath, Log);
+
             CopyDirectory(preparedSource, options.TargetDirectory, Log);
 
             RepairWatchdog(options.TargetDirectory, options.MonitorPath, Log);
@@ -93,6 +102,14 @@ internal static class Program
                 DateTimeOffset.Now,
                 ex.Message,
                 logPath));
+            // If we had already stopped the watchdog (i.e. failure happened during
+            // the file copy), bring GameHost back so it recovers and relaunches
+            // DeviceMon in the child session instead of leaving both down.
+            if (watchdogStopped)
+            {
+                Log("Restarting GameHost after failed update.");
+                RepairWatchdog(options.TargetDirectory, options.MonitorPath, Log);
+            }
             TryRestartMonitorAfterFailure(options, Log);
             return 1;
         }
