@@ -370,7 +370,9 @@ public class DashboardServer
             }
         });
 
-        ScreenTimeEndpoints.Map(app);
+        // Remote parents can read accounts and change PC Time with the remote PIN, but only with a
+        // valid admin login: a password must exist and the token must check out.
+        ScreenTimeEndpoints.Map(app, ctx => _adminPasswordSet && RequireWriteAccess(ctx) == null);
 
         app.MapPost("/api/actions/block-all", (HttpContext ctx) =>
         {
@@ -998,12 +1000,13 @@ public class DashboardServer
                 var root = doc.RootElement;
                 return Results.Ok(new
                 {
-                    status = root.TryGetProperty("status", out var status) ? status.GetString() : "unknown",
-                    source = root.TryGetProperty("source", out var source) ? source.GetString() : "",
-                    startedAt = root.TryGetProperty("startedAt", out var startedAt) ? startedAt.GetString() : "",
-                    finishedAt = root.TryGetProperty("finishedAt", out var finishedAt) ? finishedAt.GetString() : "",
-                    message = root.TryGetProperty("message", out var message) ? message.GetString() : "",
-                    logPath = root.TryGetProperty("logPath", out var savedLogPath) ? savedLogPath.GetString() : logPath,
+                    // The updater writes PascalCase, the dashboard camelCase: read either.
+                    status = DiagnosticsService.GetString(root, "status") ?? "unknown",
+                    source = DiagnosticsService.GetString(root, "source") ?? "",
+                    startedAt = DiagnosticsService.GetString(root, "startedAt") ?? "",
+                    finishedAt = DiagnosticsService.GetString(root, "finishedAt") ?? "",
+                    message = DiagnosticsService.GetString(root, "message") ?? "",
+                    logPath = DiagnosticsService.GetString(root, "logPath") ?? logPath,
                     logTail = ReadLogTail(logPath, 20)
                 });
             }
@@ -1042,6 +1045,15 @@ public class DashboardServer
                     return Results.Json(new { error = "Could not queue update: " + ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
                 }
             }
+
+            // The built-in updater below writes into the app folder. On a protected install
+            // (and with no trusted source for the service) that can only fail with "access
+            // denied" after stopping the app, so refuse up front with an explanation.
+            if (DiagnosticsService.IsInstallFolderProtected())
+                return Results.Json(new
+                {
+                    error = "This is a protected install: the dashboard cannot write to the app folder. Updates run through the GameHost service. Re-run install.ps1 as administrator with -UpdateSource to enable remote updates."
+                }, statusCode: StatusCodes.Status409Conflict);
 
             string source = "";
             string username = "";

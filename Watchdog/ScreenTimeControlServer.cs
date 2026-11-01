@@ -105,6 +105,16 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     _log($"Screen-time policy saved by elevated Windows identity {callerSid} for {change.UserSid}.");
                 }
                 return saved;
+            case "remote-save":
+                // Authorized by the remote PIN inside the handler (not by Windows elevation), with
+                // brute-force lockout. This is the only change path that does not need UAC.
+                var remote = _handle(request);
+                if (remote.Ok)
+                {
+                    _snapshot = null;
+                    _log($"Screen-time policy changed through the remote PIN (requested by {callerSid}).");
+                }
+                return remote;
             case "result": return _approvals.Result(request.TicketId, callerSid, now);
             case "cancel":
                 _approvals.Cancel(request.TicketId, callerSid);

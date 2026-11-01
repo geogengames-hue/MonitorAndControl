@@ -177,6 +177,17 @@ The script publishes four projects:
 
 It also copies `appsettings.json`, the `wwwroot/` folder, and PowerShell helper scripts.
 
+### Cutting a release
+
+`release.ps1` does the whole release in one step and refuses to ship a bad package:
+
+```powershell
+.\release.ps1            # test, publish, and build verified packages in dist\<version>\ (uploads nothing)
+.\release.ps1 -Upload    # also create the GitHub release (needs gh logged in, a clean tree, and everything pushed)
+```
+
+It checks that all four projects share one version, runs the tests, verifies the published executables and `appsettings.json`, and creates `DeviceMon.zip` + `DeviceMon.zip.sha256` (the stable names the remote auto-update URL uses) plus a versioned copy. It then re-verifies that each zip matches its `.sha256` - a mismatched pair is rejected by the SYSTEM updater. With `-Upload` it asks for confirmation, publishes the release for the pushed commit, and downloads the files back to confirm the hashes match.
+
 ### Publish options
 
 ```powershell
@@ -294,6 +305,10 @@ Place this file alongside `DeviceMon.exe`. All settings are optional — default
 
 > **Security note:** When remote access is enabled, remote users cannot open the dashboard until an admin password has been created from a trusted local dashboard. After setup, remote users are redirected to the login page. Successful authentication creates an HTTP-only session cookie; use **Settings → Logout** to end that browser session. The built-in dashboard listener is HTTP only; do not expose it beyond a trusted LAN unless you put it behind a TLS reverse proxy, VPN/tunnel, or a trusted local certificate setup.
 
+### Tooltips and help mode
+
+Hover over almost any control in the dashboard for a short explanation. On touch screens, tap the **?** button to turn on help mode: tapping an item then shows what it does instead of activating it. Tap **?** again to leave help mode. Descriptions are translated with the rest of the dashboard.
+
 ### PC Time (per-account screen time)
 
 Besides per-app limits, you can give a standard Windows account a **daily PC-time allowance** that applies across all apps (for example 180 minutes a day for one child, without touching other accounts).
@@ -302,7 +317,10 @@ Besides per-app limits, you can give a standard Windows account a **daily PC-tim
 - When it runs out, the **GameHost service signs that account out**, and signs it out again on every new login until the next day. This closes the account's programs, so save work first. Warnings are shown at 10, 5 and 1 minutes remaining.
 - Only enabled **non-administrator** accounts can be controlled. Accounts are tracked by Windows SID, so renaming one doesn't lose its rule. You can add a **bonus** for today only.
 - Enforcement and counters live in the SYSTEM service, with files in `C:\ProgramData\DeviceMonScreenTime` that standard users can read but not change.
-- **Changing a rule needs Windows administrator approval on the PC itself.** Open the dashboard on that PC (`localhost`), go to **PC Time**, and confirm the UAC prompt. Rules can't be edited from a remote browser by design.
+- **On the child PC, changing a rule needs Windows administrator approval** (a UAC prompt). Open the dashboard on that PC (`localhost`), go to **PC Time**, and confirm the prompt.
+- **From another device, a remote PIN approves the change** instead, because no UAC prompt can be answered remotely. It is off until you set it: on the child PC, in an **Administrator** prompt, run `GameHost.exe --set-remote-pin` (and `GameHost.exe --clear-remote-pin` to turn it off). The PIN is typed there when you set it (not in the dashboard), and is stored only as a salted hash in a folder the child account cannot read; the service refuses remote changes if that folder is ever found to be readable or writable by the child. The dashboard asks for your admin password first, but it is the **PIN** that the service itself checks, so treat the PIN as the real key.
+  - Five wrong PIN attempts lock remote changes for 15 minutes, doubling each time up to 24 hours (changes on the child PC keep working). A program running as the child can also try PINs directly against the service, bypassing the dashboard; the lockout limits that to a handful of guesses per day, and each lockout sends you an email or webhook alert even if general tamper alerts are off. Remote changes follow the tamper-alert switch.
+  - **Trade-off:** the PIN travels through the dashboard process that runs under the child account, so a remote change is weaker than a UAC-approved one. Use a PIN that is long and different from your admin password. If you only ever make changes at the PC, leave the PIN unset.
 - Requires the GameHost service to be installed and running.
 
 ### Recommended install: protected Program Files location (requires admin)
@@ -456,6 +474,9 @@ To add a new language:
 ---
 
 ## FAQ / Troubleshooting
+
+**Q: Something isn't working - how do I find out why?**
+A: Open the dashboard, go to **Settings → Health** and click **Refresh Health**. Each check is marked ok / warning / problem: service status, which user DeviceMon runs as, whether the install folder is protected, where settings were loaded from, whether the dashboard hotkey is registered (and why not), update channel and last update result, and PC Time service status. **Copy report** puts the whole list on the clipboard so you can paste it when asking for help. The report never includes passwords or the hotkey combination.
 
 **Q: The dashboard shows "?" instead of accented characters.**
 A: Your JSON translation files may have been saved with the wrong encoding. Ensure all files in `Web/wwwroot/i18n/` are saved as **UTF-8**.

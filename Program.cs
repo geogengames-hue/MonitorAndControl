@@ -91,6 +91,9 @@ internal static class Program
 
     private static AppConfig? _cachedConfig;
 
+    /// <summary>Where the active configuration came from: appsettings.json, a last-known-good backup, or built-in defaults.</summary>
+    public static string ConfigSource { get; private set; } = "built-in defaults";
+
     public static AppConfig GetConfig() => _cachedConfig ?? new AppConfig();
 
     private static AppConfig LoadConfig()
@@ -109,6 +112,7 @@ internal static class Program
                 var config = JsonSerializer.Deserialize<AppConfig>(json)
                     ?? throw new InvalidOperationException("Configuration deserialized to null.");
                 _cachedConfig = config;
+                ConfigSource = "appsettings.json";
                 SaveLastKnownGoodConfig(lkgPath, json);
                 return _cachedConfig;
             }
@@ -131,6 +135,7 @@ internal static class Program
                 if (config != null)
                 {
                     _cachedConfig = config;
+                    ConfigSource = "last-known-good backup (appsettings.json was unreadable)";
                     Logger.Instance.Info("Loaded configuration from last-known-good backup.");
                     return _cachedConfig;
                 }
@@ -519,6 +524,11 @@ internal static class Program
         _emailService.StartPolling();
         _parentReportService = new ParentReportService(_db!, _emailService, _notifier!, GetConfigPath());
         DashboardServer.LoginLockoutDetected = _parentReportService.ReportLoginLockout;
+        ScreenTimeEndpoints.RemoteEvent = (message, security) =>
+        {
+            Logger.Instance.Warn(message);
+            _parentReportService.ReportRemoteScreenTime(message, security);
+        };
         _parentReportService.Start();
         _enforcer.OnBreachAlert += (app, delay, proc) => _ = _emailService.SendBreachAlertAsync($"Limit Breach: {app}", $"{app} exceeded its daily limit. Closing in {delay}s.");
         _enforcer.OnAppKilled += (app) => _ = _emailService.SendKillAlertAsync($"App Closed: {app}", $"{app} was closed after exceeding its limit.");
@@ -753,7 +763,8 @@ internal static class Program
             {
                 path = db.DatabasePath,
                 exists = File.Exists(db.DatabasePath)
-            }
+            },
+            diagnostics = DiagnosticsService.Collect(db)
         };
     }
 
@@ -793,6 +804,7 @@ internal static class Program
         _usageTracker?.Stop();
         _tracker?.Stop();
         DashboardServer.LoginLockoutDetected = null;
+        ScreenTimeEndpoints.RemoteEvent = null;
         _parentReportService?.Dispose();
         _emailService?.Dispose();
         await DashboardServer.StopAsync();

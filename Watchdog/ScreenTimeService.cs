@@ -19,6 +19,8 @@ internal sealed class ScreenTimeService : IDisposable
     private long _lastPersist;
     private long _lastStatus;
     private string _lastError = "";
+    private readonly RemotePinStore _remotePin;
+    private readonly string _protectedDirectory;
     private ScreenTimeControlServer? _control;
 
     internal static void PrepareDirectory()
@@ -64,9 +66,13 @@ internal sealed class ScreenTimeService : IDisposable
         }
     }
 
-    internal ScreenTimeService(Action<string> log)
+    internal ScreenTimeService(Action<string> log, string protectedDirectory)
     {
         _log = log;
+        // The remote PIN hash lives in the SYSTEM/Administrators-only folder, never in the
+        // user-readable screen-time folder, so it cannot be attacked offline.
+        _protectedDirectory = protectedDirectory;
+        _remotePin = new RemotePinStore(Path.Combine(protectedDirectory, "remote-pin.json"));
         PrepareDirectory();
         _usage = ReadUsage();
         _lastTick = _clock.ElapsedMilliseconds;
@@ -175,6 +181,7 @@ internal sealed class ScreenTimeService : IDisposable
     {
         ScreenTimeFiles.WriteAtomic(ScreenTimeFiles.StatusPath, new {
             updatedUtc = DateTimeOffset.UtcNow, error,
+            remote = RemoteStatus(),
             profiles = policies.Select(p => {
                 var usage = _usage.GetValueOrDefault(p.ProfileId) ?? new ScreenTimeUsage();
                 return new {
@@ -199,6 +206,27 @@ internal sealed class ScreenTimeService : IDisposable
             {
                 var policies = ScreenTimeFiles.ReadPolicies();
 
+                // A remote change is authorized by the PIN (with lockout) instead of Windows
+                // elevation; once it passes it is applied exactly like a locally approved save.
+                var viaRemote = request.Command == "remote-save";
+                if (viaRemote)
+                {
+                    // The PIN hash and lockout counters are only trustworthy if the monitored user
+                    // cannot read or write their folder; if its permissions are wrong, fail closed.
+                    if (!DirectoryProtection.IsProtectedFromUsers(_protectedDirectory))
+                    {
+                        _log("Remote PC Time change refused: the protected settings folder is not secure.");
+                        return ScreenTimeReply.Failure("Remote changes are disabled because the protected settings folder is not secure. Check the GameHost service log.");
+                    }
+                    var check = _remotePin.Verify(request.Pin, DateTimeOffset.UtcNow);
+                    if (check.Status != RemotePinStatus.Ok)
+                    {
+                        _log($"Remote PC Time change refused ({check.Status}).");
+                        return ScreenTimeReply.Failure(check.Message);
+                    }
+                    request.Command = "save";
+                }
+
                 if (request.Command is "save" or "validate")
                 {
                     var account = accounts.FirstOrDefault(a => a.Sid == request.UserSid);
@@ -220,7 +248,7 @@ internal sealed class ScreenTimeService : IDisposable
                     if (existing == null) policies.Add(policy);
                     ScreenTimeFiles.WriteAtomic(ScreenTimeFiles.PoliciesPath, policies);
                     File.AppendAllText(Path.Combine(ScreenTimeFiles.DirectoryPath, "admin-audit.log"),
-                        $"{DateTimeOffset.Now:o} Windows admin authorized policy for {policy.UserSid}; minutes={policy.DailyMinutes}; enabled={policy.Enabled}; bonus={policy.BonusMinutes}{Environment.NewLine}");
+                        $"{DateTimeOffset.Now:o} {(viaRemote ? "Remote PIN authorized" : "Windows admin authorized")} policy for {policy.UserSid}; minutes={policy.DailyMinutes}; enabled={policy.Enabled}; bonus={policy.BonusMinutes}{Environment.NewLine}");
                     return ScreenTimeReply.Success(new { saved = true, userSid = policy.UserSid });
                 }
                 foreach (var policy in policies)
@@ -239,12 +267,20 @@ internal sealed class ScreenTimeService : IDisposable
                             remainingSeconds = ScreenTimeRules.Remaining(p, usage, today)
                         };
                     }).ToList(),
+                    remote = RemoteStatus(),
                     updatedUtc = DateTimeOffset.UtcNow,
                     error = string.IsNullOrEmpty(_lastError) ? null : "Screen-time enforcement error. Check the service log."
                 });
             }
             catch { return ScreenTimeReply.Failure("Could not read or save the protected rules. Check the service log."); }
         }
+    }
+
+    private object RemoteStatus()
+    {
+        var status = _remotePin.GetStatus(DateTimeOffset.UtcNow);
+        var secure = !status.Configured || DirectoryProtection.IsProtectedFromUsers(_protectedDirectory);
+        return new { configured = status.Configured && secure, lockedUntilUtc = status.LockedUntil, lockouts = status.Lockouts };
     }
 
     public void Dispose()

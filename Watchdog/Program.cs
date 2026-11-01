@@ -24,6 +24,16 @@ internal static class Program
 
     public static void Main(string[] args)
     {
+        // Administrator-run commands to set or remove the remote PC Time PIN. The PIN is typed
+        // here, on the PC, so it is never exposed while being SET. (When it is later USED from a
+        // remote dashboard it does pass through the dashboard process; see the README trade-off.)
+        if (args.Contains("--set-remote-pin", StringComparer.OrdinalIgnoreCase) ||
+            args.Contains("--clear-remote-pin", StringComparer.OrdinalIgnoreCase))
+        {
+            RunRemotePinCommand(args);
+            return;
+        }
+
         // Launched elevated (UAC) by the dashboard to approve a pending screen-time change.
         if (args.Length == 2 && args[0] == "--approve-screen-time")
         {
@@ -67,6 +77,74 @@ internal static class Program
         }
 
         ServiceBase.Run(new WatchdogService(options));
+    }
+
+    private static void RunRemotePinCommand(string[] args)
+    {
+        Environment.ExitCode = 1;
+        if (!IsElevated())
+        {
+            Console.Error.WriteLine("This command must be run from an elevated (Administrator) prompt.");
+            Environment.ExitCode = 5;
+            return;
+        }
+
+        var options = WatchdogOptions.Parse(args);
+        PrepareDataDirectory(options.DataDirectory);
+        var protectedDirectory = Path.Combine(options.DataDirectory, "Protected");
+        var store = new MonitorAndControl.ScreenTime.RemotePinStore(Path.Combine(protectedDirectory, "remote-pin.json"));
+
+        if (args.Contains("--clear-remote-pin", StringComparer.OrdinalIgnoreCase))
+        {
+            store.Clear();
+            Console.WriteLine("Remote PC Time changes are now OFF. PC Time can only be changed on this PC.");
+            Environment.ExitCode = 0;
+            return;
+        }
+
+        if (!MonitorAndControl.ScreenTime.DirectoryProtection.IsProtectedFromUsers(protectedDirectory))
+        {
+            Console.Error.WriteLine($"Refusing to store the PIN: '{protectedDirectory}' is not restricted to SYSTEM and Administrators,");
+            Console.Error.WriteLine("so the monitored user could read or change it. Fix the folder permissions (or reinstall) and try again.");
+            return;
+        }
+
+        Console.WriteLine("Set the remote PC Time PIN.");
+        Console.WriteLine($"It lets you change PC Time rules from the dashboard on another device, together with the");
+        Console.WriteLine("dashboard admin password. Use {0}-{1} characters; keep it secret and different from your admin password.",
+            MonitorAndControl.ScreenTime.RemotePinStore.MinLength, MonitorAndControl.ScreenTime.RemotePinStore.MaxLength);
+        var pin = ReadSecret("New PIN: ");
+        if (!MonitorAndControl.ScreenTime.RemotePinStore.IsAcceptable(pin, out var error))
+        {
+            Console.Error.WriteLine(error);
+            return;
+        }
+        if (!string.Equals(pin, ReadSecret("Repeat PIN: "), StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("The PINs do not match. Nothing was changed.");
+            return;
+        }
+
+        store.Set(pin);
+        Console.WriteLine("Remote PC Time changes are now ON.");
+        Console.WriteLine("Five wrong PIN attempts lock remote changes for 15 minutes (longer each time).");
+        Environment.ExitCode = 0;
+    }
+
+    private static string ReadSecret(string prompt)
+    {
+        Console.Write(prompt);
+        if (Console.IsInputRedirected) return Console.ReadLine() ?? "";
+        var text = new StringBuilder();
+        while (true)
+        {
+            var key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Enter) break;
+            if (key.Key == ConsoleKey.Backspace) { if (text.Length > 0) text.Length--; continue; }
+            if (!char.IsControl(key.KeyChar)) text.Append(key.KeyChar);
+        }
+        Console.WriteLine();
+        return text.ToString();
     }
 
     private static bool IsElevated()
@@ -389,7 +467,7 @@ internal sealed class WatchdogService : ServiceBase
         LoadLastAutoCheck();
         // Per-account screen-time enforcement is independent of the monitor: if it
         // cannot start, log it and keep the rest of the watchdog running.
-        try { _screenTime = new ScreenTimeService(Log); }
+        try { _screenTime = new ScreenTimeService(Log, Path.Combine(_options.DataDirectory, "Protected")); }
         catch (Exception ex) { Log("Screen-time unavailable: " + ex); }
         Log($"Watchdog started. Monitor={_options.MonitorPath}");
         _timer.Change(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(_options.IntervalSeconds));

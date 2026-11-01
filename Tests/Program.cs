@@ -8,6 +8,14 @@ using MonitorAndControl.Services;
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("Screen time HTTP rejects foreign origin, host and invalid bodies", TestScreenTimeHttpBoundary),
+    ("Hotkey failures are explained in plain language", TestHotKeyErrorDescriptions),
+    ("Update status is read regardless of JSON key casing", TestUpdateStatusCasing),
+    ("Remote PIN is stored hashed, verified, and survives restarts", TestRemotePinVerifyAndStorage),
+    ("Remote PIN locks out guessing, with doubling lockouts", TestRemotePinLockout),
+    ("Remote PIN rejects weak values", TestRemotePinRules),
+    ("Remote PIN lockouts are counted and the PIN folder check fails closed", TestRemotePinLockoutCounterAndFolderCheck),
+    ("Hotkey registered flag clears on unregister", TestHotKeyRegisteredFlagClears),
+    ("Screen time remote route needs an admin login and same origin", TestScreenTimeRemoteRouteBoundary),
     ("Screen time limits pending approvals per caller", TestScreenTimeApprovalCap),
     ("Screen time protocol preserves selected account payload", TestScreenTimeProtocol),
     ("Screen time protocol rejects oversized or invalid frames", TestScreenTimeProtocolBounds),
@@ -719,6 +727,194 @@ static async Task TestScreenTimeProtocolBounds()
         catch (InvalidDataException) { rejected = true; }
         AssertTrue(rejected, "Invalid message length must be rejected before allocation.");
     }
+}
+
+static Task TestHotKeyErrorDescriptions()
+{
+    AssertTrue(HotKeyService.DescribeError(1409).Contains("already in use"), "Error 1409 means another program owns the hotkey.");
+    AssertTrue(HotKeyService.DescribeError(87).Contains("not valid"), "Error 87 means an invalid combination.");
+    AssertTrue(HotKeyService.DescribeError(12345).Contains("12345"), "Unknown errors still show their code.");
+    AssertFalse(HotKeyService.DescribeError(1409).Contains("Control"), "Descriptions must not reveal the combination.");
+    return Task.CompletedTask;
+}
+
+static Task TestUpdateStatusCasing()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "DeviceMon-Diag-Test-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    try
+    {
+        // UpdateAgent writes PascalCase; the dashboard itself writes camelCase.
+        File.WriteAllText(Path.Combine(directory, "update-status.json"),
+            "{ \"Status\": \"success\", \"FinishedAt\": \"2026-11-01T10:00:00+00:00\", \"Message\": \"Update completed successfully.\" }");
+        var pascal = DiagnosticsService.ReadUpdateStatus(directory);
+        AssertEqual("success", pascal.Status, "PascalCase status must be recognised.");
+        AssertEqual("Update completed successfully.", pascal.Message, "PascalCase message must be recognised.");
+
+        File.WriteAllText(Path.Combine(directory, "update-status.json"), "{ \"status\": \"failed\", \"message\": \"boom\" }");
+        AssertEqual("failed", DiagnosticsService.ReadUpdateStatus(directory).Status, "camelCase status must be recognised.");
+
+        File.WriteAllText(Path.Combine(directory, "update-status.json"), "{ not json");
+        AssertEqual("unreadable", DiagnosticsService.ReadUpdateStatus(directory).Status, "Corrupt status is reported, not thrown.");
+        File.Delete(Path.Combine(directory, "update-status.json"));
+        AssertEqual("none", DiagnosticsService.ReadUpdateStatus(directory).Status, "No file means no update recorded.");
+    }
+    finally { Directory.Delete(directory, true); }
+    return Task.CompletedTask;
+}
+
+static Task TestRemotePinVerifyAndStorage()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "DeviceMon-Pin-Test-" + Guid.NewGuid().ToString("N"));
+    var path = Path.Combine(directory, "remote-pin.json");
+    try
+    {
+        var store = new MonitorAndControl.ScreenTime.RemotePinStore(path);
+        var now = DateTimeOffset.UtcNow;
+        AssertTrue(store.Verify("anything", now).Status == MonitorAndControl.ScreenTime.RemotePinStatus.NotConfigured, "No PIN set means remote changes are off.");
+
+        store.Set("correct horse 42");
+        var text = File.ReadAllText(path);
+        AssertFalse(text.Contains("correct horse"), "The PIN must never be stored in plain text.");
+        AssertTrue(text.Contains("Hash") && text.Contains("Salt"), "A salted hash is stored.");
+
+        var wrong = store.Verify("wrong pin", now);
+        AssertTrue(wrong.Status == MonitorAndControl.ScreenTime.RemotePinStatus.Wrong && wrong.Message.Contains("4 attempt"), "A wrong PIN is refused and counted.");
+        AssertTrue(store.Verify("", now).Status == MonitorAndControl.ScreenTime.RemotePinStatus.Wrong, "An empty PIN counts as a wrong guess.");
+        AssertTrue(store.Verify("x" + new string('y', 200), now).Status == MonitorAndControl.ScreenTime.RemotePinStatus.Wrong, "An oversized PIN is refused without hashing it.");
+
+        // Failures survive a restart of the service (a new store instance reads the same file).
+        var reopened = new MonitorAndControl.ScreenTime.RemotePinStore(path);
+        AssertTrue(reopened.Verify("nope", now).Message.Contains("1 attempt"), "Failed attempts are persisted.");
+        AssertTrue(reopened.Verify("correct horse 42", now).Status == MonitorAndControl.ScreenTime.RemotePinStatus.Ok, "The right PIN works.");
+        AssertTrue(reopened.Verify("wrong", now).Message.Contains("4 attempt"), "A successful login resets the failure count.");
+
+        store.Clear();
+        AssertFalse(File.Exists(path) || File.Exists(path + ".bak"), "Clearing removes the PIN and its backup copy.");
+    }
+    finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    return Task.CompletedTask;
+}
+
+static Task TestRemotePinLockout()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "DeviceMon-Pin-Test-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var store = new MonitorAndControl.ScreenTime.RemotePinStore(Path.Combine(directory, "remote-pin.json"));
+        store.Set("correct horse 42");
+        var now = new DateTimeOffset(2026, 11, 1, 12, 0, 0, TimeSpan.Zero);
+
+        MonitorAndControl.ScreenTime.RemotePinResult last = null!;
+        for (var i = 0; i < 5; i++) last = store.Verify("guess" + i, now);
+        AssertTrue(last.Status == MonitorAndControl.ScreenTime.RemotePinStatus.Locked && last.LockedUntil == now.AddMinutes(15), "Five wrong guesses lock for 15 minutes.");
+
+        var duringLock = store.Verify("correct horse 42", now.AddMinutes(14));
+        AssertTrue(duringLock.Status == MonitorAndControl.ScreenTime.RemotePinStatus.Locked, "Even the right PIN is refused while locked.");
+        AssertTrue(store.GetStatus(now.AddMinutes(1)).LockedUntil == now.AddMinutes(15), "The lock is visible to the dashboard.");
+
+        // After the lock expires, a second round of failures locks for twice as long.
+        var later = now.AddMinutes(16);
+        for (var i = 0; i < 5; i++) last = store.Verify("guess" + i, later);
+        AssertTrue(last.LockedUntil == later.AddMinutes(30), "The second lockout is 30 minutes.");
+
+        var third = later.AddMinutes(31);
+        AssertTrue(store.Verify("correct horse 42", third).Status == MonitorAndControl.ScreenTime.RemotePinStatus.Ok, "The right PIN works once the lock has expired.");
+        for (var i = 0; i < 5; i++) last = store.Verify("guess" + i, third);
+        AssertTrue(last.LockedUntil == third.AddMinutes(15), "A successful login resets the lockout length.");
+    }
+    finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    return Task.CompletedTask;
+}
+
+static Task TestRemotePinRules()
+{
+    foreach (var bad in new[] { "", "12345", "aaaaaa", "ababab", new string('x', 65) })
+        AssertFalse(MonitorAndControl.ScreenTime.RemotePinStore.IsAcceptable(bad, out _), $"'{bad}' must be rejected.");
+    AssertTrue(MonitorAndControl.ScreenTime.RemotePinStore.IsAcceptable("483920", out _), "A six-digit PIN with enough variety is accepted.");
+    var store = new MonitorAndControl.ScreenTime.RemotePinStore(Path.Combine(Path.GetTempPath(), "never-created-" + Guid.NewGuid().ToString("N"), "pin.json"));
+    var refused = false;
+    try { store.Set("123"); } catch (ArgumentException) { refused = true; }
+    AssertTrue(refused, "Setting a weak PIN throws.");
+    return Task.CompletedTask;
+}
+
+static async Task TestScreenTimeRemoteRouteBoundary()
+{
+    async Task<Microsoft.AspNetCore.Builder.WebApplication> StartAsync(Func<Microsoft.AspNetCore.Http.HttpContext, bool> admin)
+    {
+        var builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder(
+            new Microsoft.AspNetCore.Builder.WebApplicationOptions { EnvironmentName = "Testing", ContentRootPath = Path.GetTempPath() });
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        var app = builder.Build();
+        MonitorAndControl.Web.ScreenTimeEndpoints.Map(app, admin);
+        await app.StartAsync();
+        return app;
+    }
+
+    StringContent Json(string body) => new(body, System.Text.Encoding.UTF8, "application/json");
+
+    // No admin login: refused before anything touches the service.
+    await using (var anonymous = await StartAsync(_ => false))
+    {
+        using var client = new HttpClient { BaseAddress = new Uri(anonymous.Urls.Single()) };
+        using var denied = await client.PostAsync("/api/screen-time/remote-policy", Json("{\"pin\":\"x\"}"));
+        AssertTrue(denied.StatusCode == System.Net.HttpStatusCode.Forbidden, "Remote changes need an admin login.");
+        using var readDenied = await client.SendAsync(new HttpRequestMessage(HttpMethod.Get, "/api/screen-time") { Headers = { Host = "example.invalid" } });
+        AssertTrue(readDenied.StatusCode == System.Net.HttpStatusCode.Forbidden, "A remote read also needs an admin login.");
+    }
+
+    // Logged in: bad input is still refused before reaching the service.
+    await using var admin = await StartAsync(_ => true);
+    using var http = new HttpClient { BaseAddress = new Uri(admin.Urls.Single()) };
+    using var foreign = new HttpRequestMessage(HttpMethod.Post, "/api/screen-time/remote-policy") { Content = Json("{\"pin\":\"x\"}") };
+    foreign.Headers.Add("Origin", "https://example.invalid");
+    using var crossSite = await http.SendAsync(foreign);
+    AssertTrue(crossSite.StatusCode == System.Net.HttpStatusCode.Forbidden, "A cross-site request is refused even when logged in.");
+    using var noPin = await http.PostAsync("/api/screen-time/remote-policy", Json("{\"userSid\":\"S-1-5-21-1-2-3-1001\",\"dailyMinutes\":60}"));
+    AssertTrue(noPin.StatusCode == System.Net.HttpStatusCode.BadRequest, "A missing PIN is refused.");
+    using var badJson = await http.PostAsync("/api/screen-time/remote-policy", Json("{"));
+    AssertTrue(badJson.StatusCode == System.Net.HttpStatusCode.BadRequest, "Malformed JSON is refused.");
+    using var tooBig = await http.PostAsync("/api/screen-time/remote-policy", Json(new string(' ', 16385)));
+    AssertTrue(tooBig.StatusCode == System.Net.HttpStatusCode.BadRequest, "An oversized body is refused.");
+}
+
+static Task TestRemotePinLockoutCounterAndFolderCheck()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "DeviceMon-Pin-Test-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var store = new MonitorAndControl.ScreenTime.RemotePinStore(Path.Combine(directory, "remote-pin.json"));
+        store.Set("correct horse 42");
+        var now = new DateTimeOffset(2026, 11, 1, 12, 0, 0, TimeSpan.Zero);
+        AssertEqual(0, store.GetStatus(now).Lockouts, "No lockouts yet.");
+
+        for (var i = 0; i < 5; i++) store.Verify("guess" + i, now);
+        AssertEqual(1, store.GetStatus(now).Lockouts, "A lockout is counted so the host can alert on it.");
+
+        // A correct PIN later must not erase the evidence that someone was guessing.
+        store.Verify("correct horse 42", now.AddMinutes(16));
+        AssertEqual(1, store.GetStatus(now.AddMinutes(16)).Lockouts, "The lockout counter is never reset by a correct PIN.");
+        for (var i = 0; i < 5; i++) store.Verify("guess" + i, now.AddMinutes(17));
+        AssertEqual(2, store.GetStatus(now.AddMinutes(17)).Lockouts, "Each new lockout increments the counter.");
+
+        // The PIN is only trusted inside a folder closed to the monitored user. An ordinary folder under
+        // the user's own profile is owned and readable by that user, so it must be rejected (fail closed).
+        AssertFalse(MonitorAndControl.ScreenTime.DirectoryProtection.IsProtectedFromUsers(directory), "A user-owned folder is not protected.");
+        AssertFalse(MonitorAndControl.ScreenTime.DirectoryProtection.IsProtectedFromUsers(Path.Combine(directory, "missing")), "A missing folder is not protected.");
+    }
+    finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    return Task.CompletedTask;
+}
+
+static Task TestHotKeyRegisteredFlagClears()
+{
+    // Unregistering must clear the flag the diagnostics read, even when nothing was registered.
+    HotKeyService.Unregister(IntPtr.Zero, 1);
+    HotKeyService.Unregister();
+    AssertFalse(HotKeyService.Registered, "The hotkey is reported as not registered after Unregister.");
+    return Task.CompletedTask;
 }
 
 static Task TestScreenTimeApprovalCap()

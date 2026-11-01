@@ -9,11 +9,43 @@ namespace MonitorAndControl.Web;
 
 public static class ScreenTimeEndpoints
 {
-    public static void Map(WebApplication app)
+    /// <summary>
+    /// Called with a short description when a remote PC Time change succeeds or someone guesses a
+    /// wrong remote PIN, so the parent can be alerted. Set by the host application.
+    /// </summary>
+    public static Action<string, bool>? RemoteEvent { get; set; }
+
+    private static long _lastFailureReportTicks;
+
+    // An alert that fails must never turn an already-applied change into an error for the parent.
+    private static void Raise(string message, bool security)
+    {
+        try { RemoteEvent?.Invoke(message, security); }
+        catch (Exception ex) { Logger.Instance.Error($"PC Time alert could not be sent: {ex.Message}"); }
+    }
+
+    // 403 only for "you are not allowed" outcomes; validation and service problems get their own codes.
+    private static int StatusFor(string? error)
+    {
+        if (string.IsNullOrEmpty(error)) return 400;
+        if (error.StartsWith("Wrong PIN", StringComparison.Ordinal) || error.StartsWith("Too many", StringComparison.Ordinal)
+            || error.StartsWith("Remote changes are", StringComparison.Ordinal))
+            return 403;
+        if (error.StartsWith("Could not record", StringComparison.Ordinal)) return 503;
+        return 400;
+    }
+
+    /// <param name="isAdminAuthenticated">
+    /// Tells whether a non-local request carries a valid dashboard admin login. When null (tests,
+    /// standalone use) only requests on the PC itself are served, exactly as before.
+    /// </param>
+    public static void Map(WebApplication app, Func<HttpContext, bool>? isAdminAuthenticated = null)
     {
         app.MapGet("/api/screen-time", async (HttpContext ctx) =>
         {
-            if (!TrustedLocalRequest(ctx)) return Results.Json(new { error = "Open this dashboard on the child PC itself to manage accounts." }, statusCode: 403);
+            // Reading accounts and usage is fine for a logged-in remote admin; only changes are restricted.
+            if (!TrustedLocalRequest(ctx) && isAdminAuthenticated?.Invoke(ctx) != true)
+                return Results.Json(new { error = "Open this dashboard on the child PC itself to manage accounts." }, statusCode: 403);
             try
             {
                 var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest(), ctx.RequestAborted);
@@ -63,6 +95,55 @@ public static class ScreenTimeEndpoints
             catch (JsonException) { return Results.BadRequest(new { error = "Invalid configuration data." }); }
             catch { return Results.Json(new { error = "Could not reach the service. No confirmation that the change was saved was received." }, statusCode: 503); }
         });
+
+        // Remote change: authorized by the dashboard admin login AND the remote PIN, which the service
+        // verifies (with lockout). There is no Windows UAC prompt on this path, by necessity.
+        app.MapPost("/api/screen-time/remote-policy", async (HttpContext ctx) =>
+        {
+            if (isAdminAuthenticated?.Invoke(ctx) != true || !SameOriginOrNone(ctx))
+                return Results.Json(new { error = "Sign in to the dashboard with the admin password first." }, statusCode: 403);
+            try
+            {
+                var bytes = new byte[16385];
+                int size = 0, read;
+                while (size < bytes.Length && (read = await ctx.Request.Body.ReadAsync(bytes.AsMemory(size), ctx.RequestAborted)) > 0) size += read;
+                if (size > 16384) return Results.BadRequest(new { error = "Request too large." });
+                ScreenTimeRequest? request;
+                try { request = JsonSerializer.Deserialize<ScreenTimeRequest>(bytes.AsSpan(0, size), ScreenTimeProtocol.Json); }
+                finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes); }
+                if (request == null) return Results.BadRequest(new { error = "Select an account and set the limits." });
+                if (string.IsNullOrWhiteSpace(request.Pin)) return Results.BadRequest(new { error = "Enter the remote PIN." });
+
+                request.Command = "remote-save";
+                var source = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+                var reply = await ScreenTimeClient.SendAsync(request, ctx.RequestAborted);
+                if (reply.Ok)
+                {
+                    var sid = request.UserSid ?? "";
+                    Raise($"PC Time was changed remotely from {source}: account ...{sid[^Math.Min(4, sid.Length)..]}, " +
+                        $"{(request.Enabled ? request.DailyMinutes + " min/day" : "control off")}, bonus {request.BonusMinutes} min.", false);
+                    return Results.Json(reply.Data);
+                }
+
+                // A wrong guess is worth an alert, but never more than one per 10 minutes (CAS keeps the throttle correct under concurrency).
+                if (reply.Error is { } error && (error.StartsWith("Wrong PIN", StringComparison.Ordinal) || error.StartsWith("Too many", StringComparison.Ordinal)))
+                {
+                    var now = DateTime.UtcNow.Ticks;
+                    var last = Interlocked.Read(ref _lastFailureReportTicks);
+                    if (now - last > TimeSpan.FromMinutes(10).Ticks && Interlocked.CompareExchange(ref _lastFailureReportTicks, now, last) == last)
+                        Raise($"A wrong remote PC Time PIN was entered from {source}.", true);
+                }
+                return Results.Json(new { error = reply.Error }, statusCode: StatusFor(reply.Error));
+            }
+            catch (JsonException) { return Results.BadRequest(new { error = "Invalid configuration data." }); }
+            catch { return Results.Json(new { error = "Could not reach the service. No confirmation that the change was saved was received." }, statusCode: 503); }
+        });
+    }
+
+    private static bool SameOriginOrNone(HttpContext ctx)
+    {
+        var origin = ctx.Request.Headers.Origin.ToString();
+        return string.IsNullOrEmpty(origin) || origin.Equals($"{ctx.Request.Scheme}://{ctx.Request.Host}", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TrustedLocalRequest(HttpContext ctx)

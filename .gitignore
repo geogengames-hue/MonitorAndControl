@@ -21,3 +21,6 @@ Thumbs.db
 
 # Runtime
 *.log
+
+# Release build output (release.ps1)
+dist/

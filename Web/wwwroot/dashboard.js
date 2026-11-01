@@ -97,7 +97,7 @@ async function loadDiscover() {
         <td style="font-size:12px;color:#888">${esc(a.processName)}</td>
         <td style="font-size:12px">${esc(a.source)}</td>
         <td class="actions">
-          <button onclick="addDiscoveredApp('${escAttr(a.processName)}','${escAttr(displayName)}')">${t('Add & Set Limit')}</button>
+          <button title="${t("Track this app and set a daily limit for it.")}" onclick="addDiscoveredApp('${escAttr(a.processName)}','${escAttr(displayName)}')">${t('Add & Set Limit')}</button>
         </td>
       </tr>`;
     });
@@ -114,7 +114,7 @@ async function loadDiscover() {
           <td style="font-size:12px;color:#888">${esc(p.name)}</td>
           <td>${esc(p.title)}</td>
           <td class="actions">
-            <button onclick="addDiscoveredApp('${escAttr(p.name)}','${escAttr(appName)}')">${t('Track')}</button>
+            <button title="${t("Track this running app without a limit.")}" onclick="addDiscoveredApp('${escAttr(p.name)}','${escAttr(appName)}')">${t('Track')}</button>
           </td>
         </tr>`;
       });
@@ -836,7 +836,7 @@ async function loadLimits() {
     });
     rows.sort((a, b) => a.appName.localeCompare(b.appName) || a.processName.localeCompare(b.processName));
 
-    let html = `<table><thead><tr><th>${t('App')}</th><th>${t('Process')}</th><th>${t('Group')}</th><th>${t('Background')}</th><th>${t('Filter overlays')}</th><th>${t('Daily Max')}</th><th>${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
+    let html = `<table><thead><tr><th>${t('App')}</th><th>${t('Process')}</th><th title="${t("The shared limit group this app belongs to, if any.")}">${t('Group')}</th><th title="${t("Count time while the app runs behind other windows, not only when it is in front. Useful for chat and voice apps.")}">${t('Background')}</th><th title="${t("Ignore chat or voice overlays that appear on top of a game, so the game keeps being counted.")}">${t('Filter overlays')}</th><th title="${t("Maximum minutes per day, including any bonus time.")}">${t('Daily Max')}</th><th title="${t("Minutes used so far today.")}">${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
     for (const row of rows) {
       const app = row.appName;
       const procName = row.processName;
@@ -853,15 +853,15 @@ async function loadLimits() {
         <td><strong>${esc(app)}</strong></td>
         <td style="font-size:11px;color:#666;max-width:250px;word-break:break-all">${esc(procName) || '-'}</td>
         <td>${group ? `<span style="color:#f0a45d">${esc(group.name)}</span>` : '-'}</td>
-        <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="background" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.countInBackground ? 'checked' : ''}>` : '-'}</td>
-        <td>${procName ? `<input class="tracking-policy" type="checkbox" data-kind="overlay" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.ignoreOverlayFocus ? 'checked' : ''}>` : '-'}</td>
+        <td>${procName ? `<input class="tracking-policy" type="checkbox" title="${t("Count this app's time even when it is not in front.")}" data-kind="background" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.countInBackground ? 'checked' : ''}>` : '-'}</td>
+        <td>${procName ? `<input class="tracking-policy" type="checkbox" title="${t("Ignore overlay windows so they do not interrupt counting.")}" data-kind="overlay" data-process="${escAttr(procName)}" data-app="${escAttr(app)}" style="width:auto" ${row.policy?.ignoreOverlayFocus ? 'checked' : ''}>` : '-'}</td>
         <td>${limit ? limit.dailyMaxMinutes + ' min' + (bonus ? ` <span style="color:#ffcc66">(+${bonus})</span>` : '') : `<span style="color:#666">${t('No limit')}</span>`}</td>
         <td data-limit-today>${usage ? esc(usage.durationFormatted) : '0m'}</td>
         <td data-limit-status>${enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : (pct > 80 ? '<span style="color:#ff8800">' + pct + '%</span>' : '<span style="color:#44bb44">' + pct + '%</span>')) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
         <td class="actions">
-          ${limit ? `<button onclick="editLimit('${escAttr(app)}')">${t('Edit')}</button>` : ''}
-          ${limit ? `<button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',15)">+15m</button><button class="btn-secondary" onclick="grantBonus('${escAttr(app)}',30)">+30m</button>` : ''}
-          ${limit ? `<button class="btn-danger" onclick="deleteLimit('${escAttr(app)}')">${t('Remove')}</button>` : `<button onclick="addLimit('${escAttr(app)}')">${t('Add')}</button>`}
+          ${limit ? `<button title="${t("Change this limit.")}" onclick="editLimit('${escAttr(app)}')">${t('Edit')}</button>` : ''}
+          ${limit ? `<button class="btn-secondary" title="${t("Give this app 15 more minutes today.")}" onclick="grantBonus('${escAttr(app)}',15)">+15m</button><button class="btn-secondary" title="${t("Give this app 30 more minutes today.")}" onclick="grantBonus('${escAttr(app)}',30)">+30m</button>` : ''}
+          ${limit ? `<button class="btn-danger" title="${t("Remove this limit. The app is still tracked.")}" onclick="deleteLimit('${escAttr(app)}')">${t('Remove')}</button>` : `<button title="${t("Add a daily limit for this app.")}" onclick="addLimit('${escAttr(app)}')">${t('Add')}</button>`}
           ${procName ? `<button class="btn-danger" onclick="forgetApp('${escAttr(app)}','${escAttr(procName)}')" title="${t('Delete mapping & all data')}" style="background:#882222">&times; ${t('Forget')}</button>` : ''}
         </td>
       </tr>`;
@@ -948,7 +948,7 @@ function renderLimitGroups(groups, known, limits) {
   if (!groups.length) {
     table.innerHTML = `<p style="color:#888;text-align:center;padding:12px">${t('No shared limit groups configured.')}</p>`;
   } else {
-    let html = `<table><thead><tr><th>${t('Group')}</th><th>${t('Apps')}</th><th>${t('Daily Max')}</th><th>${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
+    let html = `<table><thead><tr><th>${t('Group')}</th><th>${t('Apps')}</th><th title="${t("Maximum minutes per day, including any bonus time.")}">${t('Daily Max')}</th><th title="${t("Minutes used so far today.")}">${t('Today Used')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
     groups.forEach(group => {
       const max = group.dailyMaxMinutes * 60;
       const pct = max ? Math.round(group.todaySeconds / max * 100) : 0;
@@ -959,7 +959,7 @@ function renderLimitGroups(groups, known, limits) {
         <td>${group.dailyMaxMinutes} ${t('min')}</td>
         <td data-group-today>${formatDuration(group.todaySeconds)}</td>
         <td data-group-status>${group.enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : `<span style="color:${pct > 80 ? '#ff8800' : '#44bb44'}">${pct}%</span>`) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
-        <td class="actions"><button onclick="editLimitGroup(${group.id})">${t('Edit')}</button><button class="btn-danger" onclick="deleteLimitGroup(${group.id})">${t('Remove')}</button></td>
+        <td class="actions"><button title="${t("Edit this group.")}" onclick="editLimitGroup(${group.id})">${t('Edit')}</button><button class="btn-danger" title="${t("Delete this group.")}" onclick="deleteLimitGroup(${group.id})">${t('Remove')}</button></td>
       </tr>`;
     });
     table.innerHTML = html + '</tbody></table>';
@@ -1156,8 +1156,8 @@ async function loadSchedule() {
         <td>${r.dayOfWeek}</td>
         <td>${r.startTime}</td>
         <td>${r.endTime}</td>
-        <td><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleSchedule(${r.id}, this.checked)"></td>
-        <td class="actions"><button class="btn-danger" onclick="deleteSchedule(${r.id})">${t('Delete')}</button></td>
+        <td><input type="checkbox" title="${t("Turn this rule on or off.")}" ${r.enabled ? 'checked' : ''} onchange="toggleSchedule(${r.id}, this.checked)"></td>
+        <td class="actions"><button class="btn-danger" title="${t("Delete this rule.")}" onclick="deleteSchedule(${r.id})">${t('Delete')}</button></td>
       </tr>`;
     });
     if (rules.length === 0) html += `<tr><td colspan="6" style="color:#666;text-align:center">${t('No schedule rules configured')}</td></tr>`;
@@ -1372,26 +1372,83 @@ function formatDateTime(value) {
   return date.toLocaleString();
 }
 
+let healthReportText = '';
+
+// Builds the Diagnostics rows: [label, value, level] where level is ok | warn | bad | ''.
+// Note: the dashboard hotkey combination is never shown here, only whether it works.
+function buildHealthItems(h) {
+  const r = h.runtime || {};
+  const d = r.diagnostics || {};
+  const items = [
+    [t('Watchdog'), `${r.watchdog?.installed ? t('Installed') : t('Not installed')} (${translateHealthStatus(r.watchdog?.status)})`,
+      r.watchdog?.status === 'Running' ? 'ok' : 'bad'],
+    [t('Autostart'), r.autoStart?.enabled ? t('Enabled') : t('Disabled'), ''],
+    [t('Dashboard'), `${r.dashboard?.bindAddress || 'unknown'}:${r.dashboard?.port || ''} ${r.dashboard?.remoteEnabled ? t('remote') : t('local')}`, ''],
+    [t('Email'), r.email?.configured ? t('Configured') : t('Not configured'), ''],
+    [t('Database'), `${r.database?.exists ? t('Found') : t('Missing')} - ${r.database?.path || ''}`, r.database?.exists ? '' : 'bad']
+  ];
+  if (!d.version) return items;
+
+  items.unshift([t('Version'), 'v' + d.version, '']);
+  items.push([t('Running as'), `${d.process?.user || '?'} (${t('session')} ${d.process?.sessionId ?? '?'})` +
+    (d.process?.isAdministrator ? ' - ' + t('administrator') : ''), d.process?.isAdministrator ? 'warn' : '']);
+  items.push([t('Install folder'), d.install?.protectedFromChild
+    ? t('Protected - the child cannot modify the app files')
+    : t('Not protected - the child could modify or delete the app files'), d.install?.protectedFromChild ? 'ok' : 'warn']);
+  items.push([t('Settings loaded from'), d.config?.source || '?', d.config?.source === 'appsettings.json' ? 'ok' : 'warn']);
+  items.push([t('Dashboard hotkey'), d.hotkey?.registered
+    ? t('Registered')
+    : t('Not working') + (d.hotkey?.problem ? ': ' + d.hotkey.problem : ''), d.hotkey?.registered ? 'ok' : 'bad']);
+  const channel = d.updates?.channel === 'system'
+    ? t('Remote silent updates (service)')
+    : d.updates?.dashboardUpdateAvailable ? t('Built-in updater') : t('Not available: protected install without a trusted update source');
+  items.push([t('Updates'), channel, d.updates?.dashboardUpdateAvailable ? 'ok' : 'warn']);
+  const last = d.updates?.lastStatus;
+  items.push([t('Last update'), !last || last === 'none' ? t('None recorded')
+    : [last, d.updates?.lastFinished ? formatDateTime(d.updates.lastFinished) : '', d.updates?.lastMessage].filter(Boolean).join(' - '),
+    last === 'failed' || last === 'unreadable' ? 'bad' : '']);
+  items.push([t('PC Time service'), d.screenTime?.working ? t('Working')
+    : t('Not running') + ` (${d.screenTime?.service || '?'})`, d.screenTime?.working ? 'ok' : 'warn']);
+  items.push([t('Data folder'), `${d.data?.directory || ''} (${t('database')} ${d.data?.databaseKb ?? 0} KB, ${t('log')} ${d.data?.logKb ?? 0} KB)`, '']);
+  return items;
+}
+
 async function loadHealth() {
   try {
     const h = await api('/api/health');
-    const r = h.runtime || {};
-    const items = [
-      [t('Watchdog'), `${r.watchdog?.installed ? t('Installed') : t('Not installed')} (${translateHealthStatus(r.watchdog?.status)})`],
-      [t('Autostart'), r.autoStart?.enabled ? t('Enabled') : t('Disabled')],
-      [t('Dashboard'), `${r.dashboard?.bindAddress || 'unknown'}:${r.dashboard?.port || ''} ${r.dashboard?.remoteEnabled ? t('remote') : t('local')}`],
-      [t('Email'), r.email?.configured ? t('Configured') : t('Not configured')],
-      [t('Database'), `${r.database?.exists ? t('Found') : t('Missing')} - ${r.database?.path || ''}`]
-    ];
-    document.getElementById('health-status').innerHTML = items.map(([label, value]) =>
-      `<div class="health-item"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`
+    const items = buildHealthItems(h);
+    healthReportText = `Monitor & Control diagnostics (${h.machine || ''}, ${new Date().toLocaleString()})\n` +
+      items.map(([label, value, level]) => `${level ? '[' + level.toUpperCase() + '] ' : ''}${label}: ${value}`).join('\n');
+    document.getElementById('health-status').innerHTML = items.map(([label, value, level]) =>
+      `<div class="health-item ${level}"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`
     ).join('');
   } catch (e) {
     log(e);
+    healthReportText = '';
     document.getElementById('health-status').innerHTML =
       `<div class="health-item"><div class="label">${t('Health')}</div><div class="value">${t('Unable to load')}</div></div>`;
   }
 }
+
+document.getElementById('settings-health-copy').addEventListener('click', async () => {
+  if (!healthReportText) await loadHealth();
+  if (!healthReportText) return;
+  try {
+    await navigator.clipboard.writeText(healthReportText);
+  } catch (_) {
+    // navigator.clipboard needs a secure context; fall back for LAN (http) access.
+    const area = document.createElement('textarea');
+    area.value = healthReportText;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+  const button = document.getElementById('settings-health-copy');
+  const original = button.textContent;
+  button.textContent = t('Copied');
+  setTimeout(() => { button.textContent = original; }, 1500);
+});
 
 document.getElementById('settings-health-refresh').addEventListener('click', loadHealth);
 
@@ -1629,7 +1686,18 @@ document.getElementById('settings-run-update').addEventListener('click', async (
   const username = document.getElementById('set-update-username').value.trim();
   const password = document.getElementById('set-update-password').value;
   const sha256 = document.getElementById('set-update-sha256').value.trim();
-  if (!source) {
+
+  // Ask which update path applies: the service (protected install with a trusted source),
+  // the built-in updater, or neither. The service ignores the source typed here.
+  let updates = {};
+  try { updates = (await api('/api/health')).runtime?.diagnostics?.updates || {}; } catch (_) {}
+  const viaService = updates.channel === 'system';
+  if (!viaService && updates.dashboardUpdateAvailable === false) {
+    el.style.color = '#ff4444';
+    el.textContent = t('This is a protected install: the dashboard cannot write to the app folder. Updates run through the GameHost service. Re-run install.ps1 as administrator with -UpdateSource to enable remote updates.');
+    return;
+  }
+  if (!source && !viaService) {
     el.style.color = '#ff4444';
     el.textContent = t('Enter an update source first.');
     return;
@@ -1647,7 +1715,9 @@ document.getElementById('settings-run-update').addEventListener('click', async (
     });
     document.getElementById('set-update-password').value = '';
     el.style.color = '#44bb44';
-    el.textContent = t('Update started. Reopen the dashboard after the app restarts.');
+    el.textContent = viaService
+      ? t('Update requested. The GameHost service will download and install it in the background; the dashboard may disconnect briefly.')
+      : t('Update started. Reopen the dashboard after the app restarts.');
     loadUpdateStatus();
   } catch (e) {
     el.style.color = '#ff4444';

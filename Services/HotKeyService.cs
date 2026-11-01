@@ -17,21 +17,49 @@ public static class HotKeyService
         _callback = callback;
 
         var result = NativeMethods.RegisterHotKey(windowHandle, id, modifiers, key);
-        if (!result)
-            Debug.WriteLine($"Failed to register hotkey. Error: {Marshal.GetLastPInvokeError()}");
+        Registered = result;
+        if (result)
+        {
+            LastError = 0;
+        }
+        else
+        {
+            LastError = Marshal.GetLastPInvokeError();
+            var message = $"Dashboard hotkey could not be registered: {DescribeError(LastError)}";
+            Debug.WriteLine(message);
+            Logger.Instance.Warn(message);
+        }
         return result;
     }
+
+    /// <summary>Whether the dashboard hotkey is currently registered with Windows.</summary>
+    public static bool Registered { get; private set; }
+
+    /// <summary>Win32 error from the last failed registration (0 when it succeeded).</summary>
+    public static int LastError { get; private set; }
+
+    /// <summary>Plain-language explanation of a RegisterHotKey failure code.</summary>
+    public static string DescribeError(int error) => error switch
+    {
+        0 => "no error",
+        1409 => "already in use by another program (error 1409) - close the program using it or pick another combination",
+        87 => "the combination is not valid (error 87)",
+        1400 => "invalid window handle (error 1400)",
+        _ => $"Windows error {error}"
+    };
 
     public static void Unregister()
     {
         if (_hwnd != IntPtr.Zero)
             NativeMethods.UnregisterHotKey(_hwnd, _hotKeyId);
+        Registered = false;
     }
 
     public static void Unregister(IntPtr windowHandle, int id)
     {
         if (windowHandle != IntPtr.Zero)
             NativeMethods.UnregisterHotKey(windowHandle, id);
+        Registered = false;
     }
 
     public static void HandleHotKey()

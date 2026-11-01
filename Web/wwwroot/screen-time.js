@@ -17,6 +17,22 @@ let screenPending = null;
 let screenBusy = false;
 const screenElement = id => document.getElementById('screen-' + id);
 
+// On the child PC itself a change is approved with a Windows (UAC) prompt. From any other
+// device there is no prompt to answer, so a PIN set on the PC authorizes it instead.
+const screenIsLocal = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
+
+// Returns why a remote change cannot be made right now, or '' when it can.
+function screenRemoteBlock() {
+  if (screenIsLocal || !screenData) return '';
+  const remote = screenData.remote;
+  if (!remote?.configured)
+    return t('Remote changes are off. On the child PC, run GameHost.exe --set-remote-pin as administrator, or open this dashboard on that PC.');
+  const until = remote.lockedUntilUtc ? new Date(remote.lockedUntilUtc) : null;
+  if (until && until > new Date())
+    return t('Remote changes are locked until {time} after too many wrong PIN attempts. You can still make changes on the child PC.', { time: until.toLocaleTimeString() });
+  return '';
+}
+
 function screenDuration(seconds) {
   return Math.floor(seconds / 3600) + 'h ' + Math.floor(seconds % 3600 / 60) + 'm';
 }
@@ -43,7 +59,7 @@ function screenRenderSelection(populate) {
     ? (profile.remainingSeconds <= 0 ? t('Time is up') : t('Active'))
     : t('Not controlled');
   const editable = !!account && (account.eligible || !!profile);
-  screenElement('save').disabled = !editable || !!screenData?.error;
+  screenElement('save').disabled = !editable || !!screenData?.error || !!screenRemoteBlock();
   screenElement('enabled').disabled = !!account && !account.eligible;
   if (populate) {
     screenElement('minutes').value = profile?.dailyMinutes ?? 180;
@@ -106,8 +122,9 @@ async function loadScreenTime(force = false) {
       option.textContent = t('No enabled standard account found');
       select.appendChild(option);
     }
-    screenElement('message').textContent = data.error || t('Accounts refreshed. Choose who to control and save the limit.');
-    screenElement('message').classList.toggle('screen-error', !!data.error);
+    const remoteBlock = screenRemoteBlock();
+    screenElement('message').textContent = data.error || remoteBlock || t('Accounts refreshed. Choose who to control and save the limit.');
+    screenElement('message').classList.toggle('screen-error', !!data.error || !!remoteBlock);
     screenRenderSelection(force || !screenDirty || select.value !== previousSid);
     screenRenderTable();
   } catch (error) {
@@ -138,26 +155,34 @@ screenElement('form').addEventListener('submit', event => {
     ? t('Apply {n} minutes per day to {name}. Other accounts are preserved.', { n: screenPending.dailyMinutes, name: account.name })
     : t('Turn off control for {name}. Other accounts are preserved.', { name: account.name });
   screenElement('auth-error').textContent = '';
+  // Local: Windows asks for approval. Remote: ask for the PIN instead.
+  screenElement('auth-uac').classList.toggle('hidden', !screenIsLocal);
+  screenElement('auth-pin-row').classList.toggle('hidden', screenIsLocal);
+  screenElement('auth-pin').value = '';
   screenElement('auth').showModal();
   screenElement('auth-submit').focus();
 });
 
 screenElement('auth-cancel').addEventListener('click', () => { if (!screenBusy) screenElement('auth').close(); });
 screenElement('auth').addEventListener('cancel', event => { if (screenBusy) event.preventDefault(); });
-screenElement('auth').addEventListener('close', () => { screenPending = null; });
+screenElement('auth').addEventListener('close', () => { screenPending = null; screenElement('auth-pin').value = ''; });
 
 screenElement('auth-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (!screenPending || screenBusy) return;
+  if (!screenIsLocal && !screenElement('auth-pin').value) {
+    screenElement('auth-error').textContent = t('Enter the remote PIN.');
+    return;
+  }
   screenBusy = true;
   screenElement('auth-submit').disabled = true;
   screenElement('auth-cancel').disabled = true;
   screenElement('auth-error').textContent = '';
   try {
-    await screenApi('/api/screen-time/policy', {
+    await screenApi(screenIsLocal ? '/api/screen-time/policy' : '/api/screen-time/remote-policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...screenPending })
+      body: JSON.stringify(screenIsLocal ? { ...screenPending } : { ...screenPending, pin: screenElement('auth-pin').value })
     });
     screenElement('auth').close();
     screenDirty = false;

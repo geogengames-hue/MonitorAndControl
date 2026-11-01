@@ -35,6 +35,39 @@ public sealed class ParentReportService : IDisposable
         "login_lockout",
         $"Repeated failed dashboard logins from {source} triggered a temporary lockout.");
 
+    /// <summary>Alerts the parent about a remote PC Time change or a wrong remote-PIN guess.</summary>
+    /// <param name="security">
+    /// True for suspected guessing/lockouts: these are sent even when general tamper alerts are
+    /// off, because staying silent while someone guesses the remote PIN would defeat the point.
+    /// Ordinary remote changes follow the tamper-alert switch.
+    /// </param>
+    public void ReportRemoteScreenTime(string message, bool security) =>
+        _ = SendTamperAlertAsync(security ? "pc_time_remote_security" : "pc_time_remote", message, ignoreSwitch: security);
+
+    // The SYSTEM service counts remote-PIN lockouts in its status file, including ones triggered by
+    // a local process talking to the service directly (which never touches the dashboard).
+    private async Task CheckRemotePinLockoutsAsync()
+    {
+        try
+        {
+            var path = ScreenTime.ScreenTimeFiles.StatusPath;
+            if (!File.Exists(path)) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("remote", out var remote) ||
+                !remote.TryGetProperty("lockouts", out var lockouts) || !lockouts.TryGetInt32(out var current)) return;
+
+            var seenText = await _db.GetSettingAsync("RemotePinLockoutsSeen", "");
+            if (!int.TryParse(seenText, out var seen)) { await _db.SetSettingAsync("RemotePinLockoutsSeen", current.ToString()); return; }
+            if (current <= seen) return;
+
+            if (await SendTamperAlertAsync("pc_time_pin_lockout",
+                    "Too many wrong remote PC Time PIN attempts locked remote changes. The guesses may have come from the network or from a program on the child PC.",
+                    ignoreSwitch: true))
+                await _db.SetSettingAsync("RemotePinLockoutsSeen", current.ToString());
+        }
+        catch (Exception ex) { Logger.Instance.Error($"Remote PIN lockout check failed: {ex.Message}"); }
+    }
+
     public async Task<bool> ReportWatchdogRestartAsync(string details)
     {
         if ((await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true")
@@ -56,6 +89,7 @@ public sealed class ParentReportService : IDisposable
     {
         await CheckScheduledSummaryAsync(DateTime.Now);
         await CheckTamperConditionsAsync();
+        await CheckRemotePinLockoutsAsync();
     }
 
     private async Task CheckScheduledSummaryAsync(DateTime now)
@@ -159,9 +193,9 @@ public sealed class ParentReportService : IDisposable
             _activeTamperConditions.Add(key);
     }
 
-    private async Task<bool> SendTamperAlertAsync(string type, string message)
+    private async Task<bool> SendTamperAlertAsync(string type, string message, bool ignoreSwitch = false)
     {
-        if ((await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true") return false;
+        if (!ignoreSwitch && (await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true") return false;
         Logger.Instance.Warn($"Tamper alert: {message}");
         var emailError = await _email.SendSystemEmailAsync($"Tamper Alert: {type}", message);
         var webhookSent = await _notifications.NotifySystemAsync(type, message);

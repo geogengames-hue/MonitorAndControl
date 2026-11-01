@@ -11,6 +11,8 @@ public sealed class ScreenTimeRequest
     public int BonusMinutes { get; set; }
     public bool Enabled { get; set; }
     public string TicketId { get; set; } = "";
+    /// <summary>Remote PIN for "remote-save". Never logged and never stored in the request history.</summary>
+    public string Pin { get; set; } = "";
 }
 public sealed record ScreenTimeReply(bool Ok, string? Error, JsonElement? Data)
 {

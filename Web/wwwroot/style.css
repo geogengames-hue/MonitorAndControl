@@ -375,6 +375,9 @@ button.btn-danger:hover { background: linear-gradient(135deg,#d85b55,#a83e3a); b
 .health-grid { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 8px; margin-top: 10px; }
 .health-item { padding: 11px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
 .health-item .value { margin-top: 4px; color: var(--text-soft); font-size: 12px; overflow-wrap: anywhere; }
+.health-item.warn { border-left: 3px solid #f0a45d; }
+.health-item.bad { border-left: 3px solid #e1807b; }
+.health-item.ok { border-left: 3px solid #5fb37c; }
 code { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-raised); color: #a8dccc; font: 12px Consolas, monospace; }
 
 .logs-toolbar { margin-bottom: 10px; }
@@ -445,3 +448,15 @@ code { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; ba
 .screen-auth::backdrop { background: rgba(0,0,0,.65); backdrop-filter: blur(4px); }
 .screen-auth .quick-actions { margin-top: 22px; }
 .screen-auth-error { margin-top: 12px; color: #e1807b; line-height: 1.5; font-size: 13px; }
+
+/* Help mode (help.js): tap the ? button, then any item, to see what it does. */
+.help-toggle { position: fixed; right: 16px; bottom: 16px; z-index: 900; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: var(--surface-raised); color: var(--primary); font-size: 18px; font-weight: 800; line-height: 1; cursor: pointer; box-shadow: var(--shadow); }
+.help-toggle.on { background: var(--primary); color: #1b1410; }
+.help-banner { position: fixed; left: 16px; right: 68px; bottom: 20px; z-index: 900; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 13px; box-shadow: var(--shadow); }
+.help-banner.hidden { display: none; }
+.help-banner button { flex: none; }
+.help-active button[title], .help-active a[title], .help-active select[title], .help-active input[title], .help-active label[title], .help-active th[title], .help-active .live-label[title], .help-active h3[title] { outline: 1px dashed var(--primary); outline-offset: 2px; cursor: help; }
+.help-active #help-toggle { outline: none; cursor: pointer; }
+.help-bubble { position: fixed; z-index: 1000; max-width: min(300px, calc(100% - 16px)); padding: 10px 12px; border: 1px solid var(--primary); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 13px; line-height: 1.5; box-shadow: var(--shadow); pointer-events: none; }
+.screen-auth label { display: block; margin: 16px 0 6px; color: var(--text-soft); font-size: 13px; }
+.screen-auth input { width: 100%; }
