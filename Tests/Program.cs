@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Data.Sqlite;
 using MonitorAndControl.Data;
 using MonitorAndControl.Models;
@@ -5,6 +7,16 @@ using MonitorAndControl.Services;
 
 var tests = new (string Name, Func<Task> Run)[]
 {
+    ("Screen time HTTP rejects foreign origin, host and invalid bodies", TestScreenTimeHttpBoundary),
+    ("Screen time limits pending approvals per caller", TestScreenTimeApprovalCap),
+    ("Screen time protocol preserves selected account payload", TestScreenTimeProtocol),
+    ("Screen time protocol rejects oversized or invalid frames", TestScreenTimeProtocolBounds),
+    ("Screen time approval requires elevation and prevents replay", TestScreenTimeAuthorization),
+    ("Screen time approval expires and respects caller identity", TestScreenTimeAuthorizationRequiresCredentials),
+    ("Screen time checkpoints replace atomically with backup", TestScreenTimeAtomicFiles),
+    ("Screen time isolates accounts and grants daily bonus", TestScreenTimeAccountIsolation),
+    ("Screen time survives restart and clock rollback", TestScreenTimeDayAndRestart),
+    ("Screen time rejects invalid policies", TestScreenTimePolicyValidation),
     ("Scheduler allows time inside same-day window", TestSchedulerInsideSameDayWindow),
     ("Scheduler blocks time outside same-day window", TestSchedulerOutsideSameDayWindow),
     ("Scheduler handles overnight windows", TestSchedulerOvernightWindow),
@@ -616,4 +628,167 @@ static void AssertEqual<T>(T expected, T actual, string message)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
         throw new InvalidOperationException($"{message} Expected {expected}, got {actual}.");
+}
+
+static Task TestScreenTimeAccountIsolation()
+{
+    var a = new MonitorAndControl.ScreenTime.ScreenTimeUsage();
+    var b = new MonitorAndControl.ScreenTime.ScreenTimeUsage();
+    var day = new DateOnly(2026, 10, 25);
+    var policy = new MonitorAndControl.ScreenTime.ScreenTimePolicy {
+        UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "Account A", DailyMinutes = 180
+    };
+    MonitorAndControl.ScreenTime.ScreenTimeRules.Advance(a, day, 5);
+    AssertTrue(a.Seconds == 5 && b.Seconds == 0, "Usage must be isolated per profile.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.Remaining(policy, a, day) == 10795, "Three hours is 10800 seconds.");
+    policy.BonusDay = day.ToString("yyyy-MM-dd"); policy.BonusMinutes = 15;
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.Remaining(policy, a, day) == 11695, "Bonus applies today.");
+    return Task.CompletedTask;
+}
+
+static Task TestScreenTimeDayAndRestart()
+{
+    var day = new DateOnly(2026, 10, 25);
+    var usage = new MonitorAndControl.ScreenTime.ScreenTimeUsage { Day = "2026-10-25", Seconds = 10800 };
+    var policy = new MonitorAndControl.ScreenTime.ScreenTimePolicy {
+        UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "Account A", DailyMinutes = 180
+    };
+    var json = System.Text.Json.JsonSerializer.Serialize(usage);
+    usage = System.Text.Json.JsonSerializer.Deserialize<MonitorAndControl.ScreenTime.ScreenTimeUsage>(json)!;
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.Remaining(policy, usage, day) == 0, "Restart preserves quota exhaustion.");
+    MonitorAndControl.ScreenTime.ScreenTimeRules.Advance(usage, day.AddDays(-1), 1);
+    AssertTrue(usage.Seconds == 10801, "Clock rollback must not reset usage.");
+    MonitorAndControl.ScreenTime.ScreenTimeRules.Advance(usage, day.AddDays(1), 1);
+    AssertTrue(usage.Seconds == 1 && usage.Day == "2026-10-26", "New day renews once.");
+    policy.BonusDay = "2026-10-25"; policy.BonusMinutes = 20;
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.Remaining(policy, usage, day.AddDays(1)) == 10799, "Old bonus expires.");
+    return Task.CompletedTask;
+}
+
+static Task TestScreenTimePolicyValidation()
+{
+    var policy = new MonitorAndControl.ScreenTime.ScreenTimePolicy {
+        UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "Account A", DailyMinutes = 0
+    };
+    bool rejected = false;
+    try { policy.Validate(); } catch (InvalidDataException) { rejected = true; }
+    AssertTrue(rejected, "Zero-minute active policy must not be accepted.");
+    return Task.CompletedTask;
+}
+
+static Task TestScreenTimeAtomicFiles()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "DeviceMon-ScreenTime-Test-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    var path = Path.Combine(directory, "usage.json");
+    try
+    {
+        MonitorAndControl.ScreenTime.ScreenTimeFiles.WriteAtomic(path, new { Seconds = 123 });
+        MonitorAndControl.ScreenTime.ScreenTimeFiles.WriteAtomic(path, new { Seconds = 456 });
+        using var current = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        using var backup = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path + ".bak"));
+        AssertTrue(current.RootElement.GetProperty("Seconds").GetInt32() == 456, "New checkpoint committed.");
+        AssertTrue(backup.RootElement.GetProperty("Seconds").GetInt32() == 123, "Previous checkpoint recoverable.");
+        AssertTrue(Directory.GetFiles(directory, "*.tmp").Length == 0, "No temporary checkpoint left.");
+    }
+    finally { Directory.Delete(directory, true); }
+    return Task.CompletedTask;
+}
+
+static async Task TestScreenTimeProtocol()
+{
+    using var stream = new MemoryStream();
+    var request = new MonitorAndControl.ScreenTime.ScreenTimeRequest {
+        Command = "save", UserSid = "S-1-5-21-1-2-3-1001", DailyMinutes = 180, BonusMinutes = 10, Enabled = true,
+        TicketId = "test-ticket"
+    };
+    await MonitorAndControl.ScreenTime.ScreenTimeProtocol.WriteAsync(stream, request, CancellationToken.None);
+    stream.Position = 0;
+    var copy = await MonitorAndControl.ScreenTime.ScreenTimeProtocol.ReadAsync<MonitorAndControl.ScreenTime.ScreenTimeRequest>(stream, 16384, CancellationToken.None);
+    AssertTrue(copy.UserSid == request.UserSid && copy.DailyMinutes == 180 && copy.BonusMinutes == 10, "Selected account settings must round-trip.");
+    AssertTrue(copy.TicketId == request.TicketId, "Authorization must reach service through bounded protocol.");
+}
+
+static async Task TestScreenTimeProtocolBounds()
+{
+    foreach (var length in new[] { -1, 0, 16385 })
+    {
+        using var stream = new MemoryStream(BitConverter.GetBytes(length));
+        bool rejected = false;
+        try { await MonitorAndControl.ScreenTime.ScreenTimeProtocol.ReadAsync<MonitorAndControl.ScreenTime.ScreenTimeRequest>(stream, 16384, CancellationToken.None); }
+        catch (InvalidDataException) { rejected = true; }
+        AssertTrue(rejected, "Invalid message length must be rejected before allocation.");
+    }
+}
+
+static Task TestScreenTimeApprovalCap()
+{
+    var gate = new MonitorAndControl.ScreenTime.ScreenTimeApprovals();
+    var now = DateTimeOffset.UtcNow;
+    var change = new MonitorAndControl.ScreenTime.ScreenTimeChange("a", 180, 0, true);
+    for (var i = 0; i < 4; i++) gate.Create("child", change, now);
+    var refused = false;
+    try { gate.Create("child", change, now); } catch (InvalidOperationException) { refused = true; }
+    AssertTrue(refused, "A single caller cannot fill the pending-approval queue.");
+    AssertTrue(gate.Create("parent", change, now).Length == 32, "Other callers are unaffected by one caller's backlog.");
+    return Task.CompletedTask;
+}
+
+static Task TestScreenTimeAuthorization()
+{
+    var gate = new MonitorAndControl.ScreenTime.ScreenTimeApprovals();
+    var now = DateTimeOffset.UtcNow;
+    var change = new MonitorAndControl.ScreenTime.ScreenTimeChange("account-a", 180, 0, true);
+    var id = gate.Create("caller", change, now);
+    AssertFalse(gate.TryClaim(id, false, now, out _), "Standard callers cannot approve.");
+    AssertTrue(gate.TryClaim(id, true, now, out var frozen) && frozen == change, "Elevated approval preserves target.");
+    AssertFalse(gate.TryClaim(id, true, now, out _), "Approval cannot be replayed.");
+    gate.Complete(id, MonitorAndControl.ScreenTime.ScreenTimeReply.Success(new { saved = true }));
+    AssertFalse(gate.Result(id, "another", now).Ok, "Other callers cannot read results.");
+    AssertTrue(gate.Result(id, "caller", now).Ok, "Owner receives confirmation.");
+    return Task.CompletedTask;
+}
+static Task TestScreenTimeAuthorizationRequiresCredentials()
+{
+    var gate = new MonitorAndControl.ScreenTime.ScreenTimeApprovals();
+    var now = DateTimeOffset.UtcNow;
+    var change = new MonitorAndControl.ScreenTime.ScreenTimeChange("a", 180, 0, true);
+    var expired = gate.Create("caller", change, now);
+    AssertFalse(gate.TryClaim(expired, true, now.AddMinutes(3), out _), "Expired approval refused.");
+    var canceled = gate.Create("caller", change, now);
+    gate.Cancel(canceled, "other");
+    AssertTrue(gate.TryClaim(canceled, true, now, out _), "Other caller cannot cancel.");
+    var owned = gate.Create("caller", change, now);
+    gate.Cancel(owned, "caller");
+    AssertFalse(gate.TryClaim(owned, true, now, out _), "Canceled approval refused.");
+    return Task.CompletedTask;
+}
+
+static async Task TestScreenTimeHttpBoundary()
+{
+    var builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder(
+        new Microsoft.AspNetCore.Builder.WebApplicationOptions { EnvironmentName = "Testing", ContentRootPath = Path.GetTempPath() });
+    builder.Logging.ClearProviders();
+    builder.WebHost.UseUrls("http://127.0.0.1:0");
+    await using var app = builder.Build();
+    MonitorAndControl.Web.ScreenTimeEndpoints.Map(app);
+    await app.StartAsync();
+    try
+    {
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+        using var foreignOrigin = new HttpRequestMessage(HttpMethod.Post, "/api/screen-time/policy");
+        foreignOrigin.Headers.Add("Origin", "https://example.invalid");
+        foreignOrigin.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+        using var forbidden = await client.SendAsync(foreignOrigin);
+        AssertTrue(forbidden.StatusCode == System.Net.HttpStatusCode.Forbidden, "Foreign-origin changes must be refused before service access.");
+        using var foreignHost = new HttpRequestMessage(HttpMethod.Get, "/api/screen-time");
+        foreignHost.Headers.Host = "example.invalid";
+        using var rejectedHost = await client.SendAsync(foreignHost);
+        AssertTrue(rejectedHost.StatusCode == System.Net.HttpStatusCode.Forbidden, "DNS-rebinding host must be refused.");
+        using var badJson = await client.PostAsync("/api/screen-time/policy", new StringContent("{", System.Text.Encoding.UTF8, "application/json"));
+        AssertTrue(badJson.StatusCode == System.Net.HttpStatusCode.BadRequest, "Malformed JSON must be refused before service access.");
+        using var large = await client.PostAsync("/api/screen-time/policy", new StringContent(new string(' ', 16385), System.Text.Encoding.UTF8, "application/json"));
+        AssertTrue(large.StatusCode == System.Net.HttpStatusCode.BadRequest, "Oversized body must be refused before service access.");
+    }
+    finally { await app.StopAsync(); }
 }

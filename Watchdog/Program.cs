@@ -24,6 +24,21 @@ internal static class Program
 
     public static void Main(string[] args)
     {
+        // Launched elevated (UAC) by the dashboard to approve a pending screen-time change.
+        if (args.Length == 2 && args[0] == "--approve-screen-time")
+        {
+            Environment.ExitCode = 1;
+            if (!IsElevated() || !Guid.TryParseExact(args[1], "N", out _)) return;
+            try
+            {
+                var reply = MonitorAndControl.Services.ScreenTimeClient.SendAsync(
+                    new MonitorAndControl.ScreenTime.ScreenTimeRequest { Command = "approve", TicketId = args[1] },
+                    CancellationToken.None).GetAwaiter().GetResult();
+                Environment.ExitCode = reply.Ok ? 0 : 1;
+            }
+            catch { }
+            return;
+        }
         if (args.Contains("--install", StringComparer.OrdinalIgnoreCase))
         {
             InstallService(args);
@@ -341,6 +356,7 @@ internal sealed class WatchdogService : ServiceBase
     private readonly WatchdogOptions _options;
     private readonly System.Threading.Timer _timer;
     private bool _hadSeenMonitor;
+    private ScreenTimeService? _screenTime;
     private int _checking;
     private DateTime _lastProtectUtc = DateTime.MinValue;
     private DateTime _lastAutoCheckUtc = DateTime.MinValue;
@@ -371,6 +387,10 @@ internal sealed class WatchdogService : ServiceBase
         Program.PrepareDataDirectory(_options.DataDirectory);
         ProtectAndMaintainData(force: true, updateInProgress: IsUpdateInProgress());
         LoadLastAutoCheck();
+        // Per-account screen-time enforcement is independent of the monitor: if it
+        // cannot start, log it and keep the rest of the watchdog running.
+        try { _screenTime = new ScreenTimeService(Log); }
+        catch (Exception ex) { Log("Screen-time unavailable: " + ex); }
         Log($"Watchdog started. Monitor={_options.MonitorPath}");
         _timer.Change(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(_options.IntervalSeconds));
     }
@@ -378,6 +398,8 @@ internal sealed class WatchdogService : ServiceBase
     protected override void OnStop()
     {
         _timer.Change(Timeout.Infinite, Timeout.Infinite);
+        _screenTime?.Dispose();
+        _screenTime = null;
         Log("Watchdog stopped.");
     }
 

@@ -16,6 +16,7 @@
       <a href="#" data-view="today">Today</a>
       <a href="#" data-view="history">History</a>
       <a href="#" data-view="limits">Limits</a>
+      <a href="#" data-view="screen-time">PC Time</a>
       <a href="#" data-view="discover">Discover</a>
       <a href="#" data-view="schedule">Schedule</a>
       <a href="#" data-view="logs">Logs</a>
@@ -29,6 +30,48 @@
   <main class="main">
     <div id="alert-bar" class="alert-bar hidden"></div>
     <div id="error-bar" class="error-bar hidden"></div>
+    <div id="view-screen-time" class="view">
+      <div class="page-heading">
+        <div><span class="eyebrow">Family safety console</span><h2>PC Time</h2>
+        <p>A daily allowance for each Windows account, across all apps.</p></div>
+        <button id="screen-refresh" class="btn-secondary" type="button">Refresh accounts</button>
+      </div>
+      <div id="screen-message" class="screen-notice" role="status" aria-live="polite">Loading accounts for this PC...</div>
+      <div class="history-stats screen-stats">
+        <div class="stat-card"><div class="label">Selected account</div><div class="value" id="screen-account-name">-</div><div class="sub">Administrators are never controlled</div></div>
+        <div class="stat-card"><div class="label">Used today</div><div class="value" id="screen-used">-</div><div class="sub">Active, unlocked session</div></div>
+        <div class="stat-card"><div class="label">Time remaining</div><div class="value" id="screen-remaining">-</div><div class="sub" id="screen-allowance">Select an account</div></div>
+        <div class="stat-card"><div class="label">Rule status</div><div class="value" id="screen-state">-</div><div class="sub">Only the selected account is affected</div></div>
+      </div>
+      <form id="screen-form" class="settings-form screen-form">
+        <section class="settings-panel">
+          <h3>Account and daily limit</h3>
+          <label for="screen-account">Windows account</label><p class="screen-help">Only enabled accounts without administrator rights.</p>
+          <select id="screen-account" required><option value="">Loading accounts...</option></select>
+          <p class="screen-help" id="screen-account-help">Accounts are identified permanently, even if renamed.</p>
+          <label for="screen-minutes">Minutes per day</label>
+          <input type="number" id="screen-minutes" min="1" max="1440" value="180" required>
+          <p class="screen-help">180 minutes is 3 hours.</p>
+          <label><input type="checkbox" id="screen-enabled"> Enable control for this account</label>
+          <label for="screen-bonus">Bonus for today (total minutes)</label>
+          <input type="number" id="screen-bonus" min="0" max="1440" value="0" required>
+          <p class="screen-help">The bonus applies only today. Saving again does not add it twice.</p>
+          <div class="quick-actions"><button id="screen-save" type="submit">Save settings</button></div>
+        </section>
+        <section class="settings-panel">
+          <h3>How the time works</h3>
+          <p class="screen-help">Counting continues while the dashboard is closed. Videos and games count while the session is active and unlocked.</p>
+          <p class="screen-help">A locked screen, sleep and time on other accounts do not use this allowance. The limit renews at midnight.</p>
+          <div class="screen-warning">When time runs out, this session is signed out and its programs are closed. Save your work before the final warning.</div>
+          <p class="screen-help">A new sign-in is signed out again while the allowance is used up. Accounts without a rule, and administrators, are not affected.</p>
+          <details><summary>Account identifier</summary><p id="screen-account-sid" class="screen-help">-</p></details>
+        </section>
+      </form>
+      <section class="screen-summary"><h3>PC time rules</h3>
+        <div class="table-container"><table><thead><tr><th>Account</th><th>Daily limit</th><th>Used</th><th>Remaining</th><th>Control</th></tr></thead><tbody id="screen-profiles"></tbody></table></div>
+      </section>
+    </div>
+
     <div id="view-live" class="view active">
       <div class="page-heading">
         <div>
@@ -363,6 +406,16 @@
     </div>
   </main>
 </div>
+<dialog id="screen-auth" class="screen-auth" aria-labelledby="screen-auth-title">
+  <form id="screen-auth-form">
+    <h3 id="screen-auth-title">Confirm change</h3>
+    <p id="screen-auth-summary" class="screen-help"></p>
+    <p class="screen-help">Windows will ask for administrator authorization on this PC. Enter the administrator credentials, or confirm the UAC prompt if the administrator account has no password.</p><p id="screen-auth-error" class="screen-auth-error" role="alert"></p>
+    <div class="quick-actions"><button type="submit" id="screen-auth-submit">Authorize and save</button><button type="button" id="screen-auth-cancel" class="btn-secondary">Cancel</button></div>
+  </form>
+</dialog>
+
 <script src="dashboard.js"></script>
+<script src="screen-time.js"></script>
 </body>
 </html>

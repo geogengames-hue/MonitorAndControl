@@ -1,0 +1,81 @@
+using System.Net;
+using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using MonitorAndControl.ScreenTime;
+using MonitorAndControl.Services;
+
+namespace MonitorAndControl.Web;
+
+public static class ScreenTimeEndpoints
+{
+    public static void Map(WebApplication app)
+    {
+        app.MapGet("/api/screen-time", async (HttpContext ctx) =>
+        {
+            if (!TrustedLocalRequest(ctx)) return Results.Json(new { error = "Open this dashboard on the child PC itself to manage accounts." }, statusCode: 403);
+            try
+            {
+                var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest(), ctx.RequestAborted);
+                return reply.Ok ? Results.Json(reply.Data) : Results.Json(new { error = reply.Error }, statusCode: 400);
+            }
+            catch { return Results.Json(new { error = "The screen-time service is unavailable. Install or update the full package and check the GameHost service." }, statusCode: 503); }
+        });
+        app.MapPost("/api/screen-time/policy", async (HttpContext ctx) =>
+        {
+            if (!TrustedLocalRequest(ctx)) return Results.Json(new { error = "Screen-time changes require local access on this PC." }, statusCode: 403);
+            ScreenTimeRequest? request = null;
+            try
+            {
+                var bytes = new byte[16385];
+                int size = 0, read;
+                while (size < bytes.Length && (read = await ctx.Request.Body.ReadAsync(bytes.AsMemory(size), ctx.RequestAborted)) > 0) size += read;
+                if (size > 16384) return Results.BadRequest(new { error = "Request too large." });
+                try { request = JsonSerializer.Deserialize<ScreenTimeRequest>(bytes.AsSpan(0, size), ScreenTimeProtocol.Json); }
+                finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes); }
+                if (request == null) return Results.BadRequest(new { error = "Select an account and set the limits." });
+                request.Command = "prepare";
+                var prepared = await ScreenTimeClient.SendAsync(request, ctx.RequestAborted);
+                if (!prepared.Ok) return Results.BadRequest(new { error = prepared.Error });
+                var ticket = prepared.Data!.Value.GetProperty("ticketId").GetString()!;
+                try
+                {
+                    if (prepared.Data.Value.GetProperty("canApproveDirectly").GetBoolean())
+                        await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "approve", TicketId = ticket }, ctx.RequestAborted);
+                    else
+                    {
+                        var helper = Path.Combine(AppContext.BaseDirectory, "GameHost.exe");
+                        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
+                            FileName = helper, Arguments = "--approve-screen-time " + ticket,
+                            UseShellExecute = true, Verb = "runas", WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden
+                        }) ?? throw new InvalidOperationException("Could not open the Windows authorization prompt.");
+                        await process.WaitForExitAsync(ctx.RequestAborted);
+                    }
+                    var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "result", TicketId = ticket }, ctx.RequestAborted);
+                    return reply.Ok ? Results.Json(reply.Data) : Results.Json(new { error = reply.Error }, statusCode: 400);
+                }
+                finally
+                {
+                    try { await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "cancel", TicketId = ticket }, CancellationToken.None); } catch { }
+                }
+            }
+            catch (System.ComponentModel.Win32Exception) { return Results.BadRequest(new { error = "Windows authorization was canceled. No changes were applied." }); }
+            catch (JsonException) { return Results.BadRequest(new { error = "Invalid configuration data." }); }
+            catch { return Results.Json(new { error = "Could not reach the service. No confirmation that the change was saved was received." }, statusCode: 503); }
+        });
+    }
+
+    private static bool TrustedLocalRequest(HttpContext ctx)
+    {
+        var host = ctx.Request.Host.Host.Trim('[', ']');
+        if (!host.Equals("localhost", StringComparison.OrdinalIgnoreCase) && host != "127.0.0.1" && host != "::1") return false;
+        var remote = ctx.Connection.RemoteIpAddress;
+        if (remote?.IsIPv4MappedToIPv6 == true) remote = remote.MapToIPv4();
+        if (remote == null || !IPAddress.IsLoopback(remote)) return false;
+        if (ctx.Request.Headers.Keys.Any(h => h.Equals("Forwarded", StringComparison.OrdinalIgnoreCase)
+            || h.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase)
+            || h.Equals("X-Real-IP", StringComparison.OrdinalIgnoreCase))) return false;
+        var origin = ctx.Request.Headers.Origin.ToString();
+        return string.IsNullOrEmpty(origin) || origin.Equals($"{ctx.Request.Scheme}://{ctx.Request.Host}", StringComparison.OrdinalIgnoreCase);
+    }
+}

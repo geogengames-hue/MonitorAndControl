@@ -1,4 +1,4 @@
-﻿// State
+// State
 let todayChart = null;
 let historyChart = null;
 let editingLimit = null;
@@ -166,6 +166,7 @@ document.querySelectorAll('.sidebar nav a').forEach(a => {
     if (a.dataset.view === 'today') loadToday();
     if (a.dataset.view === 'history') loadHistory(currentDays);
     if (a.dataset.view === 'limits') loadLimits();
+    if (a.dataset.view === 'screen-time') loadScreenTime();
     if (a.dataset.view === 'discover') loadDiscover();
     if (a.dataset.view === 'schedule') loadSchedule();
     if (a.dataset.view === 'logs') loadLogs();

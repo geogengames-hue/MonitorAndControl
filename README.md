@@ -294,6 +294,17 @@ Place this file alongside `DeviceMon.exe`. All settings are optional — default
 
 > **Security note:** When remote access is enabled, remote users cannot open the dashboard until an admin password has been created from a trusted local dashboard. After setup, remote users are redirected to the login page. Successful authentication creates an HTTP-only session cookie; use **Settings → Logout** to end that browser session. The built-in dashboard listener is HTTP only; do not expose it beyond a trusted LAN unless you put it behind a TLS reverse proxy, VPN/tunnel, or a trusted local certificate setup.
 
+### PC Time (per-account screen time)
+
+Besides per-app limits, you can give a standard Windows account a **daily PC-time allowance** that applies across all apps (for example 180 minutes a day for one child, without touching other accounts).
+
+- Time counts only while that account's session is **active and unlocked**; a locked screen, sleep and time on other accounts don't count. The allowance renews at midnight.
+- When it runs out, the **GameHost service signs that account out**, and signs it out again on every new login until the next day. This closes the account's programs, so save work first. Warnings are shown at 10, 5 and 1 minutes remaining.
+- Only enabled **non-administrator** accounts can be controlled. Accounts are tracked by Windows SID, so renaming one doesn't lose its rule. You can add a **bonus** for today only.
+- Enforcement and counters live in the SYSTEM service, with files in `C:\ProgramData\DeviceMonScreenTime` that standard users can read but not change.
+- **Changing a rule needs Windows administrator approval on the PC itself.** Open the dashboard on that PC (`localhost`), go to **PC Time**, and confirm the UAC prompt. Rules can't be edited from a remote browser by design.
+- Requires the GameHost service to be installed and running.
+
 ### Recommended install: protected Program Files location (requires admin)
 
 For a child's PC, install DeviceMon into `C:\Program Files\DeviceMon` so the child **cannot delete or modify the application files**. Program Files grants standard users read-and-execute only, so the child can still be forced to close DeviceMon (Windows always allows ending your own process), but they cannot delete `DeviceMon.exe`, `GameHost.exe`, the DLLs, or `appsettings.json` — and the watchdog relaunches DeviceMon within ~5 seconds.

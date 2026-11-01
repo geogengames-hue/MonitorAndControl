@@ -350,6 +350,28 @@ public class DashboardServer
             return Results.Ok(new { status = "today_reset" });
         });
 
+        // Per-account PC screen-time (enforced by the GameHost service; see ScreenTime/).
+        app.MapGet("/api/screen-time/status", () =>
+        {
+            try
+            {
+                using var service = new System.ServiceProcess.ServiceController("GameHost");
+                if (service.Status != System.ServiceProcess.ServiceControllerStatus.Running)
+                    return Results.Ok(new { available = false, error = "The GameHost service is stopped. Screen-time control is unavailable." });
+                var path = MonitorAndControl.ScreenTime.ScreenTimeFiles.StatusPath;
+                if (!File.Exists(path))
+                    return Results.Ok(new { available = false, error = "No screen-time status yet. Update GameHost or check the service log." });
+                using var status = JsonDocument.Parse(File.ReadAllText(path));
+                return Results.Ok(new { available = true, status = status.RootElement.Clone() });
+            }
+            catch (Exception ex)
+            {
+                return Results.Ok(new { available = false, error = "Screen-time control unavailable: " + ex.Message });
+            }
+        });
+
+        ScreenTimeEndpoints.Map(app);
+
         app.MapPost("/api/actions/block-all", (HttpContext ctx) =>
         {
             var auth = RequireWriteAccess(ctx);
