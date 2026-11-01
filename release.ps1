@@ -164,10 +164,13 @@ Step 'Uploading to GitHub'
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
 if (-not $gh -and (Test-Path 'C:\Program Files\GitHub CLI\gh.exe')) { $gh = 'C:\Program Files\GitHub CLI\gh.exe' }
 if (-not $gh) { Fail 'GitHub CLI (gh) not found. Install it with: winget install GitHub.cli' }
+# Windows PowerShell 5.1 turns native stderr into a terminating error under 'Stop'; these probes expect failures.
+$ErrorActionPreference = 'Continue'
 & $gh auth status 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail 'gh is not logged in. Run: gh auth login' }
 & $gh release view $tag --repo $Repo 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) { Fail "release '$tag' already exists. Bump the version, or delete that release first." }
+$ErrorActionPreference = 'Stop'
 
 if ($PSCmdlet.ShouldProcess("$Repo", "Create PUBLIC release '$tag' ($Title) from commit $($commit.Substring(0, 7)) with $($files.Count) files")) {
     & $gh release create $tag @files --repo $Repo --target $commit --title $Title --notes-file $notes --latest
