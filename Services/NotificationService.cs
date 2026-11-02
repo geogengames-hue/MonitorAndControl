@@ -11,6 +11,7 @@ public class NotificationService : IDisposable
     private readonly HttpClient _http;
     private string? _cachedWebhookUrl;
     private DateTime _lastUrlCheck = DateTime.MinValue;
+    private readonly PushSender _push;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -23,10 +24,15 @@ public class NotificationService : IDisposable
         _db = db;
         _http = new HttpClient();
         _http.Timeout = TimeSpan.FromSeconds(10);
+        _push = new PushSender(db);
     }
+
+    /// <summary>Sends a test message to the parent's phone; false when it could not be delivered.</summary>
+    public Task<bool> TestPushAsync() => _push.SendAsync("Push notifications are working.");
 
     public async Task NotifyBreachAsync(string appName, int killDelaySeconds)
     {
+        var push = _push.SendAsync($"{appName} time limit reached. Will be closed in {killDelaySeconds}s.");
         await FireWebhook("limit_breach", appName, new
         {
             type = "limit_breach",
@@ -35,10 +41,12 @@ public class NotificationService : IDisposable
             killDelaySeconds,
             timestamp = DateTime.Now
         });
+        await push;
     }
 
     public async Task NotifyKilledAsync(string appName)
     {
+        var push = _push.SendAsync($"{appName} was closed due to time limit.");
         await FireWebhook("app_killed", appName, new
         {
             type = "app_killed",
@@ -46,10 +54,12 @@ public class NotificationService : IDisposable
             message = $"{appName} was closed due to time limit.",
             timestamp = DateTime.Now
         });
+        await push;
     }
 
     public async Task NotifyScheduleTerminatedAsync(string appName)
     {
+        var push = _push.SendAsync($"{appName} was closed by schedule rule.");
         await FireWebhook("schedule_kill", appName, new
         {
             type = "schedule_kill",
@@ -57,6 +67,7 @@ public class NotificationService : IDisposable
             message = $"{appName} was closed by schedule rule.",
             timestamp = DateTime.Now
         });
+        await push;
     }
 
     private async Task<bool> FireWebhook(string eventType, string appName, object payload)
@@ -90,6 +101,8 @@ public class NotificationService : IDisposable
             return false;
         }
     }
+
+    internal static Task<bool> IsBlockedTargetAsync(Uri uri) => IsBlockedWebhookTargetAsync(uri);
 
     private static async Task<bool> IsBlockedWebhookTargetAsync(Uri uri)
     {
@@ -142,13 +155,15 @@ public class NotificationService : IDisposable
 
     public async Task<bool> NotifySystemAsync(string eventType, string message)
     {
-        return await FireWebhook(eventType, "System", new
+        var pushing = _push.SendAsync(message);
+        var hooked = await FireWebhook(eventType, "System", new
         {
             type = eventType,
             app = "System",
             message,
             timestamp = DateTime.Now
         });
+        return await pushing || hooked;
     }
 
     private async Task<string?> GetWebhookUrlAsync()

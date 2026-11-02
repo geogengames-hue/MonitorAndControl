@@ -35,15 +35,18 @@ public sealed class SiteBlockingService : IDisposable
             var usage = rules.Count == 0
                 ? new List<Models.SiteUsageRecord>()
                 : await _db.GetSiteUsageRangeAsync(DateTime.Today, DateTime.Today);
-            var blocked = SiteLimitLogic.BlockedHosts(SiteLimitLogic.Evaluate(rules, usage))
-                .OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
-            var key = string.Join('|', blocked);
+            var status = SiteLimitLogic.Evaluate(rules, usage);
+            var blocked = SiteLimitLogic.BlockedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+            var allowOnly = await _db.GetSettingAsync("SiteAllowOnly", "false") == "true";
+            var safe = await _db.GetSettingAsync("SafeBrowsing", "false") == "true";
+            var allowed = allowOnly ? SiteLimitLogic.AllowedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList() : new List<string>();
+            var key = string.Join('|', blocked) + "#" + string.Join('|', allowed) + $"#{allowOnly}#{safe}";
             if (key == _lastSent && DateTime.UtcNow - _lastSentAt < Refresh) return;
 
-            var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "set-blocked-sites", BlockedHosts = blocked }, CancellationToken.None);
+            var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "set-blocked-sites", BlockedHosts = blocked, AllowedHosts = allowed, AllowOnly = allowOnly, SafeBrowsing = safe }, CancellationToken.None);
             if (reply.Ok)
             {
-                if (key != _lastSent) Logger.Instance.Info(blocked.Count == 0 ? "No websites are blocked." : $"Websites blocked: {string.Join(", ", blocked)}");
+                if (key != _lastSent) Logger.Instance.Info($"Browser rules sent: {blocked.Count} blocked, allow-list mode {(allowOnly ? "on (" + allowed.Count + " allowed)" : "off")}, safe browsing {(safe ? "on" : "off")}.");
                 _lastSent = key;
                 _lastSentAt = DateTime.UtcNow;
                 _serviceWarned = false;

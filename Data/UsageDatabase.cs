@@ -77,6 +77,16 @@ public class UsageDatabase : IDisposable
                 IgnoreOverlayFocus INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS ActivityHours (
+                Hour TEXT NOT NULL,
+                Kind TEXT NOT NULL,
+                Name TEXT NOT NULL,
+                Seconds INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (Hour, Kind, Name)
+            );
+
+            DELETE FROM ActivityHours WHERE Hour < strftime('%Y-%m-%d %H', 'now', 'localtime', '-90 days');
+
             CREATE TABLE IF NOT EXISTS SiteLimits (
                 Host TEXT PRIMARY KEY,
                 DailyMaxMinutes INTEGER NOT NULL DEFAULT 0,
@@ -301,8 +311,44 @@ public class UsageDatabase : IDisposable
                 cmd.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
                 cmd.Parameters.AddWithValue("@seconds", seconds);
                 await cmd.ExecuteNonQueryAsync();
+                await AddActivityAsync(tx, "site", host, seconds);
             }
             tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
+    // Callers hold the database lock. The hour is the local clock hour the time was recorded in.
+    private async Task AddActivityAsync(Microsoft.Data.Sqlite.SqliteTransaction tx, string kind, string name, long seconds)
+    {
+        if (seconds <= 0 || string.IsNullOrWhiteSpace(name)) return;
+        using var cmd = _connection.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO ActivityHours (Hour, Kind, Name, Seconds) VALUES (@hour, @kind, @name, @seconds)
+            ON CONFLICT(Hour, Kind, Name) DO UPDATE SET Seconds = Seconds + @seconds;
+            """;
+        cmd.Parameters.AddWithValue("@hour", DateTime.Now.ToString("yyyy-MM-dd HH"));
+        cmd.Parameters.AddWithValue("@kind", kind);
+        cmd.Parameters.AddWithValue("@name", name);
+        cmd.Parameters.AddWithValue("@seconds", seconds);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async Task<List<ActivityHourRecord>> GetActivityDayAsync(DateTime day)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var list = new List<ActivityHourRecord>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT Hour, Kind, Name, Seconds FROM ActivityHours WHERE Hour >= @from AND Hour < @to ORDER BY Hour, Seconds DESC";
+            cmd.Parameters.AddWithValue("@from", day.ToString("yyyy-MM-dd") + " 00");
+            cmd.Parameters.AddWithValue("@to", day.AddDays(1).ToString("yyyy-MM-dd") + " 00");
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new ActivityHourRecord { Hour = int.Parse(r.GetString(0)[^2..]), Kind = r.GetString(1), Name = r.GetString(2), Seconds = r.GetInt64(3) });
+            return list;
         }
         finally { _lock.Release(); }
     }
@@ -362,7 +408,7 @@ public class UsageDatabase : IDisposable
         try
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM UsageRecords; DELETE FROM LimitGroupUsage; DELETE FROM LimitGroupUsageArchive; DELETE FROM SiteUsage";
+            cmd.CommandText = "DELETE FROM UsageRecords; DELETE FROM LimitGroupUsage; DELETE FROM LimitGroupUsageArchive; DELETE FROM SiteUsage; DELETE FROM ActivityHours";
             await cmd.ExecuteNonQueryAsync();
         }
         finally { _lock.Release(); }
@@ -740,6 +786,8 @@ public class UsageDatabase : IDisposable
             snapshot.Limits.Add(new() { App = l.AppName, Minutes = l.DailyMaxMinutes, Enabled = l.Enabled });
         foreach (var r in await GetScheduleRulesAsync())
             snapshot.Schedule.Add(new() { App = r.AppName, Day = r.DayOfWeek, Start = r.StartTime, End = r.EndTime, Enabled = r.Enabled });
+        snapshot.AllowOnly = await GetSettingAsync("SiteAllowOnly", "false") == "true";
+        snapshot.SafeBrowsing = await GetSettingAsync("SafeBrowsing", "false") == "true";
         foreach (var w in await GetSiteLimitsAsync())
             snapshot.Sites.Add(new() { Host = w.Host, Minutes = w.DailyMaxMinutes, Enabled = w.Enabled });
         foreach (var g in await GetLimitGroupsAsync())
@@ -753,6 +801,8 @@ public class UsageDatabase : IDisposable
         await ReplaceLimitRulesAsync(snapshot.Limits.Select(l => new AppLimitRule { AppName = l.App, DailyMaxMinutes = l.Minutes, Enabled = l.Enabled }));
         await ReplaceScheduleRulesAsync(snapshot.Schedule.Select(s => new ScheduleRule
             { AppName = s.App, DayOfWeek = s.Day, StartTime = s.Start, EndTime = s.End, Enabled = s.Enabled }));
+        await SetSettingAsync("SiteAllowOnly", snapshot.AllowOnly ? "true" : "false");
+        await SetSettingAsync("SafeBrowsing", snapshot.SafeBrowsing ? "true" : "false");
         await ReplaceSiteLimitsAsync(snapshot.Sites.Select(w => new SiteLimit { Host = w.Host, DailyMaxMinutes = w.Minutes, Enabled = w.Enabled }));
         var keep = new HashSet<string>(snapshot.Groups.Select(g => g.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var existing in await GetLimitGroupsAsync())
@@ -1028,6 +1078,8 @@ public class UsageDatabase : IDisposable
                 cmd.Parameters.AddWithValue("@background", record.BackgroundSeconds);
                 await cmd.ExecuteNonQueryAsync();
             }
+            foreach (var record in appRecords)
+                if (record.ForegroundSeconds > 0) await AddActivityAsync(tx, "app", record.AppName, record.ForegroundSeconds);
             foreach (var record in groupRecords)
             {
                 if (record.Seconds <= 0) continue;

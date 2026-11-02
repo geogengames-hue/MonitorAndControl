@@ -288,14 +288,35 @@ public class DashboardServer
             return Results.Json(SiteLimitLogic.Evaluate(rules, usage), JsonOpts);
         });
 
+        // Browser-wide switches: only listed sites may open, and forced SafeSearch / YouTube Restricted Mode.
+        app.MapGet("/api/site-settings", async () => Results.Json(new
+        {
+            allowOnly = await db.GetSettingAsync("SiteAllowOnly", "false") == "true",
+            safeBrowsing = await db.GetSettingAsync("SafeBrowsing", "false") == "true"
+        }, JsonOpts));
+
+        app.MapPost("/api/site-settings", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            if (doc == null) return Results.BadRequest(new { error = "Invalid request." });
+            var root = doc.RootElement;
+            if (root.TryGetProperty("allowOnly", out var allowOnly) && allowOnly.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                await db.SetSettingAsync("SiteAllowOnly", allowOnly.GetBoolean() ? "true" : "false");
+            if (root.TryGetProperty("safeBrowsing", out var safe) && safe.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                await db.SetSettingAsync("SafeBrowsing", safe.GetBoolean() ? "true" : "false");
+            return Results.Ok();
+        });
+
         app.MapPost("/api/site-limits", async (HttpContext ctx, SiteLimit limit) =>
         {
             var auth = RequireWriteAccess(ctx);
             if (auth != null) return auth;
             if (!MonitorAndControl.ScreenTime.SiteBlocking.TryNormalizeHost(limit.Host, out var host))
                 return Results.BadRequest(new { error = "Enter a site name such as youtube.com." });
-            if (limit.DailyMaxMinutes is < 0 or > 1440)
-                return Results.BadRequest(new { error = "Minutes per day must be between 0 (block) and 1440." });
+            if (limit.DailyMaxMinutes is < -1 or > 1440)
+                return Results.BadRequest(new { error = "Minutes per day must be 0 (block), 1 to 1440, or -1 (always allowed)." });
             var existing = await db.GetSiteLimitsAsync();
             if (existing.Count >= MonitorAndControl.ScreenTime.SiteBlocking.MaxHosts && !existing.Any(r => r.Host == host))
                 return Results.BadRequest(new { error = "Too many website rules." });
@@ -312,6 +333,15 @@ public class DashboardServer
                 return Results.BadRequest(new { error = "Invalid site name." });
             await db.DeleteSiteLimitAsync(clean);
             return Results.Ok();
+        });
+
+        // What was in the foreground in each hour of a day (apps and websites), for the timeline.
+        app.MapGet("/api/activity/day", async (string? date = null) =>
+        {
+            var day = DateTime.Today;
+            if (!string.IsNullOrWhiteSpace(date) && !DateTime.TryParse(date, out day))
+                return Results.BadRequest(new { error = "Invalid date." });
+            return Results.Json(await db.GetActivityDayAsync(day.Date), JsonOpts);
         });
 
         // Foreground browser time per website (host names only), for the History page.
@@ -997,6 +1027,87 @@ public class DashboardServer
             return Results.Ok();
         });
 
+        // Phone notifications (ntfy or Telegram). The Telegram token is stored protected and never sent back.
+        app.MapGet("/api/settings/push", async () => Results.Json(new
+        {
+            provider = await db.GetSettingAsync("PushProvider", ""),
+            ntfyServer = await db.GetSettingAsync("PushNtfyServer", PushSender.DefaultNtfyServer),
+            ntfyTopic = await db.GetSettingAsync("PushNtfyTopic", ""),
+            telegramChatId = await db.GetSettingAsync("PushTelegramChatId", ""),
+            telegramTokenSet = !string.IsNullOrEmpty(await db.GetSettingAsync("PushTelegramToken", ""))
+        }, JsonOpts));
+
+        app.MapPost("/api/settings/push", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            if (doc == null) return Results.BadRequest(new { error = "Invalid request." });
+            var root = doc.RootElement;
+            string Text(string name) => root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "").Trim() : "";
+            var provider = Text("provider");
+            var server = Text("ntfyServer");
+            if (server.Length == 0) server = PushSender.DefaultNtfyServer;
+            var topic = Text("ntfyTopic");
+            var chat = Text("telegramChatId");
+            var token = Text("telegramToken");
+            if (provider == "telegram" && token.Length == 0)
+                token = SecretProtector.Unprotect(await db.GetSettingAsync("PushTelegramToken", ""));
+            var problem = PushSender.Validate(provider, server, topic, token, chat);
+            if (problem != null) return Results.BadRequest(new { error = problem });
+            await db.SetSettingAsync("PushProvider", provider);
+            await db.SetSettingAsync("PushNtfyServer", server);
+            await db.SetSettingAsync("PushNtfyTopic", topic);
+            await db.SetSettingAsync("PushTelegramChatId", chat);
+            if (token.Length > 0) await db.SetSettingAsync("PushTelegramToken", SecretProtector.Protect(token));
+            return Results.Ok();
+        });
+
+        app.MapPost("/api/settings/push-test", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            return await notifier.TestPushAsync()
+                ? Results.Ok(new { status = "test_sent" })
+                : Results.BadRequest(new { error = "The test message could not be delivered. Check the settings and that the phone app is subscribed." });
+        });
+
+        // Other PCs running DeviceMon: only names and addresses, so this page can link to each one's own
+        // dashboard. No passwords are kept here, because this PC belongs to the child.
+        app.MapGet("/api/other-pcs", async () =>
+        {
+            try { return Results.Json(JsonSerializer.Deserialize<List<OtherPc>>(await db.GetSettingAsync("OtherPcs", "[]")) ?? new(), JsonOpts); }
+            catch { return Results.Json(new List<OtherPc>(), JsonOpts); }
+        });
+
+        app.MapPost("/api/other-pcs", async (HttpContext ctx, OtherPc pc) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            pc.Name = Clean(pc.Name);
+            pc.Url = Clean(pc.Url);
+            if (pc.Name.Length is 0 or > 40 || !IsHttpUrl(pc.Url) || pc.Url.Length > 300)
+                return Results.BadRequest(new { error = "Enter a short name and the full address of the other PC's dashboard, for example http://kids-pc:5000." });
+            List<OtherPc> list;
+            try { list = JsonSerializer.Deserialize<List<OtherPc>>(await db.GetSettingAsync("OtherPcs", "[]")) ?? new(); } catch { list = new(); }
+            list.RemoveAll(x => x.Name.Equals(pc.Name, StringComparison.OrdinalIgnoreCase));
+            if (list.Count >= 10) return Results.BadRequest(new { error = "Up to 10 PCs." });
+            list.Add(pc);
+            await db.SetSettingAsync("OtherPcs", JsonSerializer.Serialize(list));
+            return Results.Ok();
+        });
+
+        app.MapDelete("/api/other-pcs/{name}", async (HttpContext ctx, string name) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            List<OtherPc> list;
+            try { list = JsonSerializer.Deserialize<List<OtherPc>>(await db.GetSettingAsync("OtherPcs", "[]")) ?? new(); } catch { list = new(); }
+            list.RemoveAll(x => x.Name.Equals(Clean(name), StringComparison.OrdinalIgnoreCase));
+            await db.SetSettingAsync("OtherPcs", JsonSerializer.Serialize(list));
+            return Results.Ok();
+        });
+
         app.MapPost("/api/settings/webhook-test", async (HttpContext ctx) =>
         {
             var auth = RequireWriteAccess(ctx);
@@ -1552,6 +1663,18 @@ public class DashboardServer
 
     private static bool IsHttpUrl(string value) => InputValidation.IsValidHttpUrl(value);
 
+    private static async Task<JsonDocument?> TryParseBodyAsync(HttpContext ctx)
+    {
+        try { return await JsonDocument.ParseAsync(ctx.Request.Body); }
+        catch (JsonException) { return null; }
+    }
+
+    public sealed class OtherPc
+    {
+        public string Name { get; set; } = "";
+        public string Url { get; set; } = "";
+    }
+
     private static bool IsValidUpdateSource(string source, string username, string sha256, out string error)
     {
         error = "";
@@ -1631,6 +1754,8 @@ public class DashboardServer
         "SummaryMonthlyDay",
         "TamperAlertsEnabled",
         "TrackWebsites",
+        "SiteAllowOnly",
+        "SafeBrowsing",
         "HotKeyModifiers",
         "HotKeyKey"
     };
@@ -1704,6 +1829,8 @@ public class DashboardServer
                 case "SummaryEnabled":
                 case "TamperAlertsEnabled":
                 case "TrackWebsites":
+                case "SiteAllowOnly":
+                case "SafeBrowsing":
                 case "EmailNotifyEnabled":
                 case "EmailBreachNotifyEnabled":
                 case "EmailKillNotifyEnabled":

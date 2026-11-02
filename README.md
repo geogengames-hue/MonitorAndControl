@@ -329,6 +329,26 @@ On the **Limits** page, under **Website Limits**, block a site completely (enter
 - **Protect limits includes website rules:** once you seal the limits, sites you block outright (0 minutes) stay blocked from the sealed copy, even if DeviceMon is closed or its database edited.
 - **Limits:** other browsers (Opera, Vivaldi, portable or unusual ones) are not covered, a child who is an administrator can undo policies, and time allowances depend on the website-time tracking being on. A browser may need a minute to pick up a change, and a page already open can keep working until it is reloaded.
 
+### Safe browsing and allow-list mode
+
+On the **Limits** page, under **Website Limits**, two switches change what every **Chrome, Edge, Brave and Firefox** window may open (same mechanism and limits as website blocking):
+
+- **Safe browsing** forces **SafeSearch** in Google and Bing and **YouTube Restricted Mode (strict)** in Chrome, Edge and Brave. The child cannot turn them off. (Firefox has no such policy, so only blocking applies there.)
+- **Allow-list mode** blocks every website except the ones you add as **Always allow** (or with a daily allowance and time left). The dashboard on this PC (`localhost`) and the browsers own pages stay reachable. **Use with care:** a site often needs a login page or other sites to work, so add those too and **test with a spare account first**. A site you block or whose allowance is used up is never allowed.
+- Both are part of **Protect limits**, so once sealed they cannot be switched off without your approval.
+
+### Activity timeline
+
+**History > Activity timeline** shows, hour by hour for a chosen day, which apps were in the foreground (a coloured bar per app) and the top websites. Only foreground time counts, so overlapping or background apps do not stack up. It keeps the last 90 days and is cleared with **Clear History**.
+
+### Phone notifications and other PCs
+
+Under **Settings > Phone notifications** choose **ntfy** or **Telegram** to get alerts (tamper alerts, time requests, lockouts, limit events) as a phone notification, next to email and the webhook. **Nothing is installed on the childs PC**; only your phone needs an app.
+- **ntfy:** install the free ntfy app, subscribe to a long random topic name (for example `family-pc-7f3k9x2q`), and enter the same topic here. No account. Anyone who knows the topic can read the alerts, so keep it secret.
+- **Telegram:** message `@BotFather` to create a bot, copy its token, find your chat ID, and enter both. The token is stored protected on this PC and never shown again.
+- Because the topic or token lives on the childs PC, treat it as low-risk: it can only send you messages.
+- **Other PCs** (same page) adds shortcuts to other PCs dashboards in the sidebar. Each opens that PCs own dashboard in a new tab and you sign in there separately. Passwords are deliberately not stored: this PC belongs to the child, so it must not hold the keys to another one.
+
 ### Weekly trend report
 
 The **History** page has a **This week vs last week** panel: bars per day for the last 7 days against the same days a week earlier, plus the top apps with their change. The summary email ends with the same comparison.

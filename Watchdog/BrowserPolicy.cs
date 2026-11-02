@@ -5,25 +5,38 @@ using MonitorAndControl.ScreenTime;
 namespace MonitorAndControlWatchdog;
 
 /// <summary>
-/// Writes the "blocked websites" list that Chrome, Edge, Brave and Firefox read from Windows policy.
+/// Writes the browser rules that Chrome, Edge, Brave and Firefox read from Windows policy: blocked
+/// websites, an optional "only these sites" list, and forced SafeSearch / YouTube Restricted Mode.
 /// Only an administrator (here: the SYSTEM service) can write these keys, so the child cannot undo
 /// them, and the browser shows its own "blocked by your administrator" page, also in private windows.
-/// Entries that were already in a browser's list are left alone.
+/// Entries that were already in a browser's lists are left alone.
 /// </summary>
 internal sealed class BrowserPolicy
 {
     private sealed class State
     {
         public List<string> Reported { get; set; } = new();
+        public List<string> ReportedAllowed { get; set; } = new();
+        public bool ReportedAllowOnly { get; set; }
+        public bool ReportedSafe { get; set; }
+        /// <summary>Value each forced setting had before we set it (null = it did not exist), so turning it off restores it.</summary>
+        public Dictionary<string, int?> SafeOriginals { get; set; } = new();
         public Dictionary<string, List<string>> Owned { get; set; } = new();
     }
 
-    private static readonly (string Path, bool Firefox)[] Targets =
+    private sealed record Target(string Root, string BlockKey, string AllowKey, bool Firefox, string InternalPages,
+        (string Name, int Value)[] Safe);
+
+    private static readonly Target[] Targets =
     {
-        (@"SOFTWARE\Policies\Google\Chrome\URLBlocklist", false),
-        (@"SOFTWARE\Policies\Microsoft\Edge\URLBlocklist", false),
-        (@"SOFTWARE\Policies\BraveSoftware\Brave\URLBlocklist", false),
-        (@"SOFTWARE\Policies\Mozilla\Firefox\WebsiteFilter\Block", true)
+        new(@"SOFTWARE\Policies\Google\Chrome", "URLBlocklist", "URLAllowlist", false, "chrome://*",
+            new[] { ("ForceGoogleSafeSearch", 1), ("ForceYouTubeRestrict", 2) }),
+        new(@"SOFTWARE\Policies\Microsoft\Edge", "URLBlocklist", "URLAllowlist", false, "edge://*",
+            new[] { ("ForceGoogleSafeSearch", 1), ("ForceBingSafeSearch", 2), ("ForceYouTubeRestrict", 2) }),
+        new(@"SOFTWARE\Policies\BraveSoftware\Brave", "URLBlocklist", "URLAllowlist", false, "brave://*",
+            new[] { ("ForceGoogleSafeSearch", 1), ("ForceYouTubeRestrict", 2) }),
+        new(@"SOFTWARE\Policies\Mozilla\Firefox\WebsiteFilter", "Block", "Exceptions", true, "",
+            Array.Empty<(string, int)>())
     };
 
     private readonly string _stateFile;
@@ -37,8 +50,6 @@ internal sealed class BrowserPolicy
         _state = Load();
     }
 
-    internal IReadOnlyList<string> Reported => _state.Reported;
-
     private State Load()
     {
         try { return File.Exists(_stateFile) ? JsonSerializer.Deserialize<State>(File.ReadAllText(_stateFile)) ?? new() : new(); }
@@ -51,35 +62,97 @@ internal sealed class BrowserPolicy
         catch (Exception ex) { _log("Site blocking: could not save state: " + ex.Message); }
     }
 
-    /// <summary>Remembers the sites DeviceMon wants blocked. Returns true when the list changed.</summary>
-    internal bool SetReported(List<string> hosts)
+    /// <summary>Remembers what DeviceMon wants. Returns true when anything changed.</summary>
+    internal bool SetReported(List<string> blocked, List<string> allowed, bool allowOnly, bool safe)
     {
-        var next = hosts.OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
-        if (next.SequenceEqual(_state.Reported.OrderBy(h => h, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase)) return false;
-        _state.Reported = next;
+        static List<string> Sorted(IEnumerable<string> x) => x.OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+        var b = Sorted(blocked);
+        var a = Sorted(allowed);
+        var same = b.SequenceEqual(Sorted(_state.Reported), StringComparer.OrdinalIgnoreCase)
+            && a.SequenceEqual(Sorted(_state.ReportedAllowed), StringComparer.OrdinalIgnoreCase)
+            && allowOnly == _state.ReportedAllowOnly && safe == _state.ReportedSafe;
+        if (same) return false;
+        _state.Reported = b;
+        _state.ReportedAllowed = a;
+        _state.ReportedAllowOnly = allowOnly;
+        _state.ReportedSafe = safe;
         Save();
         return true;
     }
 
-    /// <summary>Applies reported plus always-blocked (sealed) sites to every browser's policy.</summary>
-    internal void Apply(IEnumerable<string> sealedAlways)
+    /// <summary>Combines what DeviceMon reported with what the parent sealed, then writes every browser's policy.</summary>
+    internal void Apply(SealedLimits? sealedContent)
     {
-        var hosts = SiteBlocking.NormalizeAll(_state.Reported.Concat(sealedAlways));
+        var plan = SiteBlocking.ComputePlan(_state.Reported, _state.ReportedAllowed, _state.ReportedAllowOnly,
+            _state.ReportedSafe, sealedContent);
         using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-        foreach (var (path, firefox) in Targets)
+        foreach (var target in Targets)
         {
-            try
-            {
-                var desired = firefox ? SiteBlocking.FirefoxEntries(hosts) : SiteBlocking.ChromiumEntries(hosts);
-                var current = ReadValues(machine, path);
-                var previous = _state.Owned.GetValueOrDefault(path) ?? new List<string>();
-                var final = SiteBlocking.Merge(current, previous, desired);
-                if (!final.SequenceEqual(current, StringComparer.OrdinalIgnoreCase)) Write(machine, path, final);
-                _state.Owned[path] = desired;
-            }
-            catch (Exception ex) { _log($"Site blocking: could not update {path}: {ex.Message}"); }
+            // Each part has its own try so one failure cannot stop the others, and a failed
+            // safe-browsing change is retried on the next pass instead of being forgotten.
+            try { ApplyList(machine, target, target.BlockKey, BlockEntries(target, plan)); }
+            catch (Exception ex) { _log($"Site blocking: could not update the block list in {target.Root}: {ex.Message}"); }
+            try { ApplyList(machine, target, target.AllowKey, AllowEntries(target, plan)); }
+            catch (Exception ex) { _log($"Site blocking: could not update the allow list in {target.Root}: {ex.Message}"); }
+            try { ApplySafe(machine, target, plan.SafeBrowsing); }
+            catch (Exception ex) { _log($"Site blocking: could not update safe browsing in {target.Root}: {ex.Message}"); }
         }
         Save();
+    }
+
+    private static List<string> BlockEntries(Target target, PolicyPlan plan)
+    {
+        var entries = target.Firefox ? SiteBlocking.FirefoxEntries(plan.BlockHosts) : SiteBlocking.ChromiumEntries(plan.BlockHosts);
+        if (plan.AllowOnly) entries.Insert(0, target.Firefox ? "<all_urls>" : "*");
+        return entries;
+    }
+
+    private static List<string> AllowEntries(Target target, PolicyPlan plan)
+    {
+        if (!plan.AllowOnly) return new();
+        // The dashboard on this PC and the browser's own pages must keep working.
+        var local = new[] { "localhost", "127.0.0.1", "[::1]", Environment.MachineName.ToLowerInvariant() };
+        if (target.Firefox) return SiteBlocking.FirefoxEntries(plan.AllowHosts.Concat(local)).ToList();
+        return plan.AllowHosts.Concat(local).Concat(new[] { target.InternalPages, "about:*" }).ToList();
+    }
+
+    private void ApplyList(RegistryKey machine, Target target, string listName, List<string> desired)
+    {
+        var path = target.Root + "\\" + listName;
+        var current = ReadValues(machine, path);
+        var previous = _state.Owned.GetValueOrDefault(path) ?? new List<string>();
+        var final = SiteBlocking.Merge(current, previous, desired);
+        if (!final.SequenceEqual(current, StringComparer.OrdinalIgnoreCase)) Write(machine, path, final);
+        _state.Owned[path] = desired;
+    }
+
+    private void ApplySafe(RegistryKey machine, Target target, bool on)
+    {
+        if (target.Safe.Length == 0) return;
+        if (on)
+        {
+            using var key = machine.CreateSubKey(target.Root, writable: true)!;
+            foreach (var (name, value) in target.Safe)
+            {
+                var id = target.Root + "|" + name;
+                if (!_state.SafeOriginals.ContainsKey(id)) _state.SafeOriginals[id] = key.GetValue(name) is int before ? before : null;
+                key.SetValue(name, value, RegistryValueKind.DWord);
+            }
+            return;
+        }
+
+        // Off: put back what was there before (or remove ours). An entry is forgotten only after it worked.
+        foreach (var id in _state.SafeOriginals.Keys.Where(k => k.StartsWith(target.Root + "|", StringComparison.Ordinal)).ToList())
+        {
+            var name = id[(target.Root.Length + 1)..];
+            using var key = machine.OpenSubKey(target.Root, writable: true);
+            if (key != null)
+            {
+                if (_state.SafeOriginals[id] is int original) key.SetValue(name, original, RegistryValueKind.DWord);
+                else key.DeleteValue(name, throwOnMissingValue: false);
+            }
+            _state.SafeOriginals.Remove(id);
+        }
     }
 
     private static List<string> ReadValues(RegistryKey machine, string path)

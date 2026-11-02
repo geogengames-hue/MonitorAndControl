@@ -37,7 +37,7 @@ async function loadSiteLimits() {
     rules.forEach(rule => {
       const row = body.insertRow();
       row.insertCell().textContent = rule.host;
-      row.insertCell().textContent = rule.dailyMaxMinutes === 0 ? t('Always blocked') : t('{n} min/day', { n: rule.dailyMaxMinutes });
+      row.insertCell().textContent = rule.dailyMaxMinutes === 0 ? t('Always blocked') : rule.dailyMaxMinutes < 0 ? t('Always allowed') : t('{n} min/day', { n: rule.dailyMaxMinutes });
       row.insertCell().textContent = siteDuration(rule.usedSeconds);
       row.insertCell().textContent = !rule.enabled ? t('Off') : rule.blocked ? t('Blocked') : t('Allowed');
       const actions = row.insertCell();
@@ -47,7 +47,9 @@ async function loadSiteLimits() {
       edit.title = t('Load this rule into the form below.');
       edit.addEventListener('click', () => {
         siteEl('host').value = rule.host;
-        siteEl('minutes').value = rule.dailyMaxMinutes;
+        siteEl('mode').value = rule.dailyMaxMinutes === 0 ? 'block' : rule.dailyMaxMinutes < 0 ? 'allow' : 'limit';
+        if (rule.dailyMaxMinutes > 0) siteEl('minutes').value = rule.dailyMaxMinutes;
+        siteModeChanged();
         siteEl('host').focus();
       });
       const remove = document.createElement('button');
@@ -68,9 +70,10 @@ async function loadSiteLimits() {
 siteEl('save').addEventListener('click', async () => {
   siteMessage('');
   const host = siteEl('host').value.trim();
-  const minutes = Number(siteEl('minutes').value);
+  const mode = siteEl('mode').value;
+  const minutes = mode === 'block' ? 0 : mode === 'allow' ? -1 : Number(siteEl('minutes').value);
   if (!host) { siteMessage(t('Enter a site name such as youtube.com.')); return; }
-  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) { siteMessage(t('Minutes per day must be between 0 (block) and 1440.')); return; }
+  if (mode === 'limit' && (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440)) { siteMessage(t('Minutes per day must be between 1 and 1440.')); return; }
   siteEl('save').disabled = true;
   try {
     await api('/api/site-limits', {
@@ -83,11 +86,41 @@ siteEl('save').addEventListener('click', async () => {
   } catch (error) {
     let text = error.message;
     try { text = JSON.parse(text).error || text; } catch { /* plain text */ }
-    siteMessage(text);
+    siteMessage(t(text));
   } finally { siteEl('save').disabled = false; }
 });
 
-document.querySelectorAll('[data-view="limits"]').forEach(a => a.addEventListener('click', loadSiteLimits));
+function siteModeChanged() { siteEl('minutes').classList.toggle('hidden', siteEl('mode').value !== 'limit'); }
+siteEl('mode').addEventListener('change', siteModeChanged);
+siteModeChanged();
+
+async function loadSiteSettings() {
+  try {
+    const s = await api('/api/site-settings');
+    siteEl('safe').checked = !!s.safeBrowsing;
+    siteEl('allow-only').checked = !!s.allowOnly;
+  } catch { /* shown by the page's other loaders */ }
+}
+async function saveSiteSettings() {
+  siteMessage('');
+  try {
+    await api('/api/site-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ safeBrowsing: siteEl('safe').checked, allowOnly: siteEl('allow-only').checked })
+    });
+  } catch (error) { siteMessage(error.message); await loadSiteSettings(); }
+}
+siteEl('safe').addEventListener('change', saveSiteSettings);
+siteEl('allow-only').addEventListener('change', () => {
+  if (siteEl('allow-only').checked && !confirm(t('Only the sites in the list below will open, and everything else is blocked. Add the sites the child needs first, as Always allowed. Turn it on?'))) {
+    siteEl('allow-only').checked = false;
+    return;
+  }
+  saveSiteSettings();
+});
+
+document.querySelectorAll('[data-view="limits"]').forEach(a => a.addEventListener('click', () => { loadSiteLimits(); loadSiteSettings(); }));
 setInterval(() => {
   if (document.getElementById('view-limits')?.classList.contains('active')) loadSiteLimits();
 }, 15000);

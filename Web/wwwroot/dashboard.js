@@ -612,6 +612,7 @@ async function loadHistory(days) {
     syncHistoryFilters();
     renderHistoryDashboard();
     loadWeeklyReport();
+    loadTimeline();
     loadHistorySites(url.replace('/api/usage/history', '/api/usage/sites/history'));
   } catch (e) { log(e); }
 }
@@ -630,6 +631,45 @@ async function loadHistorySites(url) {
       : `<p>${esc(t('No website time recorded yet. It appears after the browser has been used for a few minutes.'))}</p>`;
   } catch (e) { log(e); }
 }
+
+const TIMELINE_COLORS = ['#e8943a', '#4f9da6', '#9b72cf', '#d9576b', '#6fae5a', '#c9a227', '#5b7fd1', '#b8607f'];
+function timelineColor(name) {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return TIMELINE_COLORS[h % TIMELINE_COLORS.length];
+}
+
+async function loadTimeline() {
+  const body = document.getElementById('timeline-body');
+  const dateInput = document.getElementById('timeline-date');
+  if (!body || !dateInput) return;
+  if (!dateInput.value) {
+    const now = new Date();
+    dateInput.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+  try {
+    const rows = await api('/api/activity/day?date=' + encodeURIComponent(dateInput.value));
+    const byHour = new Map();
+    rows.forEach(r => { if (!byHour.has(r.hour)) byHour.set(r.hour, []); byHour.get(r.hour).push(r); });
+    if (!byHour.size) { body.innerHTML = `<p>${esc(t('No activity was recorded for this day.'))}</p>`; return; }
+    const hours = [...byHour.keys()].sort((a, b) => a - b);
+    body.innerHTML = hours.map(hour => {
+      const items = byHour.get(hour);
+      const apps = items.filter(i => i.kind === 'app').sort((a, b) => b.seconds - a.seconds);
+      const sites = items.filter(i => i.kind === 'site').sort((a, b) => b.seconds - a.seconds);
+      const total = apps.reduce((n, i) => n + i.seconds, 0);
+      const segments = apps.map(i => `<div class="timeline-seg" title="${esc(i.name + ' - ' + formatDuration(i.seconds))}" style="width:${Math.min(100, i.seconds * 100 / 3600)}%;background:${timelineColor(i.name)}"></div>`).join('');
+      const label = apps.slice(0, 3).map(i => `${esc(i.name)} ${esc(formatDuration(i.seconds))}`).join(', ');
+      const webLabel = sites.slice(0, 3).map(i => `${esc(i.name.startsWith('(') ? t(i.name) : i.name)} ${esc(formatDuration(i.seconds))}`).join(', ');
+      return `<div class="timeline-row">
+        <span class="timeline-hour">${String(hour).padStart(2, '0')}:00</span>
+        <div class="timeline-track">${segments}</div>
+        <span class="timeline-text"><b>${esc(formatDuration(total))}</b> ${label}${webLabel ? `<br><small>${esc(t('Websites'))}: ${webLabel}</small>` : ''}</span>
+      </div>`;
+    }).join('');
+  } catch (e) { log(e); }
+}
+document.getElementById('timeline-date')?.addEventListener('change', loadTimeline);
 
 async function loadWeeklyReport() {
   const panel = document.getElementById('weekly-report');

@@ -213,10 +213,8 @@ internal sealed class ScreenTimeService : IDisposable
         try
         {
             var file = LimitsSealStore.Read();
-            var always = LimitsSealStore.Phase(file, DateTimeOffset.UtcNow) != SealPhase.Off && file?.Content != null
-                ? file.Content.Sites.Where(s => s.Enabled && s.Minutes == 0).Select(s => s.Host)
-                : Enumerable.Empty<string>();
-            _sites.Apply(always);
+            var sealedContent = LimitsSealStore.Phase(file, DateTimeOffset.UtcNow) != SealPhase.Off ? file?.Content : null;
+            _sites.Apply(sealedContent);
         }
         catch (Exception ex) { _log("Site blocking could not be applied: " + ex.Message); }
     }
@@ -314,9 +312,10 @@ internal sealed class ScreenTimeService : IDisposable
                 if (request.Command == "set-blocked-sites")
                 {
                     var hosts = SiteBlocking.NormalizeAll(request.BlockedHosts);
-                    if (_sites.SetReported(hosts))
+                    var allowed = SiteBlocking.NormalizeAll(request.AllowedHosts);
+                    if (_sites.SetReported(hosts, allowed, request.AllowOnly, request.SafeBrowsing))
                     {
-                        _log($"Site blocking: {hosts.Count} website(s) blocked in browsers now.");
+                        _log($"Site blocking: {hosts.Count} website(s) blocked, {(request.AllowOnly ? allowed.Count + " allowed (only listed sites may open)" : "all others allowed")}, safe browsing {(request.SafeBrowsing ? "on" : "off")}.");
                         ApplySiteBlocking();
                     }
                     return ScreenTimeReply.Success(new { blocked = hosts.Count });

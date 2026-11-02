@@ -22,6 +22,10 @@ public sealed class ScreenTimeRequest
     public string LimitsJson { get; set; } = "";
     /// <summary>For "set-blocked-sites": the websites to block in browsers right now.</summary>
     public List<string> BlockedHosts { get; set; } = new();
+    /// <summary>With AllowOnly: the sites that may open (everything else is blocked).</summary>
+    public List<string> AllowedHosts { get; set; } = new();
+    public bool AllowOnly { get; set; }
+    public bool SafeBrowsing { get; set; }
     public bool Enabled { get; set; }
     public string TicketId { get; set; } = "";
     /// <summary>Remote PIN for "remote-save". Never logged and never stored in the request history.</summary>

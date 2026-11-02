@@ -10,6 +10,9 @@ public sealed class SealedSite
     public bool Enabled { get; set; }
 }
 
+/// <summary>What the browsers should be told: sites to block, sites to allow (when only listed sites may open) and SafeSearch.</summary>
+public sealed record PolicyPlan(List<string> BlockHosts, List<string> AllowHosts, bool AllowOnly, bool SafeBrowsing);
+
 /// <summary>Shared rules for turning site rules into the block lists that browsers read from Windows policy.</summary>
 public static class SiteBlocking
 {
@@ -35,6 +38,27 @@ public static class SiteBlocking
     public static bool Covers(string ruleHost, string seenHost) =>
         seenHost.Equals(ruleHost, StringComparison.OrdinalIgnoreCase)
         || seenHost.EndsWith("." + ruleHost, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Combines what DeviceMon reports right now (daily allowances used up, switches) with the sealed copy the
+    /// parent approved. The sealed part cannot be cleared by anyone but the parent, whatever DeviceMon reports.
+    /// A site that is blocked is never also allowed (an allow entry would win over the block).
+    /// </summary>
+    public static PolicyPlan ComputePlan(IEnumerable<string> reportedBlocked, IEnumerable<string> reportedAllowed,
+        bool reportedAllowOnly, bool reportedSafe, SealedLimits? sealedContent)
+    {
+        var sealedSites = sealedContent?.Sites ?? new List<SealedSite>();
+        var sealedBlocked = sealedSites.Where(s => s.Enabled && s.Minutes == 0).Select(s => s.Host);
+        var sealedAllowed = sealedSites.Where(s => s.Enabled && s.Minutes != 0).Select(s => s.Host);
+
+        var blocked = NormalizeAll(reportedBlocked.Concat(sealedBlocked));
+        var allowOnly = reportedAllowOnly || sealedContent?.AllowOnly == true;
+        var safe = reportedSafe || sealedContent?.SafeBrowsing == true;
+        var allowed = allowOnly
+            ? NormalizeAll(reportedAllowed.Concat(sealedAllowed)).Where(h => !blocked.Contains(h, StringComparer.OrdinalIgnoreCase)).ToList()
+            : new List<string>();
+        return new PolicyPlan(blocked, allowed, allowOnly, safe);
+    }
 
     /// <summary>Chrome-family browsers: "youtube.com" blocks that site and all its subdomains.</summary>
     public static List<string> ChromiumEntries(IEnumerable<string> hosts) => hosts.ToList();

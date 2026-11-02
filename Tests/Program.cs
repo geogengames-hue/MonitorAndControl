@@ -14,6 +14,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Remote PIN locks out guessing, with doubling lockouts", TestRemotePinLockout),
     ("Remote PIN rejects weak values", TestRemotePinRules),
     ("Weekend limit applies on Saturday and Sunday only", TestWeekendLimit),
+    ("Phone notification settings are validated", TestPushValidation),
+    ("Activity timeline stores foreground time by hour", TestActivityTimeline),
+    ("Browser policy plan combines reports with the sealed copy", TestPolicyPlan),
     ("Review fixes: bedtime kinds, restart dedupe, null-safe seal", TestReviewFixes),
     ("Website limits block outright or after the daily allowance", TestSiteLimitLogic),
     ("Browser block lists keep entries that are not ours", TestBlocklistMerge),
@@ -1415,5 +1418,88 @@ static Task TestReviewFixes()
     var json = "{\"Limits\":null,\"Schedule\":[null],\"Groups\":[{\"Name\":null,\"Members\":null}],\"Sites\":null}";
     var content = System.Text.Json.JsonSerializer.Deserialize<MonitorAndControl.ScreenTime.SealedLimits>(json)!.Normalized();
     AssertTrue(content.IsReasonable() && content.Fingerprint().Length == 64, "Content with missing lists is repaired instead of crashing the service.");
+    return Task.CompletedTask;
+}
+
+static Task TestPolicyPlan()
+{
+    var none = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(new[] { "tiktok.com" }, new[] { "school.example" }, false, false, null);
+    AssertTrue(none.BlockHosts.Single() == "tiktok.com" && none.AllowHosts.Count == 0 && !none.AllowOnly && !none.SafeBrowsing,
+        "Without allow-list mode no site is added to the allow list.");
+
+    var sealedContent = new MonitorAndControl.ScreenTime.SealedLimits { AllowOnly = true, SafeBrowsing = true };
+    sealedContent.Sites.Add(new() { Host = "vip.example", Minutes = 0, Enabled = true });
+    sealedContent.Sites.Add(new() { Host = "school.example", Minutes = -1, Enabled = true });
+    sealedContent.Sites.Add(new() { Host = "games.example", Minutes = 30, Enabled = true });
+    sealedContent.Sites.Add(new() { Host = "off.example", Minutes = -1, Enabled = false });
+    var plan = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(Array.Empty<string>(), Array.Empty<string>(), false, false, sealedContent);
+    AssertTrue(plan.AllowOnly && plan.SafeBrowsing, "The sealed switches hold even if DeviceMon reports them off.");
+    AssertTrue(plan.BlockHosts.SequenceEqual(new[] { "vip.example" }), "A sealed block stays whatever DeviceMon reports.");
+    AssertTrue(plan.AllowHosts.OrderBy(x => x).SequenceEqual(new[] { "games.example", "school.example" }), "Sealed allowed sites are used; switched-off rules are not.");
+
+    var used = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(new[] { "games.example" }, new[] { "school.example" }, true, false, sealedContent);
+    AssertFalse(used.AllowHosts.Contains("games.example"), "A site whose daily allowance is used up is not allowed, so its block wins.");
+    AssertTrue(used.BlockHosts.Contains("games.example") && used.BlockHosts.Contains("vip.example"), "Used-up and sealed blocks are both blocked.");
+
+    var withSeal = new MonitorAndControl.ScreenTime.SealedLimits();
+    var withoutSeal = new MonitorAndControl.ScreenTime.SealedLimits { AllowOnly = true };
+    AssertTrue(withSeal.Fingerprint() != withoutSeal.Fingerprint(), "The seal notices the allow-list switch.");
+
+    var rules = new List<MonitorAndControl.Models.SiteLimit>
+    {
+        new() { Host = "school.example", DailyMaxMinutes = -1, Enabled = true },
+        new() { Host = "games.example", DailyMaxMinutes = 1, Enabled = true }
+    };
+    var usage = new List<MonitorAndControl.Models.SiteUsageRecord> { new() { Host = "games.example", Seconds = 120 } };
+    var status = MonitorAndControl.Services.SiteLimitLogic.Evaluate(rules, usage);
+    AssertFalse(status.Single(x => x.Host == "school.example").Blocked, "An always-allowed site is never blocked.");
+    AssertTrue(MonitorAndControl.Services.SiteLimitLogic.AllowedHosts(status).SequenceEqual(new[] { "school.example" }), "Only sites with time left are allowed.");
+    return Task.CompletedTask;
+}
+
+static async Task TestActivityTimeline()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Timeline-Test-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        await db.RecordUsageBatchAsync(new[]
+        {
+            ("Game", "game.exe", 120, 0), ("Music", "music.exe", 0, 300), ("Chrome", "chrome.exe", 60, 10)
+        }, Array.Empty<(int GroupId, int Seconds)>());
+        await db.RecordUsageBatchAsync(new[] { ("Game", "game.exe", 30, 0) }, Array.Empty<(int GroupId, int Seconds)>());
+        await db.AddSiteUsageAsync(DateTime.Today, new Dictionary<string, long> { ["youtube.com"] = 45 });
+
+        var rows = await db.GetActivityDayAsync(DateTime.Today);
+        var hour = DateTime.Now.Hour;
+        AssertTrue(rows.All(r => r.Hour == hour), "Everything recorded just now falls in the current hour.");
+        AssertTrue(rows.Single(r => r.Kind == "app" && r.Name == "Game").Seconds == 150, "Foreground time adds up per app and hour.");
+        AssertFalse(rows.Any(r => r.Name == "Music"), "Background-only time is not part of what was on screen.");
+        AssertTrue(rows.Single(r => r.Kind == "site" && r.Name == "youtube.com").Seconds == 45, "Website time is stored by hour too.");
+        AssertTrue((await db.GetActivityDayAsync(DateTime.Today.AddDays(-1))).Count == 0, "Other days are empty.");
+        await db.ClearUsageHistoryAsync();
+        AssertTrue((await db.GetActivityDayAsync(DateTime.Today)).Count == 0, "Clearing history clears the timeline.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static Task TestPushValidation()
+{
+    string? V(string provider, string server = "https://ntfy.sh", string topic = "", string token = "", string chat = "") =>
+        MonitorAndControl.Services.PushSender.Validate(provider, server, topic, token, chat);
+    AssertTrue(V("") == null, "Turning notifications off needs nothing else.");
+    AssertTrue(V("ntfy", topic: "family-pc-7f3k9x2q") == null, "A long topic on the default server is fine.");
+    AssertTrue(V("ntfy", topic: "abc") != null, "A short, guessable topic is refused.");
+    AssertTrue(V("ntfy", topic: "has space here") != null && V("ntfy", topic: "bad/topic/name") != null, "A topic with spaces or slashes is refused.");
+    AssertTrue(V("ntfy", server: "http://ntfy.sh", topic: "family-pc-7f3k9x2q") != null, "An unencrypted server address is refused.");
+    AssertTrue(V("ntfy", server: "not a url", topic: "family-pc-7f3k9x2q") != null, "A server that is not an address is refused.");
+    AssertTrue(V("telegram", token: "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw", chat: "-1001234567890") == null, "A well-formed bot token and chat ID are accepted.");
+    AssertTrue(V("telegram", token: "hello", chat: "123") != null && V("telegram", token: "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw", chat: "abc") != null,
+        "A bad token or chat ID is refused.");
+    AssertTrue(V("sms") != null, "An unknown service is refused.");
     return Task.CompletedTask;
 }

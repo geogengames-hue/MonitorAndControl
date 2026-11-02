@@ -36,6 +36,10 @@ public sealed class SealedLimits
     public List<SealedSchedule> Schedule { get; set; } = new();
     public List<SealedGroup> Groups { get; set; } = new();
     public List<SealedSite> Sites { get; set; } = new();
+    /// <summary>Only sites on the allowed list may open.</summary>
+    public bool AllowOnly { get; set; }
+    /// <summary>SafeSearch and YouTube Restricted Mode are forced in the browsers.</summary>
+    public bool SafeBrowsing { get; set; }
 
     /// <summary>Replaces any list that arrived as null, so later code can count and hash the content safely.</summary>
     public SealedLimits Normalized()
@@ -65,6 +69,7 @@ public sealed class SealedLimits
         var lines = Limits.Select(l => $"L|{l.App}|{l.Minutes}|{(l.Enabled ? 1 : 0)}")
             .Concat(Schedule.Select(s => $"S|{s.App}|{s.Day}|{s.Start}|{s.End}|{(s.Enabled ? 1 : 0)}"))
             .Concat(Sites.Select(w => $"W|{w.Host}|{w.Minutes}|{(w.Enabled ? 1 : 0)}"))
+            .Concat(AllowOnly || SafeBrowsing ? new[] { $"P|{(AllowOnly ? 1 : 0)}|{(SafeBrowsing ? 1 : 0)}" } : Array.Empty<string>())
             .Concat(Groups.Select(g => $"G|{g.Name}|{g.Minutes}|{(g.Enabled ? 1 : 0)}|" +
                 string.Join(',', g.Members.OrderBy(m => m, StringComparer.OrdinalIgnoreCase))))
             .OrderBy(x => x, StringComparer.Ordinal);

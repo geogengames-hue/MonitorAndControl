@@ -22,6 +22,7 @@
       <a href="#" title="A record of what the app did, including warnings and errors." data-view="logs">Logs</a>
       <a href="#" title="Notifications, security, updates and other options." data-view="settings">Settings</a>
     </nav>
+    <div id="other-pcs" class="other-pcs hidden"></div>
     <div class="sidebar-foot">
       <span class="sidebar-pulse"></span>
       <div><strong>Control panel</strong><small>Local device</small></div>
@@ -208,6 +209,11 @@
           <div id="history-day-detail"></div>
         </div>
       </div>
+      <div class="history-panel" id="timeline-panel">
+        <h3 title="What was in front on the screen, hour by hour, for the chosen day.">Activity timeline</h3>
+        <input type="date" id="timeline-date" title="Choose the day to look at.">
+        <div id="timeline-body"></div>
+      </div>
       <div class="history-panel weekly-report" id="weekly-report">
         <h3 title="The last 7 days compared with the 7 days before them.">This week vs last week</h3>
         <div id="weekly-summary" class="weekly-summary"></div>
@@ -247,11 +253,20 @@
       </div>
       <h3 class="individual-limits-title" title="Block websites or limit the time per day. Chrome, Edge, Brave and Firefox then show a &quot;blocked by your administrator&quot; page.">Website Limits</h3>
       <p style="font-size:13px;color:#888">Block a site completely or give it a daily time allowance. When a site is blocked, Chrome, Edge, Brave and Firefox show a "blocked by your administrator" page, also in private windows. Needs the GameHost service. Other browsers are not covered.</p>
+      <div class="screen-notice screen-lock">
+        <label title="Force SafeSearch in Google and Bing and YouTube Restricted Mode (strict) in Chrome, Edge and Brave. The child cannot turn it off." class="inline-check"><input type="checkbox" id="site-safe"> Safe browsing: force SafeSearch and YouTube Restricted Mode</label>
+        <label title="Only the sites you add below as Always allowed (or with a daily allowance) can be opened. Everything else is blocked. Use with care and test first." class="inline-check"><input type="checkbox" id="site-allow-only"> Allow-list mode: only the sites listed below can open</label>
+      </div>
       <div class="table-container" id="site-limits-table"></div>
       <div class="add-form">
         <h3>Add / Edit Website Limit</h3>
         <input type="text" id="site-host" title="The site to limit, for example youtube.com. Its subdomains (m.youtube.com, music.youtube.com) are included." placeholder="Site (e.g. youtube.com)" autocomplete="off">
-        <input type="number" id="site-minutes" title="Minutes per day allowed on this site. Enter 0 to block it completely." placeholder="Minutes per day (0 = block)" min="0" max="1440" value="0">
+        <select id="site-mode" title="Block the site, limit it to some minutes a day, or always allow it (used with the allow-list switch above).">
+          <option value="block">Block completely</option>
+          <option value="limit">Limit minutes per day</option>
+          <option value="allow">Always allow</option>
+        </select>
+        <input type="number" id="site-minutes" title="Minutes per day allowed on this site." placeholder="Minutes per day" min="1" max="1440" value="30">
         <button id="site-save" title="Save this website limit.">Save</button>
         <p id="site-message" class="screen-error hidden" role="status"></p>
       </div>
@@ -358,6 +373,38 @@
           <button id="settings-rotate-token" title="Sign out every browser and device. Use it if someone else may have access." class="btn-danger">Rotate Session Token</button>
           <span id="session-result" style="font-size:13px"></span>
         </div>
+        <h3 title="Other PCs">Other PCs</h3>
+        <p style="font-size:12px;color:#888">Add the dashboard address of other PCs you manage. They appear as shortcuts in the sidebar and open that PC's own dashboard (you sign in there separately). No passwords are stored here.</p>
+        <input type="text" id="otherpc-name" title="A short name, for example Anna's PC." placeholder="Name" style="width:160px">
+        <input type="url" id="otherpc-url" title="The full address of that PC's dashboard, for example http://annas-pc:5000." placeholder="http://annas-pc:5000" style="width:260px">
+        <button id="otherpc-add" type="button" title="Add this PC to the sidebar shortcuts." class="btn-secondary">Add PC</button>
+        <span id="otherpc-result" style="font-size:13px"></span>
+        <hr>
+        <h3 title="Get alerts as a notification on your phone. ntfy is an app with no account (you just pick a secret topic name); Telegram needs a bot you create with @BotFather.">Phone notifications</h3>
+        <label title="Get alerts as a notification on your phone. ntfy is an app with no account (you just pick a secret topic name); Telegram needs a bot you create with @BotFather.">Service</label>
+        <select id="push-provider" title="Get alerts as a notification on your phone. ntfy is an app with no account (you just pick a secret topic name); Telegram needs a bot you create with @BotFather.">
+          <option value="">Off</option>
+          <option value="ntfy">ntfy (app, no account)</option>
+          <option value="telegram">Telegram bot</option>
+        </select>
+        <div id="push-ntfy" class="hidden">
+          <label title="The ntfy server. Leave the default unless you run your own.">ntfy server</label>
+          <input type="url" id="push-ntfy-server" title="The ntfy server. Leave the default unless you run your own." value="https://ntfy.sh" style="width:350px">
+          <label title="A secret topic name. Install the ntfy app on your phone and subscribe to the same topic. Anyone who knows it can read your alerts, so make it long and random.">ntfy topic</label>
+          <input type="text" id="push-ntfy-topic" title="A secret topic name. Install the ntfy app on your phone and subscribe to the same topic. Anyone who knows it can read your alerts, so make it long and random." placeholder="e.g. family-pc-7f3k9x2q" autocomplete="off" style="width:350px">
+        </div>
+        <div id="push-telegram" class="hidden">
+          <label title="The token @BotFather gives you when you create a bot.">Bot token</label>
+          <input type="password" id="push-telegram-token" title="The token @BotFather gives you when you create a bot." placeholder="123456789:AA..." autocomplete="new-password" style="width:350px">
+          <label title="Your chat ID. Send a message to your bot, then ask @userinfobot or open the bot's getUpdates page to find it.">Chat ID</label>
+          <input type="text" id="push-telegram-chat" title="Your chat ID. Send a message to your bot, then ask @userinfobot or open the bot's getUpdates page to find it." placeholder="123456789" autocomplete="off" style="width:350px">
+        </div>
+        <div class="settings-row">
+          <button id="push-save" type="button" title="Save the phone notification settings." class="btn-secondary">Save phone notifications</button>
+          <button id="push-test" type="button" title="Send a test notification to your phone." class="btn-secondary">Send test</button>
+          <span id="push-result" style="font-size:13px"></span>
+        </div>
+        <p style="font-size:12px;color:#888">Used for tamper alerts, time requests, lockouts and limit events. Nothing is installed on the child's PC. The topic or token is stored on this PC, so treat it as low-risk: it can only send you messages.</p>
         <label title="A web address that receives a message when a limit is reached, for example Discord or ntfy.sh.">Webhook URL (optional)</label>
         <input type="url" id="set-webhook-url" title="A web address that receives a message when a limit is reached, for example Discord or ntfy.sh." placeholder="https://hooks.example.com/alert" style="width:400px">
         <p style="font-size:12px;color:#666">POST&#8203;ed with JSON when limits are breached. Use Discord webhooks, ntfy.sh, Pushover, or your own endpoint.</p>
@@ -474,6 +521,7 @@
 <script src="dashboard.js"></script>
 <script src="screen-time.js"></script>
 <script src="sites.js"></script>
+<script src="extras.js"></script>
 <script src="help.js"></script>
 </body>
 </html>
