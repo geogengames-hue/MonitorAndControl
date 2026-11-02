@@ -498,3 +498,6 @@ code { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; ba
 .other-pc a { color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .other-pc button { padding: 2px 8px; font-size: 11px; }
 @media (max-width: 900px) { .other-pcs { display: none; } }
+/* Labels inside the phone-notification groups are not direct children of the panel, so style them the same way. */
+#push-ntfy label, #push-telegram label { display: block; margin: 13px 0 4px; color: var(--text-soft); font-size: 12px; font-weight: 600; }
+#push-ntfy input, #push-telegram input { display: block; }

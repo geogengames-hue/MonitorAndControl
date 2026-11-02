@@ -349,6 +349,33 @@ Under **Settings > Phone notifications** choose **ntfy** or **Telegram** to get 
 - Because the topic or token lives on the childs PC, treat it as low-risk: it can only send you messages.
 - **Other PCs** (same page) adds shortcuts to other PCs dashboards in the sidebar. Each opens that PCs own dashboard in a new tab and you sign in there separately. Passwords are deliberately not stored: this PC belongs to the child, so it must not hold the keys to another one.
 
+### Homework mode
+
+One tap for focused time. Under **PC Time > Homework mode** press **Start 60 min** or **Start 120 min** (10 to 240 minutes in total). While it is on:
+
+- the apps you listed under **Limits > Homework mode** are **closed** (and closed again if the child reopens them), and
+- **only the websites you allow** (marked **Always allow**, or with time left on a daily allowance) can be opened in Chrome, Edge, Brave and Firefox, the same way as allow-list mode, so add the school sites first. If none are allowed, every website is blocked, and the page warns you.
+
+The child sees a message when it starts. It ends by itself, and **ending it early needs your approval** (Windows prompt on the PC, remote PIN from another device), because that grants freedom. Starting needs none. The end time is kept by the SYSTEM service, so closing DeviceMon or editing its database does not cancel it. The list of homework apps is part of **Protect limits**. **Limits of this:** the end time uses the PC clock, so it relies on Windows letting only administrators change the system time (the default); apps are closed on DeviceMon's next check (a few seconds), not instantly; and, like bedtime, anything based on the local clock can be shifted by changing the time zone.
+
+### Alerts that link to the dashboard, and new-program alerts
+
+- **Phone alerts open the right page.** ntfy alerts have an **Open dashboard** button and a tap-to-open link; Telegram alerts end with the link. A time request opens PC Time, a new program opens Limits, tampering opens Logs. The link uses `http://<this PC>:<port>` when the remote dashboard is on; set **Dashboard address for links** (Settings > Phone notifications) to the address your phone really uses, for example `http://192.168.1.20:5000`. Your phone must be able to reach the dashboard, on the home network or over a VPN.
+- **New programs:** every few hours DeviceMon scans for installed programs and games and tells you about new ones (by email and phone) so you hear about them before they are used. The first scan only records what is installed. Turn it off with **Alert me when a new program is installed**.
+
+### Limits for one account
+
+The app limits on the **Limits** page add up everyone's time on the PC (a shared total). Under **Limits for one account** you can set a limit that counts **one Windows account's own time**, so two children sharing a PC can each have their own allowance (for example Minecraft 30 minutes for Anna and 90 for Ben).
+
+- Each signed-in account runs its own DeviceMon, which records that account's time and closes the app **in its own session only**. A limit for one account never affects another account.
+- An account limit applies **on top of** a shared limit for the same app; the stricter one wins. Bonus time for an app applies to both.
+- Account limits are part of **Protect limits**. Today only **app limits** can be set per account: groups, the schedule, website rules and homework mode still apply to everyone, and account limits are not yet part of the config export.
+- Needs the GameHost service to list the Windows accounts. Time recorded before this feature counts only toward shared limits.
+
+### Showing the child how much time is left
+
+Turn on **Settings > Show the child how much time is left (taskbar icon)** and the child's own session shows a small icon in the Windows taskbar. **Hover** for a one-line summary (PC time left, bedtime, homework mode, the app with the least time) and **click** for the details of every limit that applies to that account. It is **off by default**, because it makes DeviceMon visible; everything else stays quiet. It refreshes every 30 seconds, and it is only informational: the child cannot change anything with it.
+
 ### Weekly trend report
 
 The **History** page has a **This week vs last week** panel: bars per day for the last 7 days against the same days a week earlier, plus the top apps with their change. The summary email ends with the same comparison.

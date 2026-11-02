@@ -45,6 +45,14 @@
         <button type="button" id="screen-lock" title="Lock the selected account now for the number of minutes shown." class="btn-secondary">Lock now</button>
         <button type="button" id="screen-unlock" title="End the lock early so the account can be used again." class="btn-secondary hidden">Unlock now</button>
       </div>
+      <div id="screen-homework-panel" class="screen-notice screen-lock" title="Homework mode: for a set time the apps you listed on the Limits page are closed and only the websites you allow can be opened (marked Always allow, or with time left on a daily allowance). Ending it early needs your approval.">
+        <strong>Homework mode</strong>
+        <span id="screen-homework-status"></span>
+        <button type="button" id="screen-homework-60" title="Close the homework-blocked apps and allow only your allowed websites for 60 minutes." class="btn-secondary">Start 60 min</button>
+        <button type="button" id="screen-homework-120" title="Close the homework-blocked apps and allow only your allowed websites for 120 minutes." class="btn-secondary">Start 120 min</button>
+        <button type="button" id="screen-homework-stop" title="End homework mode now. Needs your approval." class="btn-secondary hidden">Stop homework mode</button>
+        <small id="screen-homework-hint" class="hidden"></small>
+      </div>
       <div id="screen-limits-panel" class="screen-notice screen-lock" title="Protect the app limits, schedule and groups so they can only be changed after you approve it (Windows prompt on the PC, remote PIN from another device).">
         <strong>Protect limits</strong>
         <span id="screen-limits-status"></span>
@@ -251,6 +259,18 @@
         <button id="limit-save" title="Save this limit.">Save</button>
         <button id="limit-cancel" title="Stop editing and discard the changes." class="btn-secondary hidden">Cancel</button>
       </div>
+      <h3 class="individual-limits-title" title="App limits that count only one Windows account's own time, so each child can have their own allowance.">Limits for one account</h3>
+      <p style="font-size:13px;color:#888">The limits above add up everyone's time on this PC. A limit here counts only one Windows account's own time, so two children can each have their own allowance. It applies on top of the shared limits. Groups, the schedule, website rules and homework mode still apply to everyone.</p>
+      <div class="table-container" id="user-limits-table"></div>
+      <div class="add-form">
+        <h3>Add / Edit Account Limit</h3>
+        <select id="ul-account" title="The Windows account this limit applies to."></select>
+        <input type="text" id="ul-app" list="ul-app-list" title="The app to limit, as shown in your tracked apps." placeholder="App name (e.g. Minecraft)" autocomplete="off">
+        <datalist id="ul-app-list"></datalist>
+        <input type="number" id="ul-minutes" title="Minutes per day this account may use the app." placeholder="Minutes per day" min="1" max="1440" value="60">
+        <button id="ul-save" title="Save this account limit.">Save</button>
+        <p id="ul-message" class="screen-error hidden" role="status"></p>
+      </div>
       <h3 class="individual-limits-title" title="Block websites or limit the time per day. Chrome, Edge, Brave and Firefox then show a &quot;blocked by your administrator&quot; page.">Website Limits</h3>
       <p style="font-size:13px;color:#888">Block a site completely or give it a daily time allowance. When a site is blocked, Chrome, Edge, Brave and Firefox show a "blocked by your administrator" page, also in private windows. Needs the GameHost service. Other browsers are not covered.</p>
       <div class="screen-notice screen-lock">
@@ -269,6 +289,15 @@
         <input type="number" id="site-minutes" title="Minutes per day allowed on this site." placeholder="Minutes per day" min="1" max="1440" value="30">
         <button id="site-save" title="Save this website limit.">Save</button>
         <p id="site-message" class="screen-error hidden" role="status"></p>
+      </div>
+      <h3 class="individual-limits-title" title="Apps that are closed while homework mode is on (start it under PC Time).">Homework mode</h3>
+      <p style="font-size:13px;color:#888">Apps listed here are closed while homework mode is on (start it under PC Time). During homework mode only your allowed websites (Always allow, or with time left on a daily allowance) can be opened.</p>
+      <div class="table-container" id="homework-apps"></div>
+      <div class="add-form">
+        <input type="text" id="homework-app" list="homework-app-list" title="The name of an app to close during homework mode, as shown in your tracked apps." placeholder="App name (e.g. Minecraft)" autocomplete="off">
+        <datalist id="homework-app-list"></datalist>
+        <button id="homework-add" title="Close this app during homework mode.">Add app</button>
+        <p id="homework-message" class="screen-error hidden" role="status"></p>
       </div>
     </div>
     <div id="view-discover" class="view">
@@ -343,6 +372,9 @@
         <label title="Start this app automatically when Windows starts." style="display:flex;align-items:center;gap:8px;margin-top:5px">
           <input type="checkbox" id="set-auto-start" style="width:auto"> Auto-start with Windows
         </label>
+        <label title="Show the child a small icon in the Windows taskbar with how much PC time and app time is left today. Hover for a summary, click for details." style="display:flex;align-items:center;gap:8px;margin-top:5px">
+          <input type="checkbox" id="child-show-time-left" style="width:auto"> Show the child how much time is left (taskbar icon)
+        </label>
         <label title="Stop counting time while nobody is using the keyboard or mouse." style="display:flex;align-items:center;gap:8px;margin-top:12px">
           <input type="checkbox" id="set-pause-idle" style="width:auto"> Pause all usage tracking when idle
         </label>
@@ -405,6 +437,9 @@
           <button id="push-test" type="button" title="Send a test notification to your phone." class="btn-secondary">Send test</button>
           <span id="push-result" style="font-size:13px"></span>
         </div>
+        <label title="The address your phone uses to reach this dashboard, for example http://192.168.1.20:5000. Alerts link to it. Leave empty to use this PC's name.">Dashboard address for links (optional)</label>
+        <input type="url" id="push-dashboard-url" title="The address your phone uses to reach this dashboard, for example http://192.168.1.20:5000. Alerts link to it. Leave empty to use this PC's name." placeholder="http://192.168.1.20:5000" style="width:350px">
+        <label title="Get an alert when a new program or game is installed on this PC." class="inline-check"><input type="checkbox" id="push-new-apps"> Alert me when a new program is installed</label>
         <p style="font-size:12px;color:#888">Used for tamper alerts, time requests, lockouts and limit events. Nothing is installed on the child's PC. The topic or token is stored on this PC, so treat it as low-risk: it can only send you messages.</p>
         <label title="A web address that receives a message when a limit is reached, for example Discord or ntfy.sh.">Webhook URL (optional)</label>
         <input type="url" id="set-webhook-url" title="A web address that receives a message when a limit is reached, for example Discord or ntfy.sh." placeholder="https://hooks.example.com/alert" style="width:400px">

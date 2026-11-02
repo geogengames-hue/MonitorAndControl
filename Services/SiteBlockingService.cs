@@ -39,8 +39,10 @@ public sealed class SiteBlockingService : IDisposable
             var blocked = SiteLimitLogic.BlockedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
             var allowOnly = await _db.GetSettingAsync("SiteAllowOnly", "false") == "true";
             var safe = await _db.GetSettingAsync("SafeBrowsing", "false") == "true";
-            var allowed = allowOnly ? SiteLimitLogic.AllowedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList() : new List<string>();
-            var key = string.Join('|', blocked) + "#" + string.Join('|', allowed) + $"#{allowOnly}#{safe}";
+            var homework = HomeworkState.IsActiveNow();
+            // Always sent (the service only uses it in allow-list or homework mode), so a new session starts with it already there.
+            var allowed = SiteLimitLogic.AllowedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+            var key = string.Join('|', blocked) + "#" + string.Join('|', allowed) + $"#{allowOnly}#{safe}#{homework}";
             if (key == _lastSent && DateTime.UtcNow - _lastSentAt < Refresh) return;
 
             var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "set-blocked-sites", BlockedHosts = blocked, AllowedHosts = allowed, AllowOnly = allowOnly, SafeBrowsing = safe }, CancellationToken.None);

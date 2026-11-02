@@ -143,6 +143,7 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     _log($"Screen-time policy changed through the remote PIN (requested by {callerSid}).");
                 }
                 return remote;
+            case "homework-start":
             case "set-blocked-sites":
             case "limits-seal":
             case "limits-close":

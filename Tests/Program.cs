@@ -14,6 +14,13 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Remote PIN locks out guessing, with doubling lockouts", TestRemotePinLockout),
     ("Remote PIN rejects weak values", TestRemotePinRules),
     ("Weekend limit applies on Saturday and Sunday only", TestWeekendLimit),
+    ("Account usage ignores capitals in the app name", TestAccountUsageCase),
+    ("A claimed job runs in one account at a time", TestLeaseClaim),
+    ("The time-left view reads clearly", TestTimeLeftView),
+    ("App limits can belong to one Windows account", TestPerAccountLimits),
+    ("Homework mode times, plan and sealed apps", TestHomeworkMode),
+    ("New programs are found once and described briefly", TestNewApps),
+    ("Alerts link to the right dashboard page", TestPushLinks),
     ("Phone notification settings are validated", TestPushValidation),
     ("Activity timeline stores foreground time by hour", TestActivityTimeline),
     ("Browser policy plan combines reports with the sealed copy", TestPolicyPlan),
@@ -1502,4 +1509,183 @@ static Task TestPushValidation()
         "A bad token or chat ID is refused.");
     AssertTrue(V("sms") != null, "An unknown service is refused.");
     return Task.CompletedTask;
+}
+
+static async Task TestHomeworkMode()
+{
+    var now = new DateTimeOffset(2026, 11, 9, 16, 0, 0, TimeSpan.Zero);
+    AssertFalse(MonitorAndControl.ScreenTime.HomeworkState.IsActive(null, now), "No file means no homework mode.");
+    var shortRun = MonitorAndControl.ScreenTime.HomeworkState.Start(1, now);
+    AssertTrue(shortRun.UntilUtc == now.AddMinutes(10), "A very short time is raised to the minimum.");
+    AssertTrue(MonitorAndControl.ScreenTime.HomeworkState.Start(9999, now).UntilUtc == now.AddMinutes(240), "A very long time is capped at four hours.");
+    var run = MonitorAndControl.ScreenTime.HomeworkState.Start(60, now);
+    AssertTrue(MonitorAndControl.ScreenTime.HomeworkState.IsActive(run, now.AddMinutes(59)), "It is on until the end time.");
+    AssertFalse(MonitorAndControl.ScreenTime.HomeworkState.IsActive(run, now.AddMinutes(60)), "It ends by itself.");
+
+    var plain = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(Array.Empty<string>(), new[] { "school.example" }, false, false, null);
+    AssertFalse(plain.AllowOnly, "Without homework mode nothing changes.");
+    var homework = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(Array.Empty<string>(), new[] { "school.example" }, false, false, null, homework: true);
+    AssertTrue(homework.AllowOnly && homework.AllowHosts.Single() == "school.example", "Homework mode allows only the listed sites.");
+
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Homework-Test-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        await db.SetHomeworkAppsAsync(new[] { "Minecraft", "minecraft", "Roblox" });
+        var apps = await db.GetHomeworkAppsAsync();
+        AssertTrue(apps.Count == 2, "The same app is listed once, whatever its capitals.");
+        var sealedContent = await db.ReadLimitsSnapshotAsync();
+        var fingerprint = sealedContent.Fingerprint();
+        AssertTrue(sealedContent.HomeworkApps.Count == 2, "The homework apps are part of the sealed snapshot.");
+        await db.SetHomeworkAppsAsync(Array.Empty<string>());
+        AssertTrue((await db.ReadLimitsSnapshotAsync()).Fingerprint() != fingerprint, "Emptying the list changes the fingerprint.");
+        await db.ApplyLimitsSnapshotAsync(sealedContent);
+        AssertTrue((await db.GetHomeworkAppsAsync()).Count == 2, "The sealed list is restored.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static Task TestNewApps()
+{
+    var installed = new List<(string Key, string Name)> { ("steam.exe", "Steam"), ("discord.exe", "Discord"), ("DISCORD.EXE", "Discord"), ("", "No key") };
+    var added = MonitorAndControl.Services.NewAppWatcher.FindNew(installed, new[] { "Steam.exe" });
+    AssertTrue(added.Count == 1 && added[0].Name == "Discord", "Only programs not seen before are new, once each, ignoring case.");
+    AssertTrue(MonitorAndControl.Services.NewAppWatcher.FindNew(installed, new[] { "steam.exe", "discord.exe" }).Count == 0, "Nothing new means no alert.");
+    var many = Enumerable.Range(1, 12).Select(i => ($"app{i}.exe", $"App {i}")).ToList();
+    var text = MonitorAndControl.Services.NewAppWatcher.Describe(many);
+    AssertTrue(text.Contains("App 1,") && text.Contains("and 4 more") && !text.Contains("App 9"), "A long list is shortened.");
+    AssertTrue(MonitorAndControl.Services.NewAppWatcher.Describe(new[] { ("x.exe", "") }).Contains("x.exe"), "An app without a display name falls back to its file name.");
+    return Task.CompletedTask;
+}
+
+static Task TestPushLinks()
+{
+    AssertTrue(MonitorAndControl.Services.PushSender.BuildLink("http://pc:5000", "screen-time") == "http://pc:5000/index.html#screen-time", "The link points at the dashboard page.");
+    AssertTrue(MonitorAndControl.Services.PushSender.BuildLink("https://home.example.com/monitor/", "limits") == "https://home.example.com/monitor/index.html#limits", "A path prefix behind a reverse proxy is kept.");
+    AssertTrue(MonitorAndControl.Services.PushSender.BuildLink("http://pc:5000/index.html", "live") == "http://pc:5000/index.html#live", "A pasted index.html is not doubled.");
+    AssertTrue(MonitorAndControl.Services.PushSender.BuildLink("http://pc:5000", "../evil") == "http://pc:5000/index.html#live", "An odd page name falls back to the live view.");
+    AssertTrue(MonitorAndControl.Services.PushSender.BuildLink("ftp://pc", "live") == null && MonitorAndControl.Services.PushSender.BuildLink("", "live") == null, "Only http and https addresses are linked.");
+    AssertTrue(MonitorAndControl.Services.PushSender.PageFor("pc_time_request") == "screen-time" && MonitorAndControl.Services.PushSender.PageFor("new_app") == "limits"
+        && MonitorAndControl.Services.PushSender.PageFor("watchdog_restart") == "logs" && MonitorAndControl.Services.PushSender.PageFor("anything") == "live", "Each kind of alert opens a sensible page.");
+    return Task.CompletedTask;
+}
+
+static async Task TestPerAccountLimits()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Account-Test-" + Guid.NewGuid().ToString("N"));
+    const string anna = "S-1-5-21-1-2-3-1001";
+    const string ben = "S-1-5-21-1-2-3-1002";
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        await db.SaveUserLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "Minecraft", UserSid = anna, DailyMaxMinutes = 30, Enabled = true });
+        await db.SaveUserLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "Minecraft", UserSid = ben, DailyMaxMinutes = 90, Enabled = true });
+        await db.SaveUserLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "Minecraft", UserSid = anna, DailyMaxMinutes = 45, Enabled = true });
+        var rules = await db.GetUserLimitRulesAsync();
+        AssertTrue(rules.Count == 2 && rules.Single(r => r.UserSid == anna).DailyMaxMinutes == 45, "Each account has its own rule per app, and saving again updates it.");
+        AssertTrue((await db.GetLimitRulesAsync()).Count == 0, "Account limits do not appear among the shared limits.");
+
+        var none = Array.Empty<(int GroupId, int Seconds)>();
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 600, 0) }, none, anna);
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 120, 0) }, none, ben);
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 60, 0) }, none, anna);
+        var annaUsage = await db.GetUserAppUsageTodayAsync(anna);
+        var benUsage = await db.GetUserAppUsageTodayAsync(ben);
+        AssertTrue(annaUsage["Minecraft"] == 660 && benUsage["Minecraft"] == 120, "Each account's time is counted on its own.");
+        AssertTrue((await db.GetTodayUsageAsync()).Single(u => u.AppName == "Minecraft").TotalSeconds == 780, "The shared total still adds everyone up.");
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 10, 0) }, none);
+        AssertTrue((await db.GetUserAppUsageTodayAsync(anna))["Minecraft"] == 660, "Usage recorded without an account is not credited to anyone.");
+
+        var snapshot = await db.ReadLimitsSnapshotAsync();
+        var fingerprint = snapshot.Fingerprint();
+        AssertTrue(snapshot.UserLimits.Count == 2, "Account limits are part of the sealed snapshot.");
+        await db.DeleteUserLimitRuleAsync("Minecraft", anna);
+        await db.SaveUserLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "Roblox", UserSid = ben, DailyMaxMinutes = 5, Enabled = true });
+        AssertTrue((await db.ReadLimitsSnapshotAsync()).Fingerprint() != fingerprint, "Changing an account limit changes the fingerprint.");
+        await db.ApplyLimitsSnapshotAsync(snapshot);
+        var restored = await db.GetUserLimitRulesAsync();
+        AssertTrue(restored.Count == 2 && restored.Any(r => r.UserSid == anna && r.DailyMaxMinutes == 45) && restored.All(r => r.AppName == "Minecraft"), "The sealed account limits are restored.");
+
+        await db.ClearUsageHistoryAsync();
+        AssertTrue((await db.GetUserAppUsageTodayAsync(anna)).Count == 0, "Clearing history clears each account's usage too.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+    AssertFalse(MonitorAndControl.Services.AccountIdentity.IsValidSid(anna + "\n"), "A trailing new line is not part of a SID.");
+    AssertTrue(MonitorAndControl.Services.AccountIdentity.IsValidSid(anna) && MonitorAndControl.Services.AccountIdentity.IsValidSid("S-1-12-1-111-222-333-444") && !MonitorAndControl.Services.AccountIdentity.IsValidSid("S-1-5-18")
+        && !MonitorAndControl.Services.AccountIdentity.IsValidSid("") && !MonitorAndControl.Services.AccountIdentity.IsValidSid("S-1-5-21-1-2-3-1001'; DROP"),
+        "Only real local account SIDs are accepted.");
+}
+
+static Task TestTimeLeftView()
+{
+    var now = new DateTimeOffset(2026, 11, 9, 16, 0, 0, TimeSpan.Zero);
+    var apps = new[] { ("Minecraft", 2100L, 3600L), ("Roblox", 600L, 600L) };
+    var view = MonitorAndControl.Services.TimeLeftReport.Build(7800, 45, false, null, now.AddMinutes(30), apps, now);
+    AssertTrue(view.Lines.Contains("PC time left today: 2h 10m."), "The PC time left is shown in hours and minutes.");
+    AssertTrue(view.Lines.Contains("Bedtime in 45 minutes."), "Bedtime is announced.");
+    AssertTrue(view.Lines.Any(l => l.StartsWith("Homework mode until")), "Homework mode shows its end time.");
+    AssertTrue(view.Lines.Contains("Minecraft: 25m left of 1h 0m."), "An app shows what is left of its allowance.");
+    AssertTrue(view.Lines.Contains("Roblox: no time left today (used 10m)."), "A used-up app says so.");
+    AssertTrue(view.Lines.IndexOf("Roblox: no time left today (used 10m).") < view.Lines.IndexOf("Minecraft: 25m left of 1h 0m."), "The app with the least time left comes first.");
+    AssertTrue(view.Tooltip.Length <= 120 && view.Tooltip.StartsWith("PC time left 2h 10m"), "The icon tooltip is short and starts with the PC time.");
+
+    var empty = MonitorAndControl.Services.TimeLeftReport.Build(null, null, false, null, null, Array.Empty<(string, long, long)>(), now);
+    AssertTrue(empty.Lines.Single() == "No time limits are set for this account right now." && empty.Tooltip == "No time limits right now", "With nothing set it says so plainly.");
+    var locked = MonitorAndControl.Services.TimeLeftReport.Build(600, null, true, now.AddMinutes(20), null, Array.Empty<(string, long, long)>(), now);
+    AssertTrue(locked.Lines[0].StartsWith("This PC is locked until") && locked.Lines.Contains("It is bedtime."), "A lock and bedtime are shown.");
+    AssertTrue(MonitorAndControl.Services.TimeLeftReport.Duration(30) == "less than a minute" && MonitorAndControl.Services.TimeLeftReport.Duration(3600) == "1h 0m", "Durations read naturally.");
+    return Task.CompletedTask;
+}
+
+static async Task TestLeaseClaim()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Lease-Test-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var first = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        var second = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        AssertTrue(await first.TryClaimLeaseAsync("scan", TimeSpan.FromMinutes(20)), "The first claim wins.");
+        AssertFalse(await second.TryClaimLeaseAsync("scan", TimeSpan.FromMinutes(20)), "A second account cannot take it while it is held.");
+        AssertTrue(await second.TryClaimLeaseAsync("other-job", TimeSpan.FromMinutes(20)), "A different job is independent.");
+        AssertTrue(await first.TryClaimLeaseAsync("short", TimeSpan.FromMilliseconds(1)), "A short claim is granted.");
+        await Task.Delay(50);
+        AssertTrue(await second.TryClaimLeaseAsync("short", TimeSpan.FromMinutes(1)), "An expired claim can be taken by someone else.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static async Task TestAccountUsageCase()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Case-Test-" + Guid.NewGuid().ToString("N"));
+    const string anna = "S-1-5-21-1-2-3-1001";
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        var none = Array.Empty<(int GroupId, int Seconds)>();
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 100, 0) }, none, anna);
+        await db.RecordUsageBatchAsync(new[] { ("minecraft", "minecraft.exe", 50, 0) }, none, anna);
+        var usage = await db.GetUserAppUsageTodayAsync(anna);
+        AssertTrue(usage.Count == 1 && usage["MINECRAFT"] == 150, "The same app in different capitals is one entry whose time adds up.");
+        await db.SaveUserLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "Minecraft", UserSid = anna, DailyMaxMinutes = 30, Enabled = true });
+        await db.SaveUserLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "minecraft", UserSid = anna, DailyMaxMinutes = 45, Enabled = true });
+        AssertTrue((await db.GetUserLimitRulesAsync(anna)).Single().DailyMaxMinutes == 45, "A rule is one per app and account whatever the capitals.");
+        AssertTrue((await db.GetUserLimitRulesAsync("S-1-5-21-9-9-9-9")).Count == 0, "Asking for one account returns only its rules.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
 }

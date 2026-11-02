@@ -46,7 +46,34 @@ public sealed class PushSender
         }
     }
 
-    public async Task<bool> SendAsync(string message)
+    /// <summary>The dashboard page an alert of this kind should open.</summary>
+    public static string PageFor(string eventType) => eventType switch
+    {
+        var e when e.StartsWith("pc_time", StringComparison.Ordinal) || e == "limits_changed" => "screen-time",
+        "new_app" => "limits",
+        "watchdog_restart" or "repeated_close" or "database_missing" or "config_missing" or "clock_changed" or "watchdog_unavailable" => "logs",
+        "login_lockout" => "settings",
+        _ => "live"
+    };
+
+    public static string? BuildLink(string baseUrl, string? page)
+    {
+        if (!Uri.TryCreate((baseUrl ?? "").Trim(), UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) return null;
+        var view = page != null && Regex.IsMatch(page, @"^[a-z-]{1,20}\z") ? page : "live";
+        var prefix = uri.AbsolutePath.TrimEnd('/');
+        if (prefix.EndsWith("/index.html", StringComparison.OrdinalIgnoreCase)) prefix = prefix[..^"/index.html".Length];
+        return uri.GetLeftPart(UriPartial.Authority) + prefix + "/index.html#" + view;
+    }
+
+    private async Task<string?> LinkAsync(string? page)
+    {
+        var custom = (await _db.GetSettingAsync("PublicDashboardUrl", "")).Trim();
+        if (custom.Length > 0) return BuildLink(custom, page);
+        var config = Program.GetConfig();
+        return config.EnableRemoteDashboard ? BuildLink($"http://{Environment.MachineName}:{config.DashboardPort}", page) : null;
+    }
+
+    public async Task<bool> SendAsync(string message, string? page = null)
     {
         try
         {
@@ -58,8 +85,12 @@ public sealed class PushSender
                 var server = (await _db.GetSettingAsync("PushNtfyServer", DefaultNtfyServer)).TrimEnd('/');
                 var topic = await _db.GetSettingAsync("PushNtfyTopic", "");
                 if (Validate("ntfy", server, topic, "", "") != null || await NotificationService.IsBlockedTargetAsync(new Uri(server))) return false;
-                var body = JsonSerializer.Serialize(new { topic, title = "Monitor & Control", message = text, tags = new[] { "shield" } });
-                using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                var link = await LinkAsync(page);
+                object body = link == null
+                    ? new { topic, title = "Monitor & Control", message = text, tags = new[] { "shield" } }
+                    : new { topic, title = "Monitor & Control", message = text, tags = new[] { "shield" }, click = link, actions = new[] { new { action = "view", label = "Open dashboard", url = link } } };
+                var json = JsonSerializer.Serialize(body);
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
                 using var response = await _http.PostAsync(server, content);
                 return response.IsSuccessStatusCode;
             }
@@ -68,7 +99,8 @@ public sealed class PushSender
                 var token = SecretProtector.Unprotect(await _db.GetSettingAsync("PushTelegramToken", ""));
                 var chat = await _db.GetSettingAsync("PushTelegramChatId", "");
                 if (Validate("telegram", "", "", token, chat) != null) return false;
-                var body = JsonSerializer.Serialize(new { chat_id = chat, text });
+                var tgLink = await LinkAsync(page);
+                var body = JsonSerializer.Serialize(new { chat_id = chat, text = tgLink == null ? text : text + "\n" + tgLink });
                 using var content = new StringContent(body, Encoding.UTF8, "application/json");
                 using var response = await _http.PostAsync($"https://api.telegram.org/bot{token}/sendMessage", content);
                 return response.IsSuccessStatusCode;

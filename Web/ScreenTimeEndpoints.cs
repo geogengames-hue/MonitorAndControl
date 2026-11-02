@@ -173,6 +173,11 @@ public static class ScreenTimeEndpoints
                         Raise($"The app limits were opened for editing for {request.LimitsMinutes} min remotely from {source}.", true);
                         return Results.Json(reply.Data);
                     }
+                    if (request.Operation == "homework-stop")
+                    {
+                        Raise($"Homework mode was ended early remotely from {source}.", true);
+                        return Results.Json(reply.Data);
+                    }
                     if (request.Operation == "limits-clear")
                     {
                         Raise($"The protection of the app limits was removed remotely from {source}.", true);

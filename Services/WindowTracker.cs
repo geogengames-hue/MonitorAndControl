@@ -378,7 +378,8 @@ public class WindowTracker : IDisposable
 
         foreach (var process in processes)
         {
-            try { running.Add(process.ProcessName); }
+            // Each signed-in account has its own DeviceMon; another account's copy of an app is not ours.
+            try { if (process.SessionId == AccountIdentity.SessionId) running.Add(process.ProcessName); }
             catch { }
             finally { process.Dispose(); }
         }

@@ -187,7 +187,8 @@ form.addEventListener('submit', async event => {
     }
 
     await response.json();
-    window.location.replace('/index.html');
+    // Keep the part after # so a link from a phone alert still opens the page it points to.
+    window.location.replace('/index.html' + window.location.hash);
   } finally {
     button.disabled = false;
   }

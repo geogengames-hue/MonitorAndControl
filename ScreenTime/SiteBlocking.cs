@@ -45,14 +45,15 @@ public static class SiteBlocking
     /// A site that is blocked is never also allowed (an allow entry would win over the block).
     /// </summary>
     public static PolicyPlan ComputePlan(IEnumerable<string> reportedBlocked, IEnumerable<string> reportedAllowed,
-        bool reportedAllowOnly, bool reportedSafe, SealedLimits? sealedContent)
+        bool reportedAllowOnly, bool reportedSafe, SealedLimits? sealedContent, bool homework = false)
     {
         var sealedSites = sealedContent?.Sites ?? new List<SealedSite>();
         var sealedBlocked = sealedSites.Where(s => s.Enabled && s.Minutes == 0).Select(s => s.Host);
         var sealedAllowed = sealedSites.Where(s => s.Enabled && s.Minutes != 0).Select(s => s.Host);
 
         var blocked = NormalizeAll(reportedBlocked.Concat(sealedBlocked));
-        var allowOnly = reportedAllowOnly || sealedContent?.AllowOnly == true;
+        // Homework mode behaves like allow-list mode for as long as it lasts.
+        var allowOnly = reportedAllowOnly || sealedContent?.AllowOnly == true || homework;
         var safe = reportedSafe || sealedContent?.SafeBrowsing == true;
         var allowed = allowOnly
             ? NormalizeAll(reportedAllowed.Concat(sealedAllowed)).Where(h => !blocked.Contains(h, StringComparer.OrdinalIgnoreCase)).ToList()

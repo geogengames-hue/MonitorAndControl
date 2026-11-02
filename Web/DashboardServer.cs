@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using MonitorAndControl.Data;
 using MonitorAndControl.Models;
 using MonitorAndControl.Services;
+using MonitorAndControl.ScreenTime;
 
 namespace MonitorAndControl.Web;
 
@@ -286,6 +287,65 @@ public class DashboardServer
             var rules = await db.GetSiteLimitsAsync();
             var usage = rules.Count == 0 ? new List<SiteUsageRecord>() : await db.GetSiteUsageRangeAsync(DateTime.Today, DateTime.Today);
             return Results.Json(SiteLimitLogic.Evaluate(rules, usage), JsonOpts);
+        });
+
+        // Whether the child's own session shows a "time left" tray icon.
+        app.MapGet("/api/child-view", async () => Results.Json(new
+        {
+            showTimeLeft = await db.GetSettingAsync("ShowTimeLeft", "false") == "true"
+        }, JsonOpts));
+
+        app.MapPost("/api/child-view", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            if (doc == null || !doc.RootElement.TryGetProperty("showTimeLeft", out var v) || v.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                return Results.BadRequest(new { error = "Invalid request." });
+            await db.SetSettingAsync("ShowTimeLeft", v.GetBoolean() ? "true" : "false");
+            return Results.Ok();
+        });
+
+        // App limits that apply to one Windows account only, counted from that account's own usage.
+        app.MapGet("/api/user-limits", async () =>
+        {
+            var rules = await db.GetUserLimitRulesAsync();
+            var used = new Dictionary<string, Dictionary<string, long>>();
+            foreach (var sid in rules.Select(r => r.UserSid).Distinct())
+                used[sid] = await db.GetUserAppUsageTodayAsync(sid);
+            return Results.Json(rules.Select(r => new
+            {
+                r.AppName, r.UserSid, r.DailyMaxMinutes, r.Enabled,
+                usedSeconds = used[r.UserSid].TryGetValue(r.AppName, out var s) ? s : 0
+            }), JsonOpts);
+        });
+
+        app.MapPost("/api/user-limits", async (HttpContext ctx, AppLimitRule limit) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            limit.AppName = Clean(limit.AppName);
+            if (!IsValidAppName(limit.AppName) || limit.DailyMaxMinutes is < 1 or > 1440)
+                return Results.BadRequest(new { error = "Limit must have a valid app name and 1-1440 minutes." });
+            if (!AccountIdentity.IsValidSid(limit.UserSid))
+                return Results.BadRequest(new { error = "Choose a Windows account." });
+            if ((await db.GetUserLimitRulesAsync()).Count >= 300)
+                return Results.BadRequest(new { error = "Too many account limits." });
+            enforcer.ClearExceeded(limit.AppName);
+            await db.SaveUserLimitRuleAsync(limit);
+            return Results.Ok();
+        });
+
+        app.MapDelete("/api/user-limits/{appName}/{userSid}", async (HttpContext ctx, string appName, string userSid) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            appName = Clean(appName);
+            if (!IsValidAppName(appName) || !AccountIdentity.IsValidSid(userSid))
+                return Results.BadRequest(new { error = "Invalid request." });
+            enforcer.ClearExceeded(appName);
+            await db.DeleteUserLimitRuleAsync(appName, userSid);
+            return Results.Ok();
         });
 
         // Browser-wide switches: only listed sites may open, and forced SafeSearch / YouTube Restricted Mode.
@@ -1027,6 +1087,79 @@ public class DashboardServer
             return Results.Ok();
         });
 
+        // Homework mode: the apps closed while it is on, and starting it. Ending it early needs the parent's approval (PC Time page).
+        app.MapGet("/api/homework", async () =>
+        {
+            var state = HomeworkState.Read();
+            var active = HomeworkState.IsActive(state, DateTimeOffset.UtcNow);
+            var allowedSites = (await db.GetSiteLimitsAsync()).Count(r => r.Enabled && r.DailyMaxMinutes != 0);
+            return Results.Json(new { active, untilUtc = active ? state!.UntilUtc : null, apps = await db.GetHomeworkAppsAsync(), allowedSites }, JsonOpts);
+        });
+
+        app.MapPost("/api/homework/apps", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            if (doc == null || !doc.RootElement.TryGetProperty("apps", out var list) || list.ValueKind != JsonValueKind.Array)
+                return Results.BadRequest(new { error = "Invalid request." });
+            var apps = list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => Clean(e.GetString()))
+                .Where(a => a.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(100).ToList();
+            if (apps.Any(a => !IsValidAppName(a))) return Results.BadRequest(new { error = "One of the app names is not valid." });
+            await db.SetHomeworkAppsAsync(apps);
+            return Results.Ok();
+        });
+
+        app.MapPost("/api/homework/apps/add", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            var name = doc != null && doc.RootElement.TryGetProperty("app", out var a) && a.ValueKind == JsonValueKind.String ? Clean(a.GetString()) : "";
+            if (!IsValidAppName(name)) return Results.BadRequest(new { error = "The app name is not valid." });
+            await _homeworkAppsGate.WaitAsync();
+            try
+            {
+                var apps = await db.GetHomeworkAppsAsync();
+                if (apps.Count >= 100) return Results.BadRequest(new { error = "Up to 100 apps." });
+                if (!apps.Any(x => x.Equals(name, StringComparison.OrdinalIgnoreCase))) { apps.Add(name); await db.SetHomeworkAppsAsync(apps); }
+            }
+            finally { _homeworkAppsGate.Release(); }
+            return Results.Ok();
+        });
+
+        app.MapDelete("/api/homework/apps/{name}", async (HttpContext ctx, string name) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            name = Clean(name);
+            await _homeworkAppsGate.WaitAsync();
+            try
+            {
+                var apps = await db.GetHomeworkAppsAsync();
+                apps.RemoveAll(x => x.Equals(name, StringComparison.OrdinalIgnoreCase));
+                await db.SetHomeworkAppsAsync(apps);
+            }
+            finally { _homeworkAppsGate.Release(); }
+            return Results.Ok();
+        });
+
+        app.MapPost("/api/homework/start", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            if (doc == null || !doc.RootElement.TryGetProperty("minutes", out var m) || m.ValueKind != JsonValueKind.Number || !m.TryGetInt32(out var minutes)
+                || minutes < HomeworkState.MinMinutes || minutes > HomeworkState.MaxMinutes)
+                return Results.BadRequest(new { error = "Choose between 10 and 240 minutes." });
+            try
+            {
+                var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "homework-start", HomeworkMinutes = minutes }, ctx.RequestAborted);
+                return reply.Ok ? Results.Json(reply.Data) : Results.Json(new { error = reply.Error }, statusCode: 400);
+            }
+            catch { return Results.Json(new { error = "The screen-time service is unavailable." }, statusCode: 503); }
+        });
+
         // Phone notifications (ntfy or Telegram). The Telegram token is stored protected and never sent back.
         app.MapGet("/api/settings/push", async () => Results.Json(new
         {
@@ -1034,7 +1167,9 @@ public class DashboardServer
             ntfyServer = await db.GetSettingAsync("PushNtfyServer", PushSender.DefaultNtfyServer),
             ntfyTopic = await db.GetSettingAsync("PushNtfyTopic", ""),
             telegramChatId = await db.GetSettingAsync("PushTelegramChatId", ""),
-            telegramTokenSet = !string.IsNullOrEmpty(await db.GetSettingAsync("PushTelegramToken", ""))
+            telegramTokenSet = !string.IsNullOrEmpty(await db.GetSettingAsync("PushTelegramToken", "")),
+            dashboardUrl = await db.GetSettingAsync("PublicDashboardUrl", ""),
+            newAppAlerts = await db.GetSettingAsync("NewAppAlertsEnabled", "true") == "true"
         }, JsonOpts));
 
         app.MapPost("/api/settings/push", async (HttpContext ctx) =>
@@ -1055,11 +1190,18 @@ public class DashboardServer
                 token = SecretProtector.Unprotect(await db.GetSettingAsync("PushTelegramToken", ""));
             var problem = PushSender.Validate(provider, server, topic, token, chat);
             if (problem != null) return Results.BadRequest(new { error = problem });
+            var hasDashboardUrl = root.TryGetProperty("dashboardUrl", out _);
+            var dashboardUrl = hasDashboardUrl ? Text("dashboardUrl") : "";
+            if (hasDashboardUrl && dashboardUrl.Length > 0 && (dashboardUrl.Length > 200 || PushSender.BuildLink(dashboardUrl, "live") == null))
+                return Results.BadRequest(new { error = "The dashboard address must start with http:// or https://, for example http://my-pc:5000." });
             await db.SetSettingAsync("PushProvider", provider);
             await db.SetSettingAsync("PushNtfyServer", server);
             await db.SetSettingAsync("PushNtfyTopic", topic);
             await db.SetSettingAsync("PushTelegramChatId", chat);
             if (token.Length > 0) await db.SetSettingAsync("PushTelegramToken", SecretProtector.Protect(token));
+            if (hasDashboardUrl) await db.SetSettingAsync("PublicDashboardUrl", dashboardUrl);
+            if (root.TryGetProperty("newAppAlerts", out var na) && na.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                await db.SetSettingAsync("NewAppAlertsEnabled", na.GetBoolean() ? "true" : "false");
             return Results.Ok();
         });
 
@@ -1661,6 +1803,8 @@ public class DashboardServer
 
     private static bool IsValidProcessName(string value) => InputValidation.IsValidProcessName(value);
 
+    private static readonly SemaphoreSlim _homeworkAppsGate = new(1, 1);
+
     private static bool IsHttpUrl(string value) => InputValidation.IsValidHttpUrl(value);
 
     private static async Task<JsonDocument?> TryParseBodyAsync(HttpContext ctx)
@@ -1754,6 +1898,8 @@ public class DashboardServer
         "SummaryMonthlyDay",
         "TamperAlertsEnabled",
         "TrackWebsites",
+        "ShowTimeLeft",
+        "NewAppAlertsEnabled",
         "SiteAllowOnly",
         "SafeBrowsing",
         "HotKeyModifiers",
@@ -1829,6 +1975,8 @@ public class DashboardServer
                 case "SummaryEnabled":
                 case "TamperAlertsEnabled":
                 case "TrackWebsites":
+                case "ShowTimeLeft":
+                case "NewAppAlertsEnabled":
                 case "SiteAllowOnly":
                 case "SafeBrowsing":
                 case "EmailNotifyEnabled":

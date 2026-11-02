@@ -77,6 +77,22 @@ public class UsageDatabase : IDisposable
                 IgnoreOverlayFocus INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS AppUserLimits (
+                AppName TEXT NOT NULL COLLATE NOCASE,
+                UserSid TEXT NOT NULL,
+                DailyMaxMinutes INTEGER NOT NULL DEFAULT 120,
+                Enabled INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (AppName, UserSid)
+            );
+
+            CREATE TABLE IF NOT EXISTS UserAppUsage (
+                UserSid TEXT NOT NULL,
+                AppName TEXT NOT NULL COLLATE NOCASE,
+                Date TEXT NOT NULL,
+                Seconds INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (UserSid, AppName, Date)
+            );
+
             CREATE TABLE IF NOT EXISTS ActivityHours (
                 Hour TEXT NOT NULL,
                 Kind TEXT NOT NULL,
@@ -216,6 +232,105 @@ public class UsageDatabase : IDisposable
     public async Task<List<AppUsageRecord>> GetTodayUsageAsync()
     {
         return await GetUsageRangeAsync(DateTime.Today, DateTime.Today);
+    }
+
+    // ---- Limits for one Windows account ------------------------------------------------------
+    public async Task<List<AppLimitRule>> GetUserLimitRulesAsync(string? userSid = null)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var list = new List<AppLimitRule>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = userSid == null
+                ? "SELECT AppName, UserSid, DailyMaxMinutes, Enabled FROM AppUserLimits ORDER BY UserSid, AppName"
+                : "SELECT AppName, UserSid, DailyMaxMinutes, Enabled FROM AppUserLimits WHERE UserSid = @sid ORDER BY AppName";
+            if (userSid != null) cmd.Parameters.AddWithValue("@sid", userSid);
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new AppLimitRule { AppName = r.GetString(0), UserSid = r.GetString(1), DailyMaxMinutes = r.GetInt32(2), Enabled = r.GetBoolean(3) });
+            return list;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task SaveUserLimitRuleAsync(AppLimitRule rule)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO AppUserLimits (AppName, UserSid, DailyMaxMinutes, Enabled) VALUES (@app, @sid, @max, @en)
+                ON CONFLICT(AppName, UserSid) DO UPDATE SET DailyMaxMinutes = @max, Enabled = @en;
+                """;
+            cmd.Parameters.AddWithValue("@app", rule.AppName);
+            cmd.Parameters.AddWithValue("@sid", rule.UserSid);
+            cmd.Parameters.AddWithValue("@max", rule.DailyMaxMinutes);
+            cmd.Parameters.AddWithValue("@en", rule.Enabled ? 1 : 0);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task DeleteUserLimitRuleAsync(string appName, string userSid)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM AppUserLimits WHERE AppName = @app AND UserSid = @sid";
+            cmd.Parameters.AddWithValue("@app", appName);
+            cmd.Parameters.AddWithValue("@sid", userSid);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task ReplaceUserLimitRulesAsync(IEnumerable<AppLimitRule> rules)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            using (var clear = _connection.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = "DELETE FROM AppUserLimits";
+                await clear.ExecuteNonQueryAsync();
+            }
+            foreach (var rule in rules.Where(r => !string.IsNullOrEmpty(r.UserSid)))
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = "INSERT OR REPLACE INTO AppUserLimits (AppName, UserSid, DailyMaxMinutes, Enabled) VALUES (@app, @sid, @max, @en)";
+                cmd.Parameters.AddWithValue("@app", rule.AppName);
+                cmd.Parameters.AddWithValue("@sid", rule.UserSid);
+                cmd.Parameters.AddWithValue("@max", rule.DailyMaxMinutes);
+                cmd.Parameters.AddWithValue("@en", rule.Enabled ? 1 : 0);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>Today's seconds per app for one Windows account.</summary>
+    public async Task<Dictionary<string, long>> GetUserAppUsageTodayAsync(string userSid)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var map = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT AppName, Seconds FROM UserAppUsage WHERE UserSid = @sid AND Date = @date";
+            cmd.Parameters.AddWithValue("@sid", userSid);
+            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync()) map[r.GetString(0)] = map.GetValueOrDefault(r.GetString(0)) + r.GetInt64(1);
+            return map;
+        }
+        finally { _lock.Release(); }
     }
 
     public async Task<List<SiteLimit>> GetSiteLimitsAsync()
@@ -408,7 +523,7 @@ public class UsageDatabase : IDisposable
         try
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM UsageRecords; DELETE FROM LimitGroupUsage; DELETE FROM LimitGroupUsageArchive; DELETE FROM SiteUsage; DELETE FROM ActivityHours";
+            cmd.CommandText = "DELETE FROM UsageRecords; DELETE FROM LimitGroupUsage; DELETE FROM LimitGroupUsageArchive; DELETE FROM SiteUsage; DELETE FROM ActivityHours; DELETE FROM UserAppUsage";
             await cmd.ExecuteNonQueryAsync();
         }
         finally { _lock.Release(); }
@@ -425,7 +540,7 @@ public class UsageDatabase : IDisposable
             using (var cmd = _connection.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "DELETE FROM UsageRecords WHERE Date = @date";
+                cmd.CommandText = "DELETE FROM UsageRecords WHERE Date = @date; DELETE FROM UserAppUsage WHERE Date = @date";
                 cmd.Parameters.AddWithValue("@date", date);
                 await cmd.ExecuteNonQueryAsync();
             }
@@ -777,6 +892,34 @@ public class UsageDatabase : IDisposable
     }
 
     // ---- Sealed limits ---------------------------------------------------------------------
+    /// <summary>
+    /// Takes a time-limited claim on a named job, so only one signed-in account's DeviceMon runs it at a time.
+    /// The check and the claim are a single statement, so two processes cannot both win.
+    /// </summary>
+    public async Task<bool> TryClaimLeaseAsync(string key, TimeSpan duration)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "INSERT INTO Settings (Key, Value) VALUES (@k, @until) ON CONFLICT(Key) DO UPDATE SET Value = @until WHERE Value < @now";
+            cmd.Parameters.AddWithValue("@k", "Lease:" + key);
+            cmd.Parameters.AddWithValue("@until", DateTime.UtcNow.Add(duration).ToString("O"));
+            cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("O"));
+            return await cmd.ExecuteNonQueryAsync() > 0;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<List<string>> GetHomeworkAppsAsync()
+    {
+        try { return System.Text.Json.JsonSerializer.Deserialize<List<string>>(await GetSettingAsync("HomeworkBlockedApps", "[]")) ?? new(); }
+        catch { return new(); }
+    }
+
+    public Task SetHomeworkAppsAsync(IEnumerable<string> apps) =>
+        SetSettingAsync("HomeworkBlockedApps", System.Text.Json.JsonSerializer.Serialize(apps.Distinct(StringComparer.OrdinalIgnoreCase).ToList()));
+
     public void ResetLimitsBaseline() { _limitsBaseline = null; _limitsDataVersion = -1; }
 
     public async Task<MonitorAndControl.ScreenTime.SealedLimits> ReadLimitsSnapshotAsync()
@@ -786,8 +929,11 @@ public class UsageDatabase : IDisposable
             snapshot.Limits.Add(new() { App = l.AppName, Minutes = l.DailyMaxMinutes, Enabled = l.Enabled });
         foreach (var r in await GetScheduleRulesAsync())
             snapshot.Schedule.Add(new() { App = r.AppName, Day = r.DayOfWeek, Start = r.StartTime, End = r.EndTime, Enabled = r.Enabled });
+        snapshot.HomeworkApps = await GetHomeworkAppsAsync();
         snapshot.AllowOnly = await GetSettingAsync("SiteAllowOnly", "false") == "true";
         snapshot.SafeBrowsing = await GetSettingAsync("SafeBrowsing", "false") == "true";
+        foreach (var u in await GetUserLimitRulesAsync())
+            snapshot.UserLimits.Add(new() { User = u.UserSid, App = u.AppName, Minutes = u.DailyMaxMinutes, Enabled = u.Enabled });
         foreach (var w in await GetSiteLimitsAsync())
             snapshot.Sites.Add(new() { Host = w.Host, Minutes = w.DailyMaxMinutes, Enabled = w.Enabled });
         foreach (var g in await GetLimitGroupsAsync())
@@ -801,6 +947,8 @@ public class UsageDatabase : IDisposable
         await ReplaceLimitRulesAsync(snapshot.Limits.Select(l => new AppLimitRule { AppName = l.App, DailyMaxMinutes = l.Minutes, Enabled = l.Enabled }));
         await ReplaceScheduleRulesAsync(snapshot.Schedule.Select(s => new ScheduleRule
             { AppName = s.App, DayOfWeek = s.Day, StartTime = s.Start, EndTime = s.End, Enabled = s.Enabled }));
+        await ReplaceUserLimitRulesAsync(snapshot.UserLimits.Select(u => new AppLimitRule { UserSid = u.User, AppName = u.App, DailyMaxMinutes = u.Minutes, Enabled = u.Enabled }));
+        await SetHomeworkAppsAsync(snapshot.HomeworkApps);
         await SetSettingAsync("SiteAllowOnly", snapshot.AllowOnly ? "true" : "false");
         await SetSettingAsync("SafeBrowsing", snapshot.SafeBrowsing ? "true" : "false");
         await ReplaceSiteLimitsAsync(snapshot.Sites.Select(w => new SiteLimit { Host = w.Host, DailyMaxMinutes = w.Minutes, Enabled = w.Enabled }));
@@ -998,7 +1146,7 @@ public class UsageDatabase : IDisposable
         try
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM UsageRecords WHERE AppName = @app";
+            cmd.CommandText = "DELETE FROM UsageRecords WHERE AppName = @app; DELETE FROM UserAppUsage WHERE AppName = @app; DELETE FROM AppUserLimits WHERE AppName = @app";
             cmd.Parameters.AddWithValue("@app", appName);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -1047,7 +1195,8 @@ public class UsageDatabase : IDisposable
 
     public async Task RecordUsageBatchAsync(
         IEnumerable<(string AppName, string ProcessName, int ForegroundSeconds, int BackgroundSeconds)> appRecords,
-        IEnumerable<(int GroupId, int Seconds)> groupRecords)
+        IEnumerable<(int GroupId, int Seconds)> groupRecords,
+        string userSid = "")
     {
         await _lock.WaitAsync();
         try
@@ -1080,6 +1229,24 @@ public class UsageDatabase : IDisposable
             }
             foreach (var record in appRecords)
                 if (record.ForegroundSeconds > 0) await AddActivityAsync(tx, "app", record.AppName, record.ForegroundSeconds);
+            // Each Windows account's own time, so a limit can apply to one account only.
+            if (!string.IsNullOrEmpty(userSid))
+                foreach (var record in appRecords)
+                {
+                    var total = record.ForegroundSeconds + record.BackgroundSeconds;
+                    if (total <= 0) continue;
+                    using var cmd = _connection.CreateCommand();
+                    cmd.Transaction = tx;
+                    cmd.CommandText = """
+                        INSERT INTO UserAppUsage (UserSid, AppName, Date, Seconds) VALUES (@sid, @app, @date, @seconds)
+                        ON CONFLICT(UserSid, AppName, Date) DO UPDATE SET Seconds = Seconds + @seconds;
+                        """;
+                    cmd.Parameters.AddWithValue("@sid", userSid);
+                    cmd.Parameters.AddWithValue("@app", record.AppName);
+                    cmd.Parameters.AddWithValue("@date", date);
+                    cmd.Parameters.AddWithValue("@seconds", total);
+                    await cmd.ExecuteNonQueryAsync();
+                }
             foreach (var record in groupRecords)
             {
                 if (record.Seconds <= 0) continue;

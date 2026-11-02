@@ -62,6 +62,9 @@ public class LimitEnforcer
             _exceededToday[limit.AppName] = today;
         }
 
+        foreach (var (app, usedSecs, maxSecs) in await AccountAllowances.ForAccountAsync(_db, AccountIdentity.CurrentSid))
+            if (usedSecs >= maxSecs) _exceededToday[app] = today;
+
         var groups = await _db.GetLimitGroupsAsync();
         foreach (var group in groups.Where(g => g.Enabled && g.TodaySeconds >= g.DailyMaxMinutes * 60L))
             foreach (var appName in group.AppNames)
@@ -98,7 +101,8 @@ public class LimitEnforcer
     public Task EnforceAsync(
         List<(string AppName, long UsedSecs, long MaxSecs)> breached,
         List<GroupLimitBreach> breachedGroups,
-        HashSet<string> scheduleViolationApps)
+        HashSet<string> scheduleViolationApps,
+        HashSet<string>? homeworkApps = null)
     {
         if (IsPaused)
             return Task.CompletedTask;
@@ -106,20 +110,22 @@ public class LimitEnforcer
         if (_pausedUntil.HasValue && _pausedUntil.Value <= DateTimeOffset.Now)
             _pausedUntil = null;
 
-        if (scheduleViolationApps.Count > 0)
+        if (scheduleViolationApps.Count > 0 || homeworkApps is { Count: > 0 })
         {
-            Logger.Instance.Warn("Schedule violation - killing matching tracked processes");
+            if (scheduleViolationApps.Count > 0) Logger.Instance.Warn("Schedule violation - killing matching tracked processes");
             var runningProcessNames = _tracker.GetRunningProcessNames();
             foreach (var procName in runningProcessNames)
             {
                 var appName = _tracker.KnownApps.TryGetValue(procName, out var friendly)
                     ? friendly : procName;
-                if (!scheduleViolationApps.Contains(appName))
+                var inSchedule = scheduleViolationApps.Contains(appName);
+                var inHomework = homeworkApps?.Contains(appName) == true;
+                if (!inSchedule && !inHomework)
                     continue;
 
-                Logger.Instance.Warn($"Scheduled kill: {appName} ({procName})");
+                Logger.Instance.Warn(inSchedule ? $"Scheduled kill: {appName} ({procName})" : $"Homework mode: closing {appName} ({procName})");
                 KillProcessByName(procName);
-                OnAppTerminatedBySchedule?.Invoke(appName);
+                if (inSchedule) OnAppTerminatedBySchedule?.Invoke(appName);
             }
         }
 
@@ -254,6 +260,17 @@ public class LimitEnforcer
 
     public bool IsExceededToday(string appName) => _exceededToday.ContainsKey(appName);
 
+    /// <summary>
+    /// Forgets apps that are no longer over their limit (a limit was raised, removed or given bonus time by the
+    /// dashboard, which may be served by a different account's DeviceMon than the one enforcing it).
+    /// </summary>
+    public void PruneExceeded(IEnumerable<string> stillBreached)
+    {
+        var keep = new HashSet<string>(stillBreached, StringComparer.OrdinalIgnoreCase);
+        foreach (var app in _exceededToday.Keys.Where(a => !keep.Contains(a)).ToList())
+            _exceededToday.TryRemove(app, out _);
+    }
+
     public void ClearExceeded(string? appName = null)
     {
         if (appName != null)
@@ -354,10 +371,13 @@ public class LimitEnforcer
         try
         {
             var name = Path.GetFileNameWithoutExtension(processName);
+            var mySession = AccountIdentity.SessionId;
             foreach (var proc in Process.GetProcessesByName(name))
             {
                 try
                 {
+                    // Another signed-in account's copy of the app is theirs to deal with (their own DeviceMon does).
+                    if (proc.SessionId != mySession) continue;
                     proc.CloseMainWindow();
                     if (!proc.WaitForExit(5000))
                         proc.Kill(entireProcessTree: true);

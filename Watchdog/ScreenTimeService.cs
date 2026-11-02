@@ -26,6 +26,8 @@ internal sealed class ScreenTimeService : IDisposable
     private readonly Dictionary<int, long> _locks = new();
     private readonly BrowserPolicy _sites;
     private long _lastPolicy;
+    private long _lastHomeworkCheck;
+    private bool _lastHomework;
 
     internal static void PrepareDirectory()
     {
@@ -80,6 +82,7 @@ internal sealed class ScreenTimeService : IDisposable
         PrepareDirectory();
         _sites = new BrowserPolicy(Path.Combine(protectedDirectory, "site-blocklist.json"), log);
         ApplySiteBlocking();
+        _lastHomework = HomeworkState.IsActiveNow();
         _usage = ReadUsage();
         _lastTick = _clock.ElapsedMilliseconds;
         try { _control = new ScreenTimeControlServer(HandleControl, _log, monitorPath); }
@@ -192,6 +195,13 @@ internal sealed class ScreenTimeService : IDisposable
             }
             // Browsers can lose their policy (a Windows policy refresh, a reset); put the block list back now and then.
             if (tick - _lastPolicy >= 300000) { _lastPolicy = tick; ApplySiteBlocking(); }
+            // Homework mode ends by itself: switch the browser rules back as soon as the time is up.
+            if (tick - _lastHomeworkCheck >= 5000)
+            {
+                _lastHomeworkCheck = tick;
+                var homework = HomeworkState.IsActiveNow();
+                if (homework != _lastHomework) { _lastHomework = homework; ApplySiteBlocking(); _log(homework ? "Homework mode started." : "Homework mode ended."); }
+            }
             if (tick - _lastStatus >= 5000)
             {
                 WriteStatus(policies, today, null);
@@ -214,7 +224,7 @@ internal sealed class ScreenTimeService : IDisposable
         {
             var file = LimitsSealStore.Read();
             var sealedContent = LimitsSealStore.Phase(file, DateTimeOffset.UtcNow) != SealPhase.Off ? file?.Content : null;
-            _sites.Apply(sealedContent);
+            _sites.Apply(sealedContent, HomeworkState.IsActiveNow());
         }
         catch (Exception ex) { _log("Site blocking could not be applied: " + ex.Message); }
     }
@@ -309,6 +319,25 @@ internal sealed class ScreenTimeService : IDisposable
                     request.Command = "save";
                 }
 
+                if (request.Command == "homework-start")
+                {
+                    // Starting only restricts, so it needs no approval; ending it early does (see homework-stop).
+                    var state = HomeworkState.Start(request.HomeworkMinutes, DateTimeOffset.UtcNow);
+                    // Starting only restricts: a later start can extend a running session but never cut it short.
+                    if (HomeworkState.Read() is { UntilUtc: { } running } existing && running > state.UntilUtc) state = existing;
+                    HomeworkState.Write(state);
+                    _lastHomework = true;
+                    ApplySiteBlocking();
+                    _log($"Homework mode started until {state.UntilUtc:O}.");
+                    try
+                    {
+                        foreach (var session in ScreenTimeWindows.Sessions().Where(s => s.Unlocked))
+                            ScreenTimeWindows.Warn(session.SessionId, $"Homework mode is on until {state.UntilUtc!.Value.ToLocalTime():HH:mm}. Games and entertainment are blocked until then.");
+                    }
+                    catch { /* the mode is on even if the message cannot be shown */ }
+                    return ScreenTimeReply.Success(new { untilUtc = state.UntilUtc });
+                }
+
                 if (request.Command == "set-blocked-sites")
                 {
                     var hosts = SiteBlocking.NormalizeAll(request.BlockedHosts);
@@ -362,12 +391,18 @@ internal sealed class ScreenTimeService : IDisposable
                     // Sealed app limits: approved like any other change, but not tied to an account.
                     if (request.Operation == "limits-open" && request.LimitsMinutes is < 1 or > LimitsSealStore.MaxWindowMinutes)
                         return ScreenTimeReply.Failure("Choose between 1 and 60 minutes.");
-                    if (request.Operation is not ("limits-open" or "limits-clear"))
+                    if (request.Operation is not ("limits-open" or "limits-clear" or "homework-stop"))
                         return ScreenTimeReply.Failure("Unknown operation.");
                     if (request.Command == "validate") return ScreenTimeReply.Success(new { valid = true });
                     var now = DateTimeOffset.UtcNow;
                     if (request.Operation == "limits-open")
                         LimitsSealStore.Write(LimitsSealStore.Open(LimitsSealStore.Read(), request.LimitsMinutes, now));
+                    else if (request.Operation == "homework-stop")
+                    {
+                        HomeworkState.Clear();
+                        _lastHomework = false;
+                        ApplySiteBlocking();
+                    }
                     else
                         LimitsSealStore.Clear();
                     File.AppendAllText(Path.Combine(ScreenTimeFiles.DirectoryPath, "admin-audit.log"),

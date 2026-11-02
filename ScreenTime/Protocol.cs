@@ -26,6 +26,8 @@ public sealed class ScreenTimeRequest
     public List<string> AllowedHosts { get; set; } = new();
     public bool AllowOnly { get; set; }
     public bool SafeBrowsing { get; set; }
+    /// <summary>For "homework-start": how long homework mode lasts.</summary>
+    public int HomeworkMinutes { get; set; }
     public bool Enabled { get; set; }
     public string TicketId { get; set; } = "";
     /// <summary>Remote PIN for "remote-save". Never logged and never stored in the request history.</summary>

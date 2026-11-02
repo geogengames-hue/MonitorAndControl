@@ -268,7 +268,8 @@ public class UsageTracker : IDisposable
             {
                 await _db.RecordUsageBatchAsync(
                     records.Select(record => (record.AppName, record.ProcessName, record.ForegroundSeconds, record.BackgroundSeconds)),
-                    groupRecords);
+                    groupRecords,
+                    AccountIdentity.CurrentSid);
             }
             catch
             {
@@ -312,6 +313,11 @@ public class UsageTracker : IDisposable
                     breached.Add((limit.AppName, usedSecs, maxSecs));
             }
 
+            // Limits for this Windows account only: counted from its own usage, not the shared total.
+            foreach (var (app, usedSecs, maxSecs) in await AccountAllowances.ForAccountAsync(_db, AccountIdentity.CurrentSid))
+                if (usedSecs >= maxSecs && !breached.Any(b => b.AppName.Equals(app, StringComparison.OrdinalIgnoreCase)))
+                    breached.Add((app, usedSecs, maxSecs));
+
             var refreshedGroups = await _db.GetLimitGroupsAsync();
             foreach (var group in refreshedGroups.Where(g => g.Enabled))
             {
@@ -326,7 +332,13 @@ public class UsageTracker : IDisposable
                 StringComparer.OrdinalIgnoreCase);
             var scheduleViolationApps = await _scheduler.GetViolatingAppNamesAsync(knownAppNames);
 
-            await _limitEnforcer.EnforceAsync(breached, breachedGroups, scheduleViolationApps);
+            // Homework mode: the apps the parent listed are closed like an app outside its allowed hours.
+            HashSet<string>? homeworkApps = null;
+            if (MonitorAndControl.ScreenTime.HomeworkState.IsActiveNow())
+                homeworkApps = new HashSet<string>(await _db.GetHomeworkAppsAsync(), StringComparer.OrdinalIgnoreCase);
+
+            await _limitEnforcer.EnforceAsync(breached, breachedGroups, scheduleViolationApps, homeworkApps);
+            _limitEnforcer.PruneExceeded(breached.Select(b => b.AppName).Concat(breachedGroups.SelectMany(g => g.AppNames)));
         }
         finally
         {

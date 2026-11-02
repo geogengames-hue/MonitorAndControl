@@ -28,6 +28,14 @@ public sealed class SealedGroup
     public List<string> Members { get; set; } = new();
 }
 
+public sealed class SealedUserLimit
+{
+    public string User { get; set; } = "";
+    public string App { get; set; } = "";
+    public int Minutes { get; set; }
+    public bool Enabled { get; set; }
+}
+
 /// <summary>The app limits, allowed-hours schedule and shared groups that the parent has "sealed".</summary>
 public sealed class SealedLimits
 {
@@ -36,10 +44,14 @@ public sealed class SealedLimits
     public List<SealedSchedule> Schedule { get; set; } = new();
     public List<SealedGroup> Groups { get; set; } = new();
     public List<SealedSite> Sites { get; set; } = new();
+    /// <summary>App limits that apply to one Windows account only.</summary>
+    public List<SealedUserLimit> UserLimits { get; set; } = new();
     /// <summary>Only sites on the allowed list may open.</summary>
     public bool AllowOnly { get; set; }
     /// <summary>SafeSearch and YouTube Restricted Mode are forced in the browsers.</summary>
     public bool SafeBrowsing { get; set; }
+    /// <summary>Apps that are closed while homework mode is on.</summary>
+    public List<string> HomeworkApps { get; set; } = new();
 
     /// <summary>Replaces any list that arrived as null, so later code can count and hash the content safely.</summary>
     public SealedLimits Normalized()
@@ -48,6 +60,11 @@ public sealed class SealedLimits
         Schedule ??= new();
         Groups ??= new();
         Sites ??= new();
+        HomeworkApps ??= new();
+        UserLimits ??= new();
+        UserLimits.RemoveAll(x => x == null);
+        foreach (var x in UserLimits) { x.User ??= ""; x.App ??= ""; }
+        HomeworkApps.RemoveAll(x => x == null);
         Limits.RemoveAll(x => x == null);
         Schedule.RemoveAll(x => x == null);
         Groups.RemoveAll(x => x == null);
@@ -60,7 +77,7 @@ public sealed class SealedLimits
     }
 
     public bool IsReasonable() =>
-        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxEntries
+        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxEntries && HomeworkApps.Count <= MaxEntries && UserLimits.Count <= MaxEntries
         && Groups.All(g => g.Members.Count <= MaxEntries);
 
     /// <summary>Order-independent hash of the content, so two copies compare equal exactly when they mean the same.</summary>
@@ -69,6 +86,8 @@ public sealed class SealedLimits
         var lines = Limits.Select(l => $"L|{l.App}|{l.Minutes}|{(l.Enabled ? 1 : 0)}")
             .Concat(Schedule.Select(s => $"S|{s.App}|{s.Day}|{s.Start}|{s.End}|{(s.Enabled ? 1 : 0)}"))
             .Concat(Sites.Select(w => $"W|{w.Host}|{w.Minutes}|{(w.Enabled ? 1 : 0)}"))
+            .Concat(UserLimits.Select(u => $"U|{u.User}|{u.App}|{u.Minutes}|{(u.Enabled ? 1 : 0)}"))
+            .Concat(HomeworkApps.Select(h => h.ToLowerInvariant()).Distinct().Select(h => $"H|{h}"))
             .Concat(AllowOnly || SafeBrowsing ? new[] { $"P|{(AllowOnly ? 1 : 0)}|{(SafeBrowsing ? 1 : 0)}" } : Array.Empty<string>())
             .Concat(Groups.Select(g => $"G|{g.Name}|{g.Minutes}|{(g.Enabled ? 1 : 0)}|" +
                 string.Join(',', g.Members.OrderBy(m => m, StringComparer.OrdinalIgnoreCase))))

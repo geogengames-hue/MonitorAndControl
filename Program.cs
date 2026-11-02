@@ -24,6 +24,8 @@ internal static class Program
     private static UsageTracker? _usageTracker;
     private static WebsiteTracker? _websiteTracker;
     private static SiteBlockingService? _siteBlocking;
+    private static NewAppWatcher? _newApps;
+    private static MonitorAndControl.UI.TimeLeftTray? _timeLeftTray;
     private static LimitEnforcer? _enforcer;
     private static SchedulerService? _scheduler;
     private static NotificationService? _notifier;
@@ -67,6 +69,8 @@ internal static class Program
             {
                 HotKeyService.OpenDashboard($"http://localhost:{DashboardServer.Port}");
             });
+
+            _timeLeftTray = new MonitorAndControl.UI.TimeLeftTray(_db!);
 
             _hiddenForm.FormClosing += (s, e) =>
             {
@@ -532,6 +536,9 @@ internal static class Program
             _parentReportService.ReportRemoteScreenTime(message, security);
         };
         _parentReportService.Start();
+
+        _newApps = new NewAppWatcher(_db!, message => _parentReportService.ReportNewAppsAsync(message));
+        _newApps.Start();
         _enforcer.OnBreachAlert += (app, delay, proc) => _ = _emailService.SendBreachAlertAsync($"Limit Breach: {app}", $"{app} exceeded its daily limit. Closing in {delay}s.");
         _enforcer.OnAppKilled += (app) => _ = _emailService.SendKillAlertAsync($"App Closed: {app}", $"{app} was closed after exceeding its limit.");
         _enforcer.OnAppTerminatedBySchedule += (app) => _ = _emailService.SendKillAlertAsync($"Schedule Block: {app}", $"{app} was closed by schedule rule.");
@@ -811,6 +818,8 @@ internal static class Program
         Logger.Instance.Info("Monitor shutting down");
         _usageTracker?.Stop();
         _tracker?.Stop();
+        _timeLeftTray?.Dispose();
+        _newApps?.Dispose();
         _siteBlocking?.Dispose();
         _websiteTracker?.Dispose();
         DashboardServer.LoginLockoutDetected = null;

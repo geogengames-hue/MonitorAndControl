@@ -208,6 +208,7 @@ async function loadScreenTime(force = false) {
     screenElement('message').classList.toggle('screen-error', !!data.error || !!remoteBlock);
     screenRenderSelection(force || !screenDirty || select.value !== previousSid);
     screenRenderRequests();
+    screenLoadHomework();
     screenRenderTable();
   } catch (error) {
     screenElement('message').textContent = error.message;
@@ -244,6 +245,44 @@ function screenAskLock(minutes) {
     ? t('Lock {name} for {n} minutes. Its programs keep running; it returns to the sign-in screen.', { name: account.name, n: minutes })
     : t('Unlock {name} now.', { name: account.name }));
 }
+
+// Homework mode: starting only restricts, so it needs no approval; ending it early does.
+async function screenLoadHomework() {
+  try {
+    const hw = await screenApi('/api/homework');
+    const until = hw.active ? new Date(hw.untilUtc) : null;
+    screenElement('homework-status').textContent = hw.active
+      ? t('Homework mode is on until {time}.', { time: until.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+      : t('Homework mode is off.');
+    ['60', '120'].forEach(n => screenElement('homework-' + n).classList.toggle('hidden', hw.active));
+    screenElement('homework-stop').classList.toggle('hidden', !hw.active);
+    const hint = screenElement('homework-hint');
+    const text = !hw.apps.length ? t('No apps are set to close yet. Add them on the Limits page.')
+      : hw.allowedSites === 0 ? t('No websites are allowed (Always allow or a daily allowance), so every website will be blocked during homework mode.') : '';
+    hint.textContent = text;
+    hint.classList.toggle('hidden', !text || hw.active);
+    const blocked = !!screenData?.error;
+    ['60', '120', 'stop'].forEach(n => { screenElement('homework-' + n).disabled = blocked || (n === 'stop' && !!screenRemoteBlock()); });
+  } catch { /* the page reports its own errors */ }
+}
+
+async function screenStartHomework(minutes) {
+  if (!confirm(t('Start homework mode for {n} minutes? The listed apps are closed and only your allowed websites will open.', { n: minutes }))) return;
+  try {
+    await screenApi('/api/homework/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ minutes })
+    });
+    await screenLoadHomework();
+  } catch (error) {
+    screenElement('message').textContent = error.message;
+    screenElement('message').classList.add('screen-error');
+  }
+}
+screenElement('homework-60').addEventListener('click', () => screenStartHomework(60));
+screenElement('homework-120').addEventListener('click', () => screenStartHomework(120));
+screenElement('homework-stop').addEventListener('click', () => screenAskLimits('homework-stop', 0, t('End homework mode now.')));
 
 function screenAskLimits(operation, minutes, summary) {
   screenPending = { userSid: '', dailyMinutes: 180, enabled: false, bonusMinutes: 0, operation, limitsMinutes: minutes };

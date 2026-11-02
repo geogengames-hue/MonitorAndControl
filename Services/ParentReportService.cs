@@ -121,6 +121,9 @@ public sealed class ParentReportService : IDisposable
         catch (Exception ex) { Logger.Instance.Error($"Remote PIN lockout check failed: {ex.Message}"); }
     }
 
+    /// <summary>Tells the parent about newly installed programs (sent even when tamper alerts are off).</summary>
+    public Task<bool> ReportNewAppsAsync(string message) => SendTamperAlertAsync("new_app", message, ignoreSwitch: true, label: "Notice");
+
     public async Task<bool> ReportWatchdogRestartAsync(string details)
     {
         // Every restart is remembered (for the summary email and for spotting repeated closes),
@@ -182,7 +185,7 @@ public sealed class ParentReportService : IDisposable
                 _requestAttempts[request.Id] = DateTime.UtcNow;
                 var message = $"{request.Name} asked for more PC time on {Environment.MachineName}. " +
                               "Open the dashboard, go to PC Time, choose Add 15/30/60 min and save to approve.";
-                if (!await SendTamperAlertAsync("pc_time_request", message, ignoreSwitch: true)) continue;
+                if (!await SendTamperAlertAsync("pc_time_request", message, ignoreSwitch: true, label: "Request")) continue;
                 seen.Add(request.Id);
                 await _db.SetSettingAsync("TimeRequestsSeen", string.Join(';', seen.TakeLast(50)));
             }
@@ -342,11 +345,11 @@ public sealed class ParentReportService : IDisposable
             _activeTamperConditions.Add(key);
     }
 
-    private async Task<bool> SendTamperAlertAsync(string type, string message, bool ignoreSwitch = false)
+    private async Task<bool> SendTamperAlertAsync(string type, string message, bool ignoreSwitch = false, string label = "Tamper Alert")
     {
         if (!ignoreSwitch && (await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true") return false;
-        Logger.Instance.Warn($"Tamper alert: {message}");
-        var emailError = await _email.SendSystemEmailAsync($"Tamper Alert: {type}", message);
+        Logger.Instance.Warn($"{label}: {message}");
+        var emailError = await _email.SendSystemEmailAsync($"{label}: {type}", message);
         var webhookSent = await _notifications.NotifySystemAsync(type, message);
         if (emailError != null && !webhookSent)
             Logger.Instance.Error($"Tamper alert delivery failed: {emailError}");

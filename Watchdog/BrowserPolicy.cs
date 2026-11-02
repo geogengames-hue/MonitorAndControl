@@ -81,10 +81,10 @@ internal sealed class BrowserPolicy
     }
 
     /// <summary>Combines what DeviceMon reported with what the parent sealed, then writes every browser's policy.</summary>
-    internal void Apply(SealedLimits? sealedContent)
+    internal void Apply(SealedLimits? sealedContent, bool homework = false)
     {
         var plan = SiteBlocking.ComputePlan(_state.Reported, _state.ReportedAllowed, _state.ReportedAllowOnly,
-            _state.ReportedSafe, sealedContent);
+            _state.ReportedSafe, sealedContent, homework);
         using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
         foreach (var target in Targets)
         {

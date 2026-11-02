@@ -21,6 +21,8 @@ async function loadPushSettings() {
     pushEl('ntfy-server').value = s.ntfyServer || 'https://ntfy.sh';
     pushEl('ntfy-topic').value = s.ntfyTopic || '';
     pushEl('telegram-chat').value = s.telegramChatId || '';
+    pushEl('dashboard-url').value = s.dashboardUrl || '';
+    pushEl('new-apps').checked = s.newAppAlerts !== false;
     pushEl('telegram-token').value = '';
     pushEl('telegram-token').placeholder = s.telegramTokenSet ? t('(saved - leave empty to keep it)') : '123456789:AA...';
     pushProviderChanged();
@@ -43,7 +45,9 @@ pushEl('save')?.addEventListener('click', async () => {
         ntfyServer: pushEl('ntfy-server').value,
         ntfyTopic: pushEl('ntfy-topic').value,
         telegramToken: pushEl('telegram-token').value,
-        telegramChatId: pushEl('telegram-chat').value
+        telegramChatId: pushEl('telegram-chat').value,
+        dashboardUrl: pushEl('dashboard-url').value,
+        newAppAlerts: pushEl('new-apps').checked
       })
     });
     pushMessage(t('Saved.'));
@@ -108,3 +112,26 @@ document.getElementById('otherpc-add')?.addEventListener('click', async () => {
 
 document.querySelectorAll('[data-view="settings"]').forEach(a => a.addEventListener('click', loadPushSettings));
 loadOtherPcs();
+
+// Alerts link straight to a page (for example .../index.html#screen-time): open that view on load.
+window.addEventListener('load', () => {
+  const view = (location.hash || '').slice(1);
+  if (/^[a-z-]{1,20}$/.test(view)) document.querySelector(`.sidebar nav a[data-view="${view}"]`)?.click();
+});
+
+// ---- "show time left" switch for the child's taskbar icon
+async function loadChildView() {
+  const box = document.getElementById('child-show-time-left');
+  if (!box) return;
+  try { box.checked = !!(await api('/api/child-view')).showTimeLeft; } catch { /* shown by the page's other loaders */ }
+}
+document.getElementById('child-show-time-left')?.addEventListener('change', async event => {
+  try {
+    await api('/api/child-view', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ showTimeLeft: event.target.checked })
+    });
+  } catch { event.target.checked = !event.target.checked; }
+});
+document.querySelectorAll('[data-view="settings"]').forEach(a => a.addEventListener('click', loadChildView));
