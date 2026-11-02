@@ -1839,7 +1839,7 @@ function enhanceInterface() {
     wrapper.appendChild(heading);
   });
 
-  const form = document.querySelector('.settings-form');
+  const form = document.querySelector('#view-settings .settings-form');
   if (form && !form.querySelector('.settings-panel')) {
     const children = [...form.children];
     let panel = document.createElement('section');
