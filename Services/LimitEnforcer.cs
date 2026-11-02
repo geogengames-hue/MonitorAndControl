@@ -17,7 +17,7 @@ public class LimitEnforcer
     private readonly WindowTracker _tracker;
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeCountdowns = new();
     private readonly ConcurrentDictionary<string, string> _exceededToday = new(StringComparer.OrdinalIgnoreCase);
-    private string _todayDate = DateTime.Now.ToString("yyyy-MM-dd");
+    private string _todayDate = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
     private DateTimeOffset? _pausedUntil;
 
     public event Action<string, int, string>? OnBreachAlert;
@@ -37,7 +37,7 @@ public class LimitEnforcer
 
     public async Task RehydrateExceededTodayAsync()
     {
-        var today = DateTime.Now.ToString("yyyy-MM-dd");
+        var today = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
         if (_todayDate != today)
         {
             _exceededToday.Clear();
@@ -66,7 +66,7 @@ public class LimitEnforcer
             if (usedSecs >= maxSecs) _exceededToday[app] = today;
 
         var groups = await _db.GetLimitGroupsAsync();
-        foreach (var group in groups.Where(g => g.Enabled && g.TodaySeconds >= g.DailyMaxMinutes * 60L))
+        foreach (var group in groups.Where(g => g.Enabled && AccountIdentity.AppliesHere(g.UserSid) && g.TodaySeconds >= g.DailyMaxMinutes * 60L))
             foreach (var appName in group.AppNames)
                 _exceededToday[appName] = today;
     }
@@ -74,7 +74,7 @@ public class LimitEnforcer
     private void OnAppChanged(string app, string proc)
     {
         // Auto-clear exceeded set at midnight
-        var today = DateTime.Now.ToString("yyyy-MM-dd");
+        var today = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
         if (_todayDate != today)
         {
             _exceededToday.Clear();
@@ -129,7 +129,7 @@ public class LimitEnforcer
             }
         }
 
-        var today = DateTime.Now.ToString("yyyy-MM-dd");
+        var today = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
         if (_todayDate != today)
         {
             _exceededToday.Clear();
@@ -211,7 +211,7 @@ public class LimitEnforcer
                 await Task.Delay(1000, cts.Token);
                 OnCountdownTick?.Invoke(displayName, i);
             }
-            var today = DateTime.Now.ToString("yyyy-MM-dd");
+            var today = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
             foreach (var member in members)
             {
                 _exceededToday[member] = today;
@@ -247,7 +247,7 @@ public class LimitEnforcer
                 OnCountdownTick?.Invoke(appName, i);
             }
 
-            _exceededToday[appName] = DateTime.Now.ToString("yyyy-MM-dd");
+            _exceededToday[appName] = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
             KillAppProcesses(appName);
             OnAppKilled?.Invoke(appName);
         }
@@ -283,7 +283,7 @@ public class LimitEnforcer
             foreach (var key in _activeCountdowns.Keys)
                 if (_activeCountdowns.TryRemove(key, out var cts)) cts.Cancel();
             _exceededToday.Clear();
-            _todayDate = DateTime.Now.ToString("yyyy-MM-dd");
+            _todayDate = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
         }
     }
 

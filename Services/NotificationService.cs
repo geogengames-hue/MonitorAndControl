@@ -153,9 +153,9 @@ public class NotificationService : IDisposable
         });
     }
 
-    public async Task<bool> NotifySystemAsync(string eventType, string message)
+    public async Task<bool> NotifySystemAsync(string eventType, string message, IReadOnlyList<PushButton>? buttons = null)
     {
-        var pushing = _push.SendAsync(message, PushSender.PageFor(eventType));
+        var pushing = _push.SendAsync(message, PushSender.PageFor(eventType), buttons);
         var hooked = await FireWebhook(eventType, "System", new
         {
             type = eventType,

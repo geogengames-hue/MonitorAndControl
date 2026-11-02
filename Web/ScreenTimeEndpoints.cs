@@ -178,6 +178,11 @@ public static class ScreenTimeEndpoints
                         Raise($"Homework mode was ended early remotely from {source}.", true);
                         return Results.Json(reply.Data);
                     }
+                    if (request.Operation == "timezone-accept")
+                    {
+                        Raise($"The PC Time rules were switched to the PC's current time zone remotely from {source}.", true);
+                        return Results.Json(reply.Data);
+                    }
                     if (request.Operation == "limits-clear")
                     {
                         Raise($"The protection of the app limits was removed remotely from {source}.", true);

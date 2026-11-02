@@ -8,6 +8,8 @@ public sealed class SealedSite
     public string Host { get; set; } = "";
     public int Minutes { get; set; }
     public bool Enabled { get; set; }
+    /// <summary>Empty = everyone; otherwise only this Windows account (SID).</summary>
+    public string User { get; set; } = "";
 }
 
 /// <summary>What the browsers should be told: sites to block, sites to allow (when only listed sites may open) and SafeSearch.</summary>
@@ -43,11 +45,14 @@ public static class SiteBlocking
     /// Combines what DeviceMon reports right now (daily allowances used up, switches) with the sealed copy the
     /// parent approved. The sealed part cannot be cleared by anyone but the parent, whatever DeviceMon reports.
     /// A site that is blocked is never also allowed (an allow entry would win over the block).
+    /// Rules for one account count only while that account is at the screen (one of <paramref name="activeSids"/>;
+    /// with several active sessions, for example a remote desktop, all of their rules apply).
     /// </summary>
     public static PolicyPlan ComputePlan(IEnumerable<string> reportedBlocked, IEnumerable<string> reportedAllowed,
-        bool reportedAllowOnly, bool reportedSafe, SealedLimits? sealedContent, bool homework = false)
+        bool reportedAllowOnly, bool reportedSafe, SealedLimits? sealedContent, bool homework = false, IReadOnlyCollection<string>? activeSids = null)
     {
-        var sealedSites = sealedContent?.Sites ?? new List<SealedSite>();
+        var sealedSites = (sealedContent?.Sites ?? new List<SealedSite>())
+            .Where(s => string.IsNullOrEmpty(s.User) || (activeSids?.Contains(s.User) ?? false));
         var sealedBlocked = sealedSites.Where(s => s.Enabled && s.Minutes == 0).Select(s => s.Host);
         var sealedAllowed = sealedSites.Where(s => s.Enabled && s.Minutes != 0).Select(s => s.Host);
 

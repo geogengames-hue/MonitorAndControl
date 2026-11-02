@@ -17,6 +17,10 @@ public sealed class ParentReportService : IDisposable
     private int _checking;
     private int _guarding;
     private readonly Dictionary<string, DateTime> _requestAttempts = new();
+    // One "Not now" link per request, reused when a failed alert is sent again.
+    private readonly Dictionary<string, string> _declineTokens = new();
+    private string? _heartbeatSent;
+    private DateTime _heartbeatSentAt;
     private readonly System.Threading.Timer _guardTimer;
 
     public ParentReportService(UsageDatabase db, EmailService email, NotificationService notifications, string configPath)
@@ -162,10 +166,49 @@ public sealed class ParentReportService : IDisposable
 
     private async Task CheckAsync()
     {
-        await CheckScheduledSummaryAsync(DateTime.Now);
+        await CheckScheduledSummaryAsync(ScreenTime.ParentClock.Now);
         await CheckTamperConditionsAsync();
         await CheckRemotePinLockoutsAsync();
         await CheckTimeRequestsAsync();
+        await CheckTimeZoneAsync();
+        await SyncHeartbeatAsync();
+    }
+
+    // The service keeps the check-in address in its protected folder; send it now and then so a service
+    // reinstall or a lost file is repaired by itself.
+    private async Task SyncHeartbeatAsync()
+    {
+        try
+        {
+            var url = await _db.GetSettingAsync("HeartbeatUrl", "");
+            if (url == _heartbeatSent && DateTime.UtcNow - _heartbeatSentAt < TimeSpan.FromMinutes(10)) return;
+            var reply = await ScreenTimeClient.SendAsync(new ScreenTime.ScreenTimeRequest { Command = "set-heartbeat", HeartbeatUrl = url }, CancellationToken.None);
+            if (!reply.Ok) { Logger.Instance.Warn("The service did not accept the check-in address: " + reply.Error); return; }
+            _heartbeatSent = url;
+            _heartbeatSentAt = DateTime.UtcNow;
+        }
+        catch { /* without the GameHost service there is nothing to check in */ }
+    }
+
+    // The service pins the time zone the rules use. When Windows reports a different one (anyone can change
+    // it), the parent hears about it once per change and can accept the new zone in PC Time.
+    private async Task CheckTimeZoneAsync()
+    {
+        try
+        {
+            var state = ScreenTime.ParentClock.Read();
+            if (state?.ChangedUtc is not { } changed || state.SystemId == state.PinnedId) return;
+            var key = state.SystemId + "|" + changed.ToString("O");
+            if (await _db.GetSettingAsync("TimeZoneAlerted", "") == key) return;
+            // Every signed-in account runs DeviceMon; only one of them sends the alert.
+            if (!await _db.TryClaimLeaseAsync("timezone-alert", TimeSpan.FromMinutes(2))) return;
+            var message = $"The time zone on {Environment.MachineName} was changed to {state.SystemId}. " +
+                          $"Bedtime, schedules and daily limits keep using {state.PinnedId}. " +
+                          "If the family moved or is travelling, accept the new time zone in the dashboard under PC Time.";
+            if (await SendTamperAlertAsync("timezone_changed", message, ignoreSwitch: true))
+                await _db.SetSettingAsync("TimeZoneAlerted", key);
+        }
+        catch (Exception ex) { Logger.Instance.Error($"Time zone check failed: {ex.Message}"); }
     }
 
     // The SYSTEM service records a request when the child answers Yes to "ask for more time".
@@ -184,9 +227,23 @@ public sealed class ParentReportService : IDisposable
                 if (_requestAttempts.TryGetValue(request.Id, out var last) && DateTime.UtcNow - last < TimeSpan.FromMinutes(15)) continue;
                 _requestAttempts[request.Id] = DateTime.UtcNow;
                 var message = $"{request.Name} asked for more PC time on {Environment.MachineName}. " +
-                              "Open the dashboard, go to PC Time, choose Add 15/30/60 min and save to approve.";
-                if (!await SendTamperAlertAsync("pc_time_request", message, ignoreSwitch: true, label: "Request")) continue;
+                              "To approve, open the dashboard, go to PC Time and choose Add 15/30/60 min. To decline, choose Not now.";
+                // Phone alerts get buttons: Add opens PC Time ready to save (the remote PIN is still asked),
+                // Not now answers at once through a single-use link.
+                if (!_declineTokens.TryGetValue(request.Id, out var decline))
+                {
+                    decline = await QuickActions.CreateDeclineAsync(_db, request.UserSid, request.Id, request.CreatedUtc + ScreenTime.TimeRequestStore.Lifetime);
+                    _declineTokens[request.Id] = decline;
+                }
+                var buttons = new List<PushButton>
+                {
+                    new("Add 15 min", $"screen-time&grant=15&request={request.Id}"),
+                    new("Add 30 min", $"screen-time&grant=30&request={request.Id}"),
+                    new("Not now", DeclineToken: decline)
+                };
+                if (!await SendTamperAlertAsync("pc_time_request", message, ignoreSwitch: true, label: "Request", buttons: buttons)) continue;
                 seen.Add(request.Id);
+                _declineTokens.Remove(request.Id);
                 await _db.SetSettingAsync("TimeRequestsSeen", string.Join(';', seen.TakeLast(50)));
             }
         }
@@ -345,12 +402,13 @@ public sealed class ParentReportService : IDisposable
             _activeTamperConditions.Add(key);
     }
 
-    private async Task<bool> SendTamperAlertAsync(string type, string message, bool ignoreSwitch = false, string label = "Tamper Alert")
+    private async Task<bool> SendTamperAlertAsync(string type, string message, bool ignoreSwitch = false, string label = "Tamper Alert",
+        IReadOnlyList<PushButton>? buttons = null)
     {
         if (!ignoreSwitch && (await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true") return false;
         Logger.Instance.Warn($"{label}: {message}");
         var emailError = await _email.SendSystemEmailAsync($"{label}: {type}", message);
-        var webhookSent = await _notifications.NotifySystemAsync(type, message);
+        var webhookSent = await _notifications.NotifySystemAsync(type, message, buttons);
         if (emailError != null && !webhookSent)
             Logger.Instance.Error($"Tamper alert delivery failed: {emailError}");
         return emailError == null || webhookSent;

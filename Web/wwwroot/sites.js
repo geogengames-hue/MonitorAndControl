@@ -1,6 +1,14 @@
 // Website limits (Limits page): block a site or give it a daily allowance.
 // The SYSTEM service turns the blocked sites into browser policy; this page only edits the rules.
 const siteEl = id => document.getElementById('site-' + id);
+// The rule loaded with Edit; if the site or account is changed before saving, the old rule is replaced.
+let siteEditing = null;
+
+function siteDeleteUrl(rule) {
+  return rule.userSid
+    ? '/api/user-site-limits/' + encodeURIComponent(rule.host) + '/' + encodeURIComponent(rule.userSid)
+    : '/api/site-limits/' + encodeURIComponent(rule.host);
+}
 
 function siteMessage(text) {
   const box = siteEl('message');
@@ -17,7 +25,10 @@ async function loadSiteLimits() {
   const holder = document.getElementById('site-limits-table');
   if (!holder) return;
   try {
-    const rules = await api('/api/site-limits');
+    // Rules for everyone and rules for one Windows account share one table.
+    const [shared, own] = await Promise.all([api('/api/site-limits'), api('/api/user-site-limits'), loadAccountChoices()]);
+    fillAccountSelect(siteEl('account'));
+    const rules = [...shared.map(r => ({ ...r, userSid: '' })), ...own];
     holder.replaceChildren();
     if (!rules.length) {
       const p = document.createElement('p');
@@ -28,7 +39,7 @@ async function loadSiteLimits() {
     }
     const table = document.createElement('table');
     const head = table.createTHead().insertRow();
-    ['Website', 'Rule', 'Used today', 'Status', ''].forEach(label => {
+    ['Website', 'Account', 'Rule', 'Used today', 'Status', ''].forEach(label => {
       const th = document.createElement('th');
       th.textContent = label ? t(label) : '';
       head.appendChild(th);
@@ -37,6 +48,7 @@ async function loadSiteLimits() {
     rules.forEach(rule => {
       const row = body.insertRow();
       row.insertCell().textContent = rule.host;
+      row.insertCell().textContent = accountLabel(rule.userSid);
       row.insertCell().textContent = rule.dailyMaxMinutes === 0 ? t('Always blocked') : rule.dailyMaxMinutes < 0 ? t('Always allowed') : t('{n} min/day', { n: rule.dailyMaxMinutes });
       row.insertCell().textContent = siteDuration(rule.usedSeconds);
       row.insertCell().textContent = !rule.enabled ? t('Off') : rule.blocked ? t('Blocked') : t('Allowed');
@@ -46,6 +58,8 @@ async function loadSiteLimits() {
       edit.textContent = t('Edit');
       edit.title = t('Load this rule into the form below.');
       edit.addEventListener('click', () => {
+        fillAccountSelect(siteEl('account'), rule.userSid);
+        siteEditing = { host: rule.host, userSid: rule.userSid };
         siteEl('host').value = rule.host;
         siteEl('mode').value = rule.dailyMaxMinutes === 0 ? 'block' : rule.dailyMaxMinutes < 0 ? 'allow' : 'limit';
         if (rule.dailyMaxMinutes > 0) siteEl('minutes').value = rule.dailyMaxMinutes;
@@ -58,7 +72,10 @@ async function loadSiteLimits() {
       remove.title = t('Delete this website rule. The site is unblocked within a minute.');
       remove.addEventListener('click', async () => {
         remove.disabled = true;
-        try { await api('/api/site-limits/' + encodeURIComponent(rule.host), { method: 'DELETE' }); await loadSiteLimits(); }
+        try {
+          await api(siteDeleteUrl(rule), { method: 'DELETE' });
+          await loadSiteLimits();
+        }
         catch (error) { siteMessage(error.message); remove.disabled = false; }
       });
       actions.append(edit, ' ', remove);
@@ -76,11 +93,17 @@ siteEl('save').addEventListener('click', async () => {
   if (mode === 'limit' && (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440)) { siteMessage(t('Minutes per day must be between 1 and 1440.')); return; }
   siteEl('save').disabled = true;
   try {
-    await api('/api/site-limits', {
+    const userSid = siteEl('account').value;
+    const saved = await api(userSid ? '/api/user-site-limits' : '/api/site-limits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ host, dailyMaxMinutes: minutes, enabled: true })
+      body: JSON.stringify({ host, dailyMaxMinutes: minutes, enabled: true, userSid })
     });
+    // Saved under another site name or account than the rule being edited: remove the old one.
+    const original = siteEditing;
+    siteEditing = null;
+    if (original && (original.host !== saved?.host || original.userSid !== userSid))
+      await api(siteDeleteUrl(original), { method: 'DELETE' }).catch(() => {});
     siteEl('host').value = '';
     await loadSiteLimits();
   } catch (error) {

@@ -15,6 +15,8 @@ let screenDirty = false;
 let screenLoading = false;
 let screenPending = null;
 let screenBusy = false;
+// Set when the page was opened from a phone alert's "Add N min" button; used once the requests are loaded.
+let screenPendingGrant = null;
 const screenElement = id => document.getElementById('screen-' + id);
 
 // On the child PC itself a change is approved with a Windows (UAC) prompt. From any other
@@ -151,6 +153,57 @@ function screenRenderRequests() {
   });
 }
 
+// Opened from "Add 15 min" in a phone alert: fill in the extra time and ask for approval straight away.
+function screenApplyPendingGrant() {
+  const grant = screenPendingGrant;
+  if (!grant || !screenData) return;
+  screenPendingGrant = null;
+  history.replaceState(null, '', location.pathname + '#screen-time');
+  const request = (screenData.requests || []).find(r => r.id === grant.request);
+  const account = request && screenData.accounts.find(a => a.sid === request.userSid && a.eligible);
+  if (!account) {
+    screenElement('message').textContent = t('This request was already answered.');
+    return;
+  }
+  const minutes = Math.min(Math.max(grant.minutes, 1), 240);
+  screenElement('account').value = account.sid;
+  screenRenderSelection(true);
+  const profile = screenSelectedProfile();
+  screenPending = {
+    userSid: account.sid,
+    dailyMinutes: profile?.dailyMinutes ?? 180,
+    weekendMinutes: profile?.weekendMinutes ?? 0,
+    bedtimeStart: profile?.bedtimeStart || '',
+    bedtimeEnd: profile?.bedtimeEnd || '',
+    weekendBedtimeStart: profile?.weekendBedtimeStart || '',
+    bonusMinutes: (profile?.bonusMinutes ?? 0) + minutes,
+    enabled: true
+  };
+  screenOpenAuth(t('Add {n} minutes of PC time for {name} today.', { n: minutes, name: account.name }));
+}
+
+// The rules use the time zone the service pinned; a change in Windows waits for the parent.
+function screenRenderTimeZone() {
+  const zone = screenData?.timeZone;
+  const panel = screenElement('timezone-panel');
+  if (!zone) { panel.classList.add('hidden'); return; }
+  const changed = zone.system && zone.system !== zone.pinned;
+  panel.classList.remove('hidden');
+  screenElement('timezone-status').textContent = changed
+    ? t('Windows was switched to {now}. The rules still use {pinned}.', { now: zone.system, pinned: zone.pinned })
+    : t('Rules use {zone}.', { zone: zone.pinned });
+  panel.classList.toggle('screen-error', changed);
+  const accept = screenElement('timezone-accept');
+  accept.classList.toggle('hidden', !changed);
+  accept.disabled = !!screenData.error || !!screenRemoteBlock();
+}
+screenElement('timezone-accept').addEventListener('click', () => {
+  const zone = screenData?.timeZone;
+  // The zone shown is sent along, so the approval cannot pin a zone the parent never saw.
+  if (zone) screenAskLimits('timezone-accept', 0, t('Use the time zone {zone} for bedtime, schedules and daily limits from now on.', { zone: zone.system }),
+    { timeZoneId: zone.system });
+});
+
 function screenRenderTable() {
   const body = screenElement('profiles');
   body.replaceChildren();
@@ -208,6 +261,8 @@ async function loadScreenTime(force = false) {
     screenElement('message').classList.toggle('screen-error', !!data.error || !!remoteBlock);
     screenRenderSelection(force || !screenDirty || select.value !== previousSid);
     screenRenderRequests();
+    screenRenderTimeZone();
+    screenApplyPendingGrant();
     screenLoadHomework();
     screenRenderTable();
   } catch (error) {
@@ -284,8 +339,8 @@ screenElement('homework-60').addEventListener('click', () => screenStartHomework
 screenElement('homework-120').addEventListener('click', () => screenStartHomework(120));
 screenElement('homework-stop').addEventListener('click', () => screenAskLimits('homework-stop', 0, t('End homework mode now.')));
 
-function screenAskLimits(operation, minutes, summary) {
-  screenPending = { userSid: '', dailyMinutes: 180, enabled: false, bonusMinutes: 0, operation, limitsMinutes: minutes };
+function screenAskLimits(operation, minutes, summary, extra = {}) {
+  screenPending = { userSid: '', dailyMinutes: 180, enabled: false, bonusMinutes: 0, operation, limitsMinutes: minutes, ...extra };
   screenOpenAuth(summary);
 }
 

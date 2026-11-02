@@ -113,7 +113,7 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     var ticket = _approvals.Create(callerSid, new ScreenTimeChange(request.UserSid,
                         request.DailyMinutes, request.BonusMinutes, request.Enabled, request.WeekendMinutes,
                         request.BedtimeStart, request.BedtimeEnd, request.WeekendBedtimeStart, request.LockMinutes,
-                        request.Operation, request.LimitsMinutes), now);
+                        request.Operation, request.LimitsMinutes, request.TimeZoneId), now);
                     return ScreenTimeReply.Success(new { ticketId = ticket, canApproveDirectly = elevated });
                 }
                 catch (InvalidOperationException ex) { return ScreenTimeReply.Failure(ex.Message); }
@@ -124,7 +124,8 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     Command = "save", UserSid = change!.UserSid, DailyMinutes = change.DailyMinutes,
                     BonusMinutes = change.BonusMinutes, Enabled = change.Enabled, WeekendMinutes = change.WeekendMinutes,
                     BedtimeStart = change.BedtimeStart, BedtimeEnd = change.BedtimeEnd, WeekendBedtimeStart = change.WeekendBedtimeStart,
-                    LockMinutes = change.LockMinutes, Operation = change.Operation, LimitsMinutes = change.LimitsMinutes
+                    LockMinutes = change.LockMinutes, Operation = change.Operation, LimitsMinutes = change.LimitsMinutes,
+                    TimeZoneId = change.TimeZoneId
                 });
                 _approvals.Complete(request.TicketId, saved);
                 if (saved.Ok)
@@ -148,6 +149,7 @@ internal sealed class ScreenTimeControlServer : IDisposable
             case "limits-seal":
             case "limits-close":
             case "dismiss-request":
+            case "set-heartbeat":
                 // These need no approval, but they must come from DeviceMon itself (which holds the dashboard),
                 // not from another program the child runs: otherwise an empty block list or a forged seal
                 // would be one pipe message away.
@@ -157,6 +159,8 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     return ScreenTimeReply.Failure("Only DeviceMon can do this.");
                 }
                 _snapshot = null;
+                // Rules for "this account" belong to whoever is calling, whatever the message says.
+                if (request.Command == "set-blocked-sites") request.UserSid = callerSid;
                 return _handle(request);
             case "result": return _approvals.Result(request.TicketId, callerSid, now);
             case "cancel":

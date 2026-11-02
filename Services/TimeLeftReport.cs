@@ -23,7 +23,7 @@ public static class TimeLeftReport
         var tip = new List<string>();
 
         if (lockedUntil is { } locked && locked > now)
-            lines.Add($"This PC is locked until {locked.ToLocalTime():HH:mm}.");
+            lines.Add($"This PC is locked until {ParentClock.ToRuleTime(locked):HH:mm}.");
         if (pcRemainingSeconds is { } left)
         {
             lines.Add($"PC time left today: {Duration(left)}.");
@@ -37,8 +37,8 @@ public static class TimeLeftReport
         }
         if (homeworkUntil is { } hw && hw > now)
         {
-            lines.Add($"Homework mode until {hw.ToLocalTime():HH:mm}.");
-            tip.Add($"Homework until {hw.ToLocalTime():HH:mm}");
+            lines.Add($"Homework mode until {ParentClock.ToRuleTime(hw):HH:mm}.");
+            tip.Add($"Homework until {ParentClock.ToRuleTime(hw):HH:mm}");
         }
 
         var rows = apps.OrderBy(a => a.Max - a.Used).ToList();
@@ -75,8 +75,8 @@ public static class TimeLeftReport
             var policy = sid.Length > 0 ? ScreenTimeFiles.ReadPolicies().FirstOrDefault(p => p.UserSid == sid && p.Enabled) : null;
             if (policy != null)
             {
-                untilBed = ScreenTimeRules.MinutesUntilBedtime(policy, DateTime.Now);
-                inBed = ScreenTimeRules.InBedtime(policy, DateTime.Now);
+                untilBed = ScreenTimeRules.MinutesUntilBedtime(policy, ParentClock.Now);
+                inBed = ScreenTimeRules.InBedtime(policy, ParentClock.Now);
                 if (ScreenTimeRules.IsLocked(policy, now)) lockedUntil = policy.LockUntilUtc;
                 // The service keeps the running counters; read this account's remaining time from its status file.
                 if (File.Exists(ScreenTimeFiles.StatusPath))

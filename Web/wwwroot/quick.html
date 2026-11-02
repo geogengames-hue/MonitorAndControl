@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitor &amp; Control</title>
+<!-- Opened from a Telegram alert's "Not now" button. The single-use token is in the address after #,
+     so it never reaches a server log; it can only decline that one request. -->
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f4f5f7; color: #1d2330; }
+  main { max-width: 420px; margin: 15vh auto 0; padding: 24px 16px; text-align: center; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  p { line-height: 1.5; }
+  button { font: inherit; padding: 10px 22px; border: 0; border-radius: 8px; background: #3b6fd8; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #result { min-height: 1.5em; font-weight: 600; }
+  @media (prefers-color-scheme: dark) { body { background: #15181e; color: #e6e8ec; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Request for more PC time</h1>
+  <p>Decline this request? The child is told that no time was added.</p>
+  <button type="button" id="decline">Not now</button>
+  <p id="result" role="status"></p>
+</main>
+<script>
+  const token = location.hash.slice(1);
+  const button = document.getElementById('decline');
+  const result = document.getElementById('result');
+  if (!/^[A-Za-z0-9_-]{20,100}$/.test(token)) {
+    button.disabled = true;
+    result.textContent = 'This link is not complete. Open it again from the alert.';
+  }
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    result.textContent = 'Sending...';
+    try {
+      const response = await fetch('/api/quick/decline', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+      const data = await response.json().catch(() => ({}));
+      result.textContent = data.message || data.error || 'Something went wrong.';
+      if (response.ok || response.status === 410) history.replaceState(null, '', location.pathname);
+      else button.disabled = false;
+    } catch {
+      result.textContent = 'Could not reach the PC. Is your phone on the home network?';
+      button.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

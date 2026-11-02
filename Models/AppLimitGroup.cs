@@ -9,6 +9,8 @@ public class AppLimitGroup
     public int DailyMaxMinutes { get; set; } = 180;
     public bool Enabled { get; set; } = true;
     public List<string> AppNames { get; set; } = new();
+    /// <summary>Empty = applies to everyone; otherwise only this Windows account (SID).</summary>
+    public string UserSid { get; set; } = "";
     [JsonIgnore]
     public long TodaySeconds { get; set; }
 }

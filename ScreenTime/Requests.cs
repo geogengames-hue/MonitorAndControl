@@ -44,13 +44,14 @@ public static class TimeRequestStore
         return true;
     }
 
-    /// <summary>Marks every waiting request from this account as answered.</summary>
-    public static int Resolve(string sid, string? path = null)
+    /// <summary>Marks the account's waiting requests as answered (only <paramref name="requestId"/> when given).</summary>
+    public static int Resolve(string sid, string? path = null, string? requestId = null)
     {
         path ??= Path;
         var all = Read(path);
         var count = 0;
-        foreach (var r in all.Where(r => r.UserSid == sid && !r.Resolved)) { r.Resolved = true; count++; }
+        foreach (var r in all.Where(r => r.UserSid == sid && !r.Resolved && (string.IsNullOrEmpty(requestId) || r.Id == requestId)))
+        { r.Resolved = true; count++; }
         if (count > 0) ScreenTimeFiles.WriteAtomic(path, all);
         return count;
     }

@@ -185,7 +185,7 @@ public class EmailService : IDisposable
         var limits = await _db.GetLimitRulesAsync();
         var groups = await _db.GetLimitGroupsAsync();
         if (!limits.Any(l => l.Enabled && l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)) &&
-            !groups.Any(g => g.Enabled && g.AppNames.Contains(appName, StringComparer.OrdinalIgnoreCase)))
+            !groups.Any(g => g.Enabled && AccountIdentity.AppliesHere(g.UserSid) && g.AppNames.Contains(appName, StringComparer.OrdinalIgnoreCase)))
         {
             _startAlertsSentToday.TryRemove(appName, out _);
             return null;
@@ -487,9 +487,9 @@ Prefix commands with mc:, for example: mc: status or mc: @" + _deviceId + " stat
                 if (limit == null)
                     return $"Error: No limit found for {appName}.";
 
-                var now = DateTime.Now;
+                var now = MonitorAndControl.ScreenTime.ParentClock.Now;
                 var rules = await _scheduler.GetRulesAsync();
-                var allowedUntil = SchedulerService.GetCurrentAllowedWindowEnd(rules, appName, now)
+                var allowedUntil = SchedulerService.GetCurrentAllowedWindowEnd(rules.Where(r => string.IsNullOrEmpty(r.UserSid)), appName, now)
                     ?? now.Date.AddDays(1);
                 if (allowedUntil <= now)
                     return "Error: No remaining allowed time today.";

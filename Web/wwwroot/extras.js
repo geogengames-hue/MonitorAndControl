@@ -23,6 +23,15 @@ async function loadPushSettings() {
     pushEl('telegram-chat').value = s.telegramChatId || '';
     pushEl('dashboard-url').value = s.dashboardUrl || '';
     pushEl('new-apps').checked = s.newAppAlerts !== false;
+    pushEl('heartbeat-url').value = s.heartbeatUrl || '';
+    const hb = s.heartbeat;
+    if (s.heartbeatUrl && hb) {
+      const status = pushEl('heartbeat-status');
+      status.textContent = hb.error ? t(hb.error)
+        : hb.lastOkUtc ? t('Last check-in: {time}.', { time: new Date(hb.lastOkUtc).toLocaleString() })
+        : t('Waiting for the first check-in (within 5 minutes).');
+      status.style.color = hb.error ? '#e07a6a' : '';
+    }
     pushEl('telegram-token').value = '';
     pushEl('telegram-token').placeholder = s.telegramTokenSet ? t('(saved - leave empty to keep it)') : '123456789:AA...';
     pushProviderChanged();
@@ -47,7 +56,8 @@ pushEl('save')?.addEventListener('click', async () => {
         telegramToken: pushEl('telegram-token').value,
         telegramChatId: pushEl('telegram-chat').value,
         dashboardUrl: pushEl('dashboard-url').value,
-        newAppAlerts: pushEl('new-apps').checked
+        newAppAlerts: pushEl('new-apps').checked,
+        heartbeatUrl: pushEl('heartbeat-url').value.trim()
       })
     });
     pushMessage(t('Saved.'));
@@ -114,8 +124,12 @@ document.querySelectorAll('[data-view="settings"]').forEach(a => a.addEventListe
 loadOtherPcs();
 
 // Alerts link straight to a page (for example .../index.html#screen-time): open that view on load.
+// A request alert's "Add 15 min" adds parameters: #screen-time&grant=15&request=<id>.
 window.addEventListener('load', () => {
-  const view = (location.hash || '').slice(1);
+  const [view, ...params] = (location.hash || '').slice(1).split('&');
+  const options = Object.fromEntries(params.map(p => p.split('=')).filter(p => p.length === 2));
+  if (view === 'screen-time' && /^\d{1,3}$/.test(options.grant || '') && /^[A-Za-z0-9_-]{1,64}$/.test(options.request || ''))
+    screenPendingGrant = { minutes: Number(options.grant), request: options.request };
   if (/^[a-z-]{1,20}$/.test(view)) document.querySelector(`.sidebar nav a[data-view="${view}"]`)?.click();
 });
 

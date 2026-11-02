@@ -34,16 +34,20 @@ public class UsageTracker : IDisposable
 
     public void Start(int flushIntervalSec = 30)
     {
-        _limitGroups = _db.GetLimitGroupsAsync().GetAwaiter().GetResult();
+        _limitGroups = ForThisAccount(_db.GetLimitGroupsAsync().GetAwaiter().GetResult());
         _running = true;
         _lastSampleTick = Environment.TickCount64;
         _sampleTimer.Change(1000, 1000);
         _flushTimer.Change(flushIntervalSec * 1000, flushIntervalSec * 1000);
     }
 
+    // A group set for one Windows account is counted and enforced only by that account's DeviceMon.
+    private static List<AppLimitGroup> ForThisAccount(List<AppLimitGroup> groups) =>
+        groups.Where(g => AccountIdentity.AppliesHere(g.UserSid)).ToList();
+
     public async Task ReloadLimitGroupsAsync()
     {
-        var groups = await _db.GetLimitGroupsAsync();
+        var groups = ForThisAccount(await _db.GetLimitGroupsAsync());
         lock (_usageSync)
             _limitGroups = groups;
     }
@@ -74,7 +78,7 @@ public class UsageTracker : IDisposable
                 {
                     AppName = item.AppName,
                     ProcessName = item.ProcessName,
-                    Date = DateTime.Today
+                    Date = MonitorAndControl.ScreenTime.ParentClock.Today
                 });
                 existing = usage[^1];
             }
@@ -110,7 +114,7 @@ public class UsageTracker : IDisposable
 
     public async Task<List<LimitGroupUsageRecord>> GetTodayGroupUsageIncludingPendingAsync()
     {
-        var records = await _db.GetLimitGroupUsageRangeAsync(DateTime.Today, DateTime.Today);
+        var records = await _db.GetLimitGroupUsageRangeAsync(MonitorAndControl.ScreenTime.ParentClock.Today, MonitorAndControl.ScreenTime.ParentClock.Today);
         var groups = await GetLimitGroupsIncludingPendingAsync();
         foreach (var group in groups)
         {
@@ -121,7 +125,7 @@ public class UsageTracker : IDisposable
                 {
                     GroupId = group.Id,
                     GroupName = group.Name,
-                    Date = DateTime.Today,
+                    Date = MonitorAndControl.ScreenTime.ParentClock.Today,
                     TotalSeconds = group.TodaySeconds
                 });
             }
@@ -229,7 +233,7 @@ public class UsageTracker : IDisposable
         await _flushLock.WaitAsync();
         try
         {
-            var currentGroups = await _db.GetLimitGroupsAsync();
+            var currentGroups = ForThisAccount(await _db.GetLimitGroupsAsync());
             List<UsageFlushRecord> records;
             List<(int GroupId, int Seconds)> groupRecords;
             lock (_usageSync)
@@ -318,7 +322,7 @@ public class UsageTracker : IDisposable
                 if (usedSecs >= maxSecs && !breached.Any(b => b.AppName.Equals(app, StringComparison.OrdinalIgnoreCase)))
                     breached.Add((app, usedSecs, maxSecs));
 
-            var refreshedGroups = await _db.GetLimitGroupsAsync();
+            var refreshedGroups = ForThisAccount(await _db.GetLimitGroupsAsync());
             foreach (var group in refreshedGroups.Where(g => g.Enabled))
             {
                 var maxSecs = group.DailyMaxMinutes * 60L;

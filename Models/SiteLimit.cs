@@ -6,4 +6,6 @@ public class SiteLimit
     public string Host { get; set; } = "";
     public int DailyMaxMinutes { get; set; }
     public bool Enabled { get; set; } = true;
+    /// <summary>Empty = applies to everyone; otherwise only this Windows account (SID).</summary>
+    public string UserSid { get; set; } = "";
 }

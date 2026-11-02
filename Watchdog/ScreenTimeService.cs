@@ -28,6 +28,35 @@ internal sealed class ScreenTimeService : IDisposable
     private long _lastPolicy;
     private long _lastHomeworkCheck;
     private bool _lastHomework;
+    private long _lastZoneCheck;
+    private long _lastActiveCheck;
+    private IReadOnlyCollection<string> _activeSids = Array.Empty<string>();
+    private readonly string _heartbeatPath;
+    private readonly System.Threading.Timer _heartbeatTimer;
+    // The check-in connects only to public addresses, also when a name resolves to a home-network one.
+    private readonly HttpClient _http = new(new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        UseProxy = false,
+        ConnectCallback = async (context, token) =>
+        {
+            var addresses = await System.Net.Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, token);
+            var target = addresses.FirstOrDefault(Heartbeat.IsPublicAddress)
+                ?? throw new HttpRequestException("The check-in address is not on the internet.");
+            if (addresses.Any(a => !Heartbeat.IsPublicAddress(a)))
+                throw new HttpRequestException("The check-in address is not on the internet.");
+            var socket = new System.Net.Sockets.Socket(System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp) { NoDelay = true };
+            try
+            {
+                await socket.ConnectAsync(new System.Net.IPEndPoint(target, context.DnsEndPoint.Port), token);
+                return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
+            }
+            catch { socket.Dispose(); throw; }
+        }
+    }) { Timeout = TimeSpan.FromSeconds(15) };
+    private DateTimeOffset? _heartbeatOkUtc;
+    private string _heartbeatError = "";
+    private int _heartbeatRunning;
 
     internal static void PrepareDirectory()
     {
@@ -81,6 +110,9 @@ internal sealed class ScreenTimeService : IDisposable
         _remotePin = new RemotePinStore(Path.Combine(protectedDirectory, "remote-pin.json"));
         PrepareDirectory();
         _sites = new BrowserPolicy(Path.Combine(protectedDirectory, "site-blocklist.json"), log);
+        _heartbeatPath = Path.Combine(protectedDirectory, "heartbeat.json");
+        CheckTimeZone();
+        _activeSids = ActiveSids();
         ApplySiteBlocking();
         _lastHomework = HomeworkState.IsActiveNow();
         _usage = ReadUsage();
@@ -88,6 +120,64 @@ internal sealed class ScreenTimeService : IDisposable
         try { _control = new ScreenTimeControlServer(HandleControl, _log, monitorPath); }
         catch { _log("Screen-time configuration channel unavailable; enforcement continues."); }
         _timer = new System.Threading.Timer(Tick, null, 1000, 1000);
+        _heartbeatTimer = new System.Threading.Timer(_ => _ = PingAsync(), null, TimeSpan.FromMinutes(1), Heartbeat.Interval);
+    }
+
+    // The account at the screen right now (empty for an administrator or the sign-in screen).
+    // Every account with an active session (normally one; more with a remote desktop session).
+    private static IReadOnlyCollection<string> ActiveSids(IEnumerable<ScreenTimeWindows.UserSession>? sessions = null)
+    {
+        try { return (sessions ?? ScreenTimeWindows.Sessions()).Select(s => s.Sid).Distinct().Order(StringComparer.Ordinal).ToList(); }
+        catch { return Array.Empty<string>(); }
+    }
+
+    // Windows lets anyone change the time zone. The rules keep the pinned zone; a change is only recorded
+    // (DeviceMon tells the parent, who can accept the new zone with approval).
+    private void CheckTimeZone()
+    {
+        try
+        {
+            TimeZoneInfo.ClearCachedData();
+            var current = ParentClock.Read();
+            var next = ParentClock.Observe(current, TimeZoneInfo.Local.Id, DateTimeOffset.UtcNow);
+            if (current != null && current.PinnedId == next.PinnedId && current.SystemId == next.SystemId && current.ChangedUtc == next.ChangedUtc) return;
+            ScreenTimeFiles.WriteAtomic(ParentClock.Path, next);
+            ParentClock.Invalidate();
+            if (current == null) _log($"Rules use the time zone {next.PinnedId}.");
+            else if (current.SystemId != next.SystemId)
+                _log(next.ChangedUtc == null ? $"The time zone is back to {next.PinnedId}."
+                    : $"The time zone was changed to {next.SystemId}; the rules keep using {next.PinnedId} until a parent accepts the change.");
+        }
+        catch (Exception ex) { _log("Time zone check failed: " + ex.Message); }
+    }
+
+    private string ReadHeartbeatUrl()
+    {
+        try
+        {
+            if (!File.Exists(_heartbeatPath)) return "";
+            using var doc = JsonDocument.Parse(File.ReadAllText(_heartbeatPath));
+            var url = doc.RootElement.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "";
+            return Heartbeat.IsValidUrl(url) ? url : "";
+        }
+        catch { return ""; }
+    }
+
+    // A check-in to an outside service (healthchecks.io or similar). When the check-ins stop - the PC is off,
+    // offline or this service was stopped - that service alerts the parent.
+    private async Task PingAsync()
+    {
+        if (Interlocked.Exchange(ref _heartbeatRunning, 1) != 0) return;
+        try
+        {
+            var url = ReadHeartbeatUrl();
+            if (url.Length == 0) { _heartbeatError = ""; return; }
+            using var response = await _http.GetAsync(url);
+            if (response.IsSuccessStatusCode) { _heartbeatOkUtc = DateTimeOffset.UtcNow; _heartbeatError = ""; }
+            else _heartbeatError = "The check-in address answered " + (int)response.StatusCode + ".";
+        }
+        catch (Exception ex) { _heartbeatError = "The check-in failed: " + ex.GetType().Name + "."; }
+        finally { Volatile.Write(ref _heartbeatRunning, 0); }
     }
 
     private Dictionary<string, ScreenTimeUsage> ReadUsage()
@@ -120,7 +210,7 @@ internal sealed class ScreenTimeService : IDisposable
             _lastTick = tick;
             // Sleep/resume and scheduler stalls are not charged as active usage.
             if (elapsed > 5) elapsed = 0;
-            var today = DateOnly.FromDateTime(DateTime.Now);
+            var today = DateOnly.FromDateTime(ParentClock.Now);
             var policies = ScreenTimeFiles.ReadPolicies();
             var utcNow = DateTimeOffset.UtcNow;
             var sessions = policies.Any(p => p.Enabled || ScreenTimeRules.IsLocked(p, utcNow)) ? ScreenTimeWindows.Sessions() : new();
@@ -151,7 +241,7 @@ internal sealed class ScreenTimeService : IDisposable
             {
                 var usage = _usage[policy.ProfileId];
                 var remaining = ScreenTimeRules.Remaining(policy, usage, today);
-                var now = DateTime.Now;
+                var now = ParentClock.Now;
                 var bedtime = ScreenTimeRules.InBedtime(policy, now);
                 var warningKey = policy.ProfileId + ":" + usage.Day;
                 if (!_warnings.TryGetValue(warningKey, out var sent)) _warnings[warningKey] = sent = new();
@@ -195,6 +285,14 @@ internal sealed class ScreenTimeService : IDisposable
             }
             // Browsers can lose their policy (a Windows policy refresh, a reset); put the block list back now and then.
             if (tick - _lastPolicy >= 300000) { _lastPolicy = tick; ApplySiteBlocking(); }
+            if (tick - _lastZoneCheck >= 30000) { _lastZoneCheck = tick; CheckTimeZone(); }
+            // Rules for one account are in the browsers only while that account is at the screen.
+            if (tick - _lastActiveCheck >= 5000)
+            {
+                _lastActiveCheck = tick;
+                var active = ActiveSids(sessions.Count > 0 ? sessions : null);
+                if (!active.SequenceEqual(_activeSids)) { _activeSids = active; ApplySiteBlocking(); }
+            }
             // Homework mode ends by itself: switch the browser rules back as soon as the time is up.
             if (tick - _lastHomeworkCheck >= 5000)
             {
@@ -212,7 +310,7 @@ internal sealed class ScreenTimeService : IDisposable
         catch (Exception ex)
         {
             if (_lastError != ex.Message) { _log("Screen-time error: " + ex); _lastError = ex.Message; }
-            try { WriteStatus(new(), DateOnly.FromDateTime(DateTime.Now), ex.Message); } catch { }
+            try { WriteStatus(new(), DateOnly.FromDateTime(ParentClock.Now), ex.Message); } catch { }
         }
         finally { Monitor.Exit(_sync); }
     }
@@ -224,7 +322,7 @@ internal sealed class ScreenTimeService : IDisposable
         {
             var file = LimitsSealStore.Read();
             var sealedContent = LimitsSealStore.Phase(file, DateTimeOffset.UtcNow) != SealPhase.Off ? file?.Content : null;
-            _sites.Apply(sealedContent, HomeworkState.IsActiveNow());
+            _sites.Apply(sealedContent, HomeworkState.IsActiveNow(), _activeSids);
         }
         catch (Exception ex) { _log("Site blocking could not be applied: " + ex.Message); }
     }
@@ -274,6 +372,7 @@ internal sealed class ScreenTimeService : IDisposable
         ScreenTimeFiles.WriteAtomic(ScreenTimeFiles.StatusPath, new {
             updatedUtc = DateTimeOffset.UtcNow, error,
             remote = RemoteStatus(),
+            heartbeat = new { configured = ReadHeartbeatUrl().Length > 0, lastOkUtc = _heartbeatOkUtc, error = _heartbeatError.Length > 0 ? _heartbeatError : null },
             profiles = policies.Select(p => {
                 var usage = _usage.GetValueOrDefault(p.ProfileId) ?? new ScreenTimeUsage();
                 return new {
@@ -332,7 +431,7 @@ internal sealed class ScreenTimeService : IDisposable
                     try
                     {
                         foreach (var session in ScreenTimeWindows.Sessions().Where(s => s.Unlocked))
-                            ScreenTimeWindows.Warn(session.SessionId, $"Homework mode is on until {state.UntilUtc!.Value.ToLocalTime():HH:mm}. Games and entertainment are blocked until then.");
+                            ScreenTimeWindows.Warn(session.SessionId, $"Homework mode is on until {ParentClock.ToRuleTime(state.UntilUtc!.Value):HH:mm}. Games and entertainment are blocked until then.");
                     }
                     catch { /* the mode is on even if the message cannot be shown */ }
                     return ScreenTimeReply.Success(new { untilUtc = state.UntilUtc });
@@ -342,12 +441,30 @@ internal sealed class ScreenTimeService : IDisposable
                 {
                     var hosts = SiteBlocking.NormalizeAll(request.BlockedHosts);
                     var allowed = SiteBlocking.NormalizeAll(request.AllowedHosts);
-                    if (_sites.SetReported(hosts, allowed, request.AllowOnly, request.SafeBrowsing))
+                    // UserSid is the calling account, filled in by the control server (never taken from the message).
+                    var ownBlocked = SiteBlocking.NormalizeAll(request.AccountBlockedHosts);
+                    var ownAllowed = SiteBlocking.NormalizeAll(request.AccountAllowedHosts);
+                    if (_sites.SetReported(hosts, allowed, request.AllowOnly, request.SafeBrowsing, request.UserSid, ownBlocked, ownAllowed))
                     {
-                        _log($"Site blocking: {hosts.Count} website(s) blocked, {(request.AllowOnly ? allowed.Count + " allowed (only listed sites may open)" : "all others allowed")}, safe browsing {(request.SafeBrowsing ? "on" : "off")}.");
+                        _log($"Site blocking: {hosts.Count} website(s) blocked, {(request.AllowOnly ? allowed.Count + " allowed (only listed sites may open)" : "all others allowed")}, safe browsing {(request.SafeBrowsing ? "on" : "off")}" +
+                             (ownBlocked.Count + ownAllowed.Count > 0 ? $"; {ownBlocked.Count} blocked and {ownAllowed.Count} allowed for one account." : "."));
                         ApplySiteBlocking();
                     }
                     return ScreenTimeReply.Success(new { blocked = hosts.Count });
+                }
+
+                if (request.Command == "set-heartbeat")
+                {
+                    var url = (request.HeartbeatUrl ?? "").Trim();
+                    if (!Heartbeat.IsValidUrl(url)) return ScreenTimeReply.Failure("The check-in address must be an https address on the internet.");
+                    if (url != ReadHeartbeatUrl())
+                    {
+                        ScreenTimeFiles.WriteAtomic(_heartbeatPath, new { url });
+                        _heartbeatOkUtc = null;
+                        _log(url.Length == 0 ? "Check-ins turned off." : "Check-in address set; the service checks in every 5 minutes.");
+                        if (url.Length > 0) _ = PingAsync();
+                    }
+                    return ScreenTimeReply.Success(new { configured = url.Length > 0 });
                 }
 
                 if (request.Command == "limits-close")
@@ -372,7 +489,7 @@ internal sealed class ScreenTimeService : IDisposable
                 if (request.Command == "dismiss-request")
                 {
                     if (string.IsNullOrEmpty(request.UserSid)) return ScreenTimeReply.Failure("Select an account.");
-                    var closed = TimeRequestStore.Resolve(request.UserSid);
+                    var closed = TimeRequestStore.Resolve(request.UserSid, requestId: request.RequestId);
                     if (closed > 0)
                     {
                         _log("Screen-time: a parent declined a request for more time.");
@@ -391,12 +508,26 @@ internal sealed class ScreenTimeService : IDisposable
                     // Sealed app limits: approved like any other change, but not tied to an account.
                     if (request.Operation == "limits-open" && request.LimitsMinutes is < 1 or > LimitsSealStore.MaxWindowMinutes)
                         return ScreenTimeReply.Failure("Choose between 1 and 60 minutes.");
-                    if (request.Operation is not ("limits-open" or "limits-clear" or "homework-stop"))
+                    if (request.Operation is not ("limits-open" or "limits-clear" or "homework-stop" or "timezone-accept"))
                         return ScreenTimeReply.Failure("Unknown operation.");
+                    // The parent approves the zone they were shown; if Windows was switched again meanwhile,
+                    // that newer zone is not pinned by the old approval.
+                    if (request.Operation == "timezone-accept")
+                    {
+                        TimeZoneInfo.ClearCachedData();
+                        if (string.IsNullOrEmpty(request.TimeZoneId) || request.TimeZoneId != TimeZoneInfo.Local.Id)
+                            return ScreenTimeReply.Failure("The PC's time zone changed again. Reload the page and check it.");
+                    }
                     if (request.Command == "validate") return ScreenTimeReply.Success(new { valid = true });
                     var now = DateTimeOffset.UtcNow;
                     if (request.Operation == "limits-open")
                         LimitsSealStore.Write(LimitsSealStore.Open(LimitsSealStore.Read(), request.LimitsMinutes, now));
+                    else if (request.Operation == "timezone-accept")
+                    {
+                        ScreenTimeFiles.WriteAtomic(ParentClock.Path, ParentClock.Accept(request.TimeZoneId));
+                        ParentClock.Invalidate();
+                        _log($"The rules now use the time zone {request.TimeZoneId}.");
+                    }
                     else if (request.Operation == "homework-stop")
                     {
                         HomeworkState.Clear();
@@ -428,10 +559,10 @@ internal sealed class ScreenTimeService : IDisposable
                     policy.BedtimeStart = request.BedtimeStart ?? "";
                     policy.BedtimeEnd = request.BedtimeEnd ?? "";
                     policy.WeekendBedtimeStart = request.WeekendBedtimeStart ?? "";
-                    var todayText = DateTime.Today.ToString("yyyy-MM-dd");
+                    var todayText = ParentClock.Today.ToString("yyyy-MM-dd");
                     var previousBonus = existing != null && existing.BonusDay == todayText ? existing.BonusMinutes : 0;
                     policy.Enabled = request.Enabled;
-                    policy.BonusDay = DateTime.Today.ToString("yyyy-MM-dd");
+                    policy.BonusDay = todayText;
                     policy.BonusMinutes = request.BonusMinutes;
                     policy.Validate();
                     if (request.Command == "validate") return ScreenTimeReply.Success(new { valid = true });
@@ -449,7 +580,8 @@ internal sealed class ScreenTimeService : IDisposable
                 foreach (var policy in policies)
                     if (!accounts.Any(a => a.Sid == policy.UserSid))
                         accounts.Add(new ScreenTimeWindows.Account(policy.DisplayName, policy.UserSid, false, "Account not found"));
-                var today = DateOnly.FromDateTime(DateTime.Now);
+                var today = DateOnly.FromDateTime(ParentClock.Now);
+                var zone = ParentClock.Read();
                 return ScreenTimeReply.Success(new {
                     accounts,
                     profiles = policies.Select(p => {
@@ -466,6 +598,7 @@ internal sealed class ScreenTimeService : IDisposable
                     }).ToList(),
                     remote = RemoteStatus(),
                     limitsProtection = DescribeLimitsProtection(),
+                    timeZone = new { pinned = zone?.PinnedId ?? TimeZoneInfo.Local.Id, system = zone?.SystemId ?? TimeZoneInfo.Local.Id, changedUtc = zone?.ChangedUtc },
                     requests = TimeRequestStore.Pending(DateTimeOffset.UtcNow)
                         .Select(r => new { id = r.Id, userSid = r.UserSid, name = r.Name, createdUtc = r.CreatedUtc }).ToList(),
                     updatedUtc = DateTimeOffset.UtcNow,
@@ -487,6 +620,8 @@ internal sealed class ScreenTimeService : IDisposable
     {
         _control?.Dispose();
         _timer?.Dispose();
+        _heartbeatTimer.Dispose();
+        _http.Dispose();
         lock (_sync)
         {
             _timer = null;

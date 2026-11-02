@@ -29,9 +29,12 @@ public class SchedulerService
         _lastCacheUpdate = DateTime.MinValue;
     }
 
+    /// <summary>True for rules meant for everyone or for the account this DeviceMon runs for.</summary>
+    public static bool AppliesHere(ScheduleRule rule) => AccountIdentity.AppliesHere(rule.UserSid);
+
     public bool IsOutsideAllowedHours(ScheduleRule rule)
     {
-        return IsOutsideAllowedHours(rule, DateTime.Now);
+        return IsOutsideAllowedHours(rule, MonitorAndControl.ScreenTime.ParentClock.Now);
     }
 
     public static bool IsOutsideAllowedHours(ScheduleRule rule, DateTime now)
@@ -71,7 +74,7 @@ public class SchedulerService
     public async Task<bool> IsInViolationPeriodAsync()
     {
         var rules = await GetRulesAsync();
-        return rules.Any(r => r.Enabled && IsOutsideAllowedHours(r));
+        return rules.Any(r => r.Enabled && AppliesHere(r) && IsOutsideAllowedHours(r));
     }
 
     public async Task<HashSet<string>> GetViolatingAppNamesAsync(HashSet<string> knownAppNames)
@@ -79,7 +82,7 @@ public class SchedulerService
         var rules = await GetRulesAsync();
         var violating = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var rule in rules.Where(r => r.Enabled && IsOutsideAllowedHours(r)))
+        foreach (var rule in rules.Where(r => r.Enabled && AppliesHere(r) && IsOutsideAllowedHours(r)))
         {
             if (string.IsNullOrWhiteSpace(rule.AppName))
             {
@@ -96,7 +99,7 @@ public class SchedulerService
     public async Task<List<ScheduleRule>> GetViolatingRulesAsync()
     {
         var rules = await GetRulesAsync();
-        return rules.Where(r => r.Enabled && IsOutsideAllowedHours(r)).ToList();
+        return rules.Where(r => r.Enabled && AppliesHere(r) && IsOutsideAllowedHours(r)).ToList();
     }
 
     public static DateTime? GetNextAllowedTime(IEnumerable<ScheduleRule> rules, DateTime now)
@@ -131,6 +134,7 @@ public class SchedulerService
         return null;
     }
 
+    /// <summary>Callers pass only the rules that count for them (this account's, or the shared ones).</summary>
     public static DateTime? GetCurrentAllowedWindowEnd(IEnumerable<ScheduleRule> rules, string appName, DateTime now)
     {
         var matching = rules

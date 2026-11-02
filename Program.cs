@@ -723,7 +723,7 @@ internal static class Program
 
             var bonus = await _db.GetTodayBonusMinutesAsync(appName);
             var total = limit.DailyMaxMinutes + bonus;
-            var reset = DateTime.Today.AddDays(1);
+            var reset = MonitorAndControl.ScreenTime.ParentClock.Today.AddDays(1);
             return Localization.Text("AllowanceResetsAt", language, total, reset);
         }
         catch (Exception ex)
@@ -742,12 +742,12 @@ internal static class Program
 
             var rules = await _scheduler.GetRulesAsync();
             var matching = rules
-                .Where(r => r.Enabled &&
+                .Where(r => r.Enabled && SchedulerService.AppliesHere(r) &&
                     (string.IsNullOrWhiteSpace(r.AppName) ||
                      r.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)))
                 .ToList();
 
-            var next = SchedulerService.GetNextAllowedTime(matching, DateTime.Now);
+            var next = SchedulerService.GetNextAllowedTime(matching, MonitorAndControl.ScreenTime.ParentClock.Now);
             return next.HasValue
                 ? Localization.Text("NextAllowedTime", language, next.Value)
                 : Localization.Text("CheckScheduleNextAllowed", language);

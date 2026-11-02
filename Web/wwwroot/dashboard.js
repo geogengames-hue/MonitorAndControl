@@ -895,6 +895,38 @@ function renderHistoryChart(usage) {
 }
 
 // Limits
+// ---- Windows accounts, for groups, schedule rules and website rules that apply to one account
+let accountChoices = [];
+
+async function loadAccountChoices() {
+  try {
+    const st = await api('/api/screen-time');
+    accountChoices = (st.accounts || []).filter(a => a.eligible);
+  } catch { /* keep the last list; the service may be briefly unavailable */ }
+  return accountChoices;
+}
+
+function accountLabel(sid) {
+  return sid ? (accountChoices.find(a => a.sid === sid)?.name || t('Unknown account')) : t('Everyone');
+}
+
+function fillAccountSelect(select, value) {
+  if (!select) return;
+  const chosen = value ?? select.value;
+  select.replaceChildren();
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = t('Everyone');
+  select.appendChild(all);
+  accountChoices.forEach(a => {
+    const o = document.createElement('option');
+    o.value = a.sid;
+    o.textContent = a.name;
+    select.appendChild(o);
+  });
+  select.value = accountChoices.some(a => a.sid === chosen) ? chosen : '';
+}
+
 async function loadLimits() {
   try {
     const [limits, known, today, mappings, bonuses, groups] = await Promise.all([
@@ -903,8 +935,10 @@ async function loadLimits() {
       api('/api/usage/today'),
       api('/api/mappings'),
       api('/api/bonus/today'),
-      api('/api/limit-groups')
+      api('/api/limit-groups'),
+      loadAccountChoices()
     ]);
+    fillAccountSelect(document.getElementById('group-account'), editingGroup?.userSid);
     renderLimitGroups(groups, known, limits);
     const table = document.getElementById('limits-table');
     if (!Array.isArray(mappings)) {
@@ -1043,7 +1077,7 @@ function renderLimitGroups(groups, known, limits) {
       const pct = max ? Math.round(group.todaySeconds / max * 100) : 0;
       const exceeded = group.enabled && group.todaySeconds >= max;
       html += `<tr data-group-id="${group.id}">
-        <td><strong>${esc(group.name)}</strong></td>
+        <td><strong>${esc(group.name)}</strong>${group.userSid ? `<br><small>${t('Only {name}', { name: esc(accountLabel(group.userSid)) })}</small>` : ''}</td>
         <td>${group.appNames.map(esc).join(', ')}</td>
         <td>${group.dailyMaxMinutes} ${t('min')}</td>
         <td data-group-today>${formatDuration(group.todaySeconds)}</td>
@@ -1066,6 +1100,7 @@ function editLimitGroup(id) {
   document.getElementById('group-name').value = editingGroup.name;
   document.getElementById('group-minutes').value = editingGroup.dailyMaxMinutes;
   document.getElementById('group-enabled').checked = editingGroup.enabled;
+  fillAccountSelect(document.getElementById('group-account'), editingGroup.userSid || '');
   document.getElementById('group-cancel').classList.remove('hidden');
   renderLimitGroups(currentLimitGroups, Object.fromEntries(currentGroupApps.map((app, i) => [i, app])), []);
 }
@@ -1075,6 +1110,7 @@ function resetLimitGroupForm() {
   document.getElementById('group-name').value = '';
   document.getElementById('group-minutes').value = 180;
   document.getElementById('group-enabled').checked = true;
+  document.getElementById('group-account').value = '';
   document.getElementById('group-cancel').classList.add('hidden');
   renderLimitGroups(currentLimitGroups, Object.fromEntries(currentGroupApps.map((app, i) => [i, app])), []);
 }
@@ -1090,7 +1126,7 @@ document.getElementById('group-save').addEventListener('click', async () => {
   try {
     await api('/api/limit-groups', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: editingGroup?.id || 0, name, dailyMaxMinutes, enabled: document.getElementById('group-enabled').checked, appNames })
+      body: JSON.stringify({ id: editingGroup?.id || 0, name, dailyMaxMinutes, enabled: document.getElementById('group-enabled').checked, appNames, userSid: document.getElementById('group-account').value })
     });
     resetLimitGroupForm();
     loadLimits();
@@ -1234,14 +1270,17 @@ async function loadSchedule() {
     const [rules, known, limits] = await Promise.all([
       api('/api/schedule'),
       api('/api/apps'),
-      api('/api/limits')
+      api('/api/limits'),
+      loadAccountChoices()
     ]);
     syncScheduleAppOptions(known, limits);
+    fillAccountSelect(document.getElementById('schedule-account'));
     const table = document.getElementById('schedule-table');
-    let html = `<table><thead><tr><th>${t('Applies To')}</th><th>${t('Day')}</th><th>${t('Start')}</th><th>${t('End')}</th><th>${t('Enabled')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
+    let html = `<table><thead><tr><th>${t('Applies To')}</th><th>${t('Account')}</th><th>${t('Day')}</th><th>${t('Start')}</th><th>${t('End')}</th><th>${t('Enabled')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
     rules.forEach(r => {
       html += `<tr>
         <td>${r.appName ? esc(r.appName) : t('All apps')}</td>
+        <td>${esc(accountLabel(r.userSid))}</td>
         <td>${r.dayOfWeek}</td>
         <td>${r.startTime}</td>
         <td>${r.endTime}</td>
@@ -1249,7 +1288,7 @@ async function loadSchedule() {
         <td class="actions"><button class="btn-danger" title="${t("Delete this rule.")}" onclick="deleteSchedule(${r.id})">${t('Delete')}</button></td>
       </tr>`;
     });
-    if (rules.length === 0) html += `<tr><td colspan="6" style="color:#666;text-align:center">${t('No schedule rules configured')}</td></tr>`;
+    if (rules.length === 0) html += `<tr><td colspan="7" style="color:#666;text-align:center">${t('No schedule rules configured')}</td></tr>`;
     html += '</tbody></table>';
     table.innerHTML = html;
   } catch (e) { log(e); }
@@ -1290,7 +1329,8 @@ document.getElementById('schedule-save').addEventListener('click', async () => {
   const start = document.getElementById('schedule-start').value;
   const end = document.getElementById('schedule-end').value;
   if (!day || !start || !end) return;
-  await api('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appName, dayOfWeek: day, startTime: start, endTime: end, enabled: true }) });
+  const userSid = document.getElementById('schedule-account').value;
+  await api('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appName, dayOfWeek: day, startTime: start, endTime: end, enabled: true, userSid }) });
   loadSchedule();
 });
 

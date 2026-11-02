@@ -61,6 +61,11 @@
         <button type="button" id="screen-limits-finish" title="Close the editing window now and seal the new limits." class="btn-secondary hidden">Finish editing</button>
         <button type="button" id="screen-limits-remove" title="Turn the protection off. Needs your approval." class="btn-secondary hidden">Remove protection</button>
       </div>
+      <div id="screen-timezone-panel" class="screen-notice screen-lock hidden" title="Anyone can change the time zone in Windows. Bedtime, schedules and daily limits keep using the time zone shown here until you accept a new one.">
+        <strong>Time zone</strong>
+        <span id="screen-timezone-status"></span>
+        <button type="button" id="screen-timezone-accept" title="Use the PC's current time zone for bedtime, schedules and daily limits. Needs your approval." class="btn-secondary hidden">Use the new time zone</button>
+      </div>
       <div id="screen-requests" class="screen-notice hidden" role="status" title="The child asked for more PC time. Approve to fill in the extra minutes, then save."></div>
       <div class="history-stats screen-stats">
         <div class="stat-card"><div class="label">Selected account</div><div class="value" id="screen-account-name">-</div><div class="sub">Administrators are never controlled</div></div>
@@ -244,6 +249,7 @@
         <h3>Create / Edit Group</h3>
         <input type="text" id="group-name" title="A name for the group, for example Games." placeholder="Group name (e.g. Games)">
         <input type="number" id="group-minutes" title="Minutes per day that all apps in the group share." placeholder="Minutes per day" min="1" max="1440" value="180">
+        <select id="group-account" title="Everyone shares this group, or it counts only one Windows account's own time."><option value="">Everyone</option></select>
         <label title="Turn this group&#x27;s limit on or off." class="inline-check"><input type="checkbox" id="group-enabled" checked> Enabled</label>
         <div id="group-members" class="group-members"></div>
         <button id="group-save" title="Save the group and its limit.">Save Group</button>
@@ -260,7 +266,7 @@
         <button id="limit-cancel" title="Stop editing and discard the changes." class="btn-secondary hidden">Cancel</button>
       </div>
       <h3 class="individual-limits-title" title="App limits that count only one Windows account's own time, so each child can have their own allowance.">Limits for one account</h3>
-      <p style="font-size:13px;color:#888">The limits above add up everyone's time on this PC. A limit here counts only one Windows account's own time, so two children can each have their own allowance. It applies on top of the shared limits. Groups, the schedule, website rules and homework mode still apply to everyone.</p>
+      <p style="font-size:13px;color:#888">The limits above add up everyone's time on this PC. A limit here counts only one Windows account's own time, so two children can each have their own allowance. It applies on top of the shared limits. Groups, schedule rules and website rules can also be set for one account (choose it in their forms). Homework mode applies to everyone.</p>
       <div class="table-container" id="user-limits-table"></div>
       <div class="add-form">
         <h3>Add / Edit Account Limit</h3>
@@ -280,6 +286,7 @@
       <div class="table-container" id="site-limits-table"></div>
       <div class="add-form">
         <h3>Add / Edit Website Limit</h3>
+        <select id="site-account" title="The rule applies to everyone, or only to one Windows account (counted from that account's own browsing, and in force while it is the account at the screen)."><option value="">Everyone</option></select>
         <input type="text" id="site-host" title="The site to limit, for example youtube.com. Its subdomains (m.youtube.com, music.youtube.com) are included." placeholder="Site (e.g. youtube.com)" autocomplete="off">
         <select id="site-mode" title="Block the site, limit it to some minutes a day, or always allow it (used with the allow-list switch above).">
           <option value="block">Block completely</option>
@@ -314,6 +321,7 @@
       <div class="table-container" id="schedule-table"></div>
       <div class="add-form">
         <h3>Add Allowed Hours Rule</h3>
+        <select id="schedule-account" title="The rule applies to everyone, or only to one Windows account."><option value="">Everyone</option></select>
         <select id="schedule-app" title="Which app the rule applies to, or all apps.">
           <option value="">All apps</option>
         </select>
@@ -440,6 +448,9 @@
         <label title="The address your phone uses to reach this dashboard, for example http://192.168.1.20:5000. Alerts link to it. Leave empty to use this PC's name.">Dashboard address for links (optional)</label>
         <input type="url" id="push-dashboard-url" title="The address your phone uses to reach this dashboard, for example http://192.168.1.20:5000. Alerts link to it. Leave empty to use this PC's name." placeholder="http://192.168.1.20:5000" style="width:350px">
         <label title="Get an alert when a new program or game is installed on this PC." class="inline-check"><input type="checkbox" id="push-new-apps"> Alert me when a new program is installed</label>
+        <label title="The GameHost service calls this address every 5 minutes. A free check at healthchecks.io alerts you when the calls stop: the PC is switched off, offline, or the service was stopped.">"PC went quiet" check-in address (optional)</label>
+        <input type="url" id="push-heartbeat-url" title="The GameHost service calls this address every 5 minutes. A free check at healthchecks.io alerts you when the calls stop: the PC is switched off, offline, or the service was stopped." placeholder="https://hc-ping.com/your-check-id" autocomplete="off" style="width:350px">
+        <p id="push-heartbeat-status" style="font-size:12px;color:#888">At healthchecks.io create a free check, set Period 10 minutes and Grace 10 minutes (or a schedule for the hours the PC is used), connect it to ntfy, Telegram or email, and paste its ping address here. It also alerts you when the PC is simply switched off.</p>
         <p style="font-size:12px;color:#888">Used for tamper alerts, time requests, lockouts and limit events. Nothing is installed on the child's PC. The topic or token is stored on this PC, so treat it as low-risk: it can only send you messages.</p>
         <label title="A web address that receives a message when a limit is reached, for example Discord or ntfy.sh.">Webhook URL (optional)</label>
         <input type="url" id="set-webhook-url" title="A web address that receives a message when a limit is reached, for example Discord or ntfy.sh." placeholder="https://hooks.example.com/alert" style="width:400px">

@@ -109,6 +109,30 @@ public class UsageDatabase : IDisposable
                 Enabled INTEGER NOT NULL DEFAULT 1
             );
 
+            CREATE TABLE IF NOT EXISTS QuickActions (
+                Hash TEXT PRIMARY KEY,
+                UserSid TEXT NOT NULL,
+                RequestId TEXT NOT NULL,
+                ExpiresUtc TEXT NOT NULL,
+                Used INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS UserSiteLimits (
+                UserSid TEXT NOT NULL,
+                Host TEXT NOT NULL,
+                DailyMaxMinutes INTEGER NOT NULL DEFAULT 0,
+                Enabled INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (UserSid, Host)
+            );
+
+            CREATE TABLE IF NOT EXISTS UserSiteUsage (
+                UserSid TEXT NOT NULL,
+                Host TEXT NOT NULL,
+                Date TEXT NOT NULL,
+                Seconds INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (UserSid, Host, Date)
+            );
+
             CREATE TABLE IF NOT EXISTS SiteUsage (
                 Host TEXT NOT NULL,
                 Date TEXT NOT NULL,
@@ -133,7 +157,7 @@ public class UsageDatabase : IDisposable
 
             CREATE TABLE IF NOT EXISTS LimitGroupMembers (
                 GroupId INTEGER NOT NULL,
-                AppName TEXT NOT NULL UNIQUE,
+                AppName TEXT NOT NULL,
                 PRIMARY KEY (GroupId, AppName),
                 FOREIGN KEY (GroupId) REFERENCES LimitGroups(Id) ON DELETE CASCADE
             );
@@ -181,13 +205,40 @@ public class UsageDatabase : IDisposable
         foreach (var sql in new[]
         {
             "ALTER TABLE UsageRecords ADD COLUMN ForegroundSeconds INTEGER NOT NULL DEFAULT 0;",
-            "ALTER TABLE UsageRecords ADD COLUMN BackgroundSeconds INTEGER NOT NULL DEFAULT 0;"
+            "ALTER TABLE UsageRecords ADD COLUMN BackgroundSeconds INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE LimitGroups ADD COLUMN UserSid TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE ScheduleRules ADD COLUMN UserSid TEXT NOT NULL DEFAULT '';"
         })
         {
             using var usageMigration = _connection.CreateCommand();
             usageMigration.CommandText = sql;
             try { usageMigration.ExecuteNonQuery(); }
             catch (SqliteException ex) when (ex.SqliteErrorCode == 1) { }
+        }
+
+        // Older databases allowed an app in only one group overall; groups for different accounts may now share apps.
+        using (var check = _connection.CreateCommand())
+        {
+            check.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'LimitGroupMembers'";
+            if ((check.ExecuteScalar() as string)?.Contains("UNIQUE", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                using var tx = _connection.BeginTransaction();
+                using var rebuild = _connection.CreateCommand();
+                rebuild.Transaction = tx;
+                rebuild.CommandText = """
+                    CREATE TABLE LimitGroupMembers_new (
+                        GroupId INTEGER NOT NULL,
+                        AppName TEXT NOT NULL,
+                        PRIMARY KEY (GroupId, AppName),
+                        FOREIGN KEY (GroupId) REFERENCES LimitGroups(Id) ON DELETE CASCADE
+                    );
+                    INSERT INTO LimitGroupMembers_new (GroupId, AppName) SELECT GroupId, AppName FROM LimitGroupMembers;
+                    DROP TABLE LimitGroupMembers;
+                    ALTER TABLE LimitGroupMembers_new RENAME TO LimitGroupMembers;
+                    """;
+                rebuild.ExecuteNonQuery();
+                tx.Commit();
+            }
         }
     }
 
@@ -220,7 +271,7 @@ public class UsageDatabase : IDisposable
                 """;
             cmd.Parameters.AddWithValue("@app", appName);
             cmd.Parameters.AddWithValue("@proc", processName);
-            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
             cmd.Parameters.AddWithValue("@total", totalSeconds);
             cmd.Parameters.AddWithValue("@foreground", foregroundSeconds);
             cmd.Parameters.AddWithValue("@background", backgroundSeconds);
@@ -231,7 +282,7 @@ public class UsageDatabase : IDisposable
 
     public async Task<List<AppUsageRecord>> GetTodayUsageAsync()
     {
-        return await GetUsageRangeAsync(DateTime.Today, DateTime.Today);
+        return await GetUsageRangeAsync(MonitorAndControl.ScreenTime.ParentClock.Today, MonitorAndControl.ScreenTime.ParentClock.Today);
     }
 
     // ---- Limits for one Windows account ------------------------------------------------------
@@ -325,10 +376,162 @@ public class UsageDatabase : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = "SELECT AppName, Seconds FROM UserAppUsage WHERE UserSid = @sid AND Date = @date";
             cmd.Parameters.AddWithValue("@sid", userSid);
-            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
             using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync()) map[r.GetString(0)] = map.GetValueOrDefault(r.GetString(0)) + r.GetInt64(1);
             return map;
+        }
+        finally { _lock.Release(); }
+    }
+
+    // ---- Single-use "Not now" links from phone alerts ------------------------------------------
+    public async Task AddQuickActionAsync(string hash, string userSid, string requestId, DateTimeOffset expiresUtc)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                DELETE FROM QuickActions WHERE ExpiresUtc < @now;
+                INSERT OR REPLACE INTO QuickActions (Hash, UserSid, RequestId, ExpiresUtc, Used) VALUES (@hash, @sid, @req, @exp, 0);
+                """;
+            cmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.Parameters.AddWithValue("@hash", hash);
+            cmd.Parameters.AddWithValue("@sid", userSid);
+            cmd.Parameters.AddWithValue("@req", requestId);
+            cmd.Parameters.AddWithValue("@exp", expiresUtc.ToUniversalTime().ToString("O"));
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>The account and request a link is for, or null when it is unknown, expired or already used.</summary>
+    public async Task<(string UserSid, string RequestId)?> FindQuickActionAsync(string hash, DateTimeOffset now)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var find = _connection.CreateCommand();
+            find.CommandText = "SELECT UserSid, RequestId FROM QuickActions WHERE Hash = @hash AND Used = 0 AND ExpiresUtc > @now";
+            find.Parameters.AddWithValue("@hash", hash);
+            find.Parameters.AddWithValue("@now", now.ToUniversalTime().ToString("O"));
+            using var r = await find.ExecuteReaderAsync();
+            return await r.ReadAsync() ? (r.GetString(0), r.GetString(1)) : null;
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>Uses up a link once its action has been carried out.</summary>
+    public async Task MarkQuickActionUsedAsync(string hash)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var use = _connection.CreateCommand();
+            use.CommandText = "UPDATE QuickActions SET Used = 1 WHERE Hash = @hash";
+            use.Parameters.AddWithValue("@hash", hash);
+            await use.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    // ---- Website rules for one Windows account ----------------------------------------------
+    public async Task<List<SiteLimit>> GetUserSiteLimitsAsync(string? userSid = null)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var list = new List<SiteLimit>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = userSid == null
+                ? "SELECT Host, DailyMaxMinutes, Enabled, UserSid FROM UserSiteLimits ORDER BY UserSid, Host"
+                : "SELECT Host, DailyMaxMinutes, Enabled, UserSid FROM UserSiteLimits WHERE UserSid = @sid ORDER BY Host";
+            if (userSid != null) cmd.Parameters.AddWithValue("@sid", userSid);
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new SiteLimit { Host = r.GetString(0), DailyMaxMinutes = r.GetInt32(1), Enabled = r.GetBoolean(2), UserSid = r.GetString(3) });
+            return list;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task SaveUserSiteLimitAsync(SiteLimit limit)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO UserSiteLimits (UserSid, Host, DailyMaxMinutes, Enabled) VALUES (@sid, @host, @max, @en)
+                ON CONFLICT(UserSid, Host) DO UPDATE SET DailyMaxMinutes = @max, Enabled = @en;
+                """;
+            cmd.Parameters.AddWithValue("@sid", limit.UserSid);
+            cmd.Parameters.AddWithValue("@host", limit.Host);
+            cmd.Parameters.AddWithValue("@max", limit.DailyMaxMinutes);
+            cmd.Parameters.AddWithValue("@en", limit.Enabled ? 1 : 0);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task DeleteUserSiteLimitAsync(string host, string userSid)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM UserSiteLimits WHERE Host = @host AND UserSid = @sid";
+            cmd.Parameters.AddWithValue("@host", host);
+            cmd.Parameters.AddWithValue("@sid", userSid);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task ReplaceUserSiteLimitsAsync(IEnumerable<SiteLimit> limits)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            using (var clear = _connection.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = "DELETE FROM UserSiteLimits";
+                await clear.ExecuteNonQueryAsync();
+            }
+            foreach (var limit in limits.Where(l => !string.IsNullOrEmpty(l.UserSid)))
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = "INSERT OR REPLACE INTO UserSiteLimits (UserSid, Host, DailyMaxMinutes, Enabled) VALUES (@sid, @host, @max, @en)";
+                cmd.Parameters.AddWithValue("@sid", limit.UserSid);
+                cmd.Parameters.AddWithValue("@host", limit.Host);
+                cmd.Parameters.AddWithValue("@max", limit.DailyMaxMinutes);
+                cmd.Parameters.AddWithValue("@en", limit.Enabled ? 1 : 0);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>Today's browsing time per site for one Windows account.</summary>
+    public async Task<List<SiteUsageRecord>> GetUserSiteUsageTodayAsync(string userSid)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var list = new List<SiteUsageRecord>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT Host, Seconds FROM UserSiteUsage WHERE UserSid = @sid AND Date = @date";
+            cmd.Parameters.AddWithValue("@sid", userSid);
+            var today = MonitorAndControl.ScreenTime.ParentClock.Today;
+            cmd.Parameters.AddWithValue("@date", today.ToString("yyyy-MM-dd"));
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new SiteUsageRecord { Host = r.GetString(0), Date = today, Seconds = r.GetInt64(1) });
+            return list;
         }
         finally { _lock.Release(); }
     }
@@ -407,7 +610,7 @@ public class UsageDatabase : IDisposable
         finally { _lock.Release(); }
     }
 
-    public async Task AddSiteUsageAsync(DateTime date, IReadOnlyDictionary<string, long> secondsByHost)
+    public async Task AddSiteUsageAsync(DateTime date, IReadOnlyDictionary<string, long> secondsByHost, string userSid = "")
     {
         await _lock.WaitAsync();
         try
@@ -426,6 +629,20 @@ public class UsageDatabase : IDisposable
                 cmd.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
                 cmd.Parameters.AddWithValue("@seconds", seconds);
                 await cmd.ExecuteNonQueryAsync();
+                if (userSid.Length > 0)
+                {
+                    using var own = _connection.CreateCommand();
+                    own.Transaction = tx;
+                    own.CommandText = """
+                        INSERT INTO UserSiteUsage (UserSid, Host, Date, Seconds) VALUES (@sid, @host, @date, @seconds)
+                        ON CONFLICT(UserSid, Host, Date) DO UPDATE SET Seconds = Seconds + @seconds;
+                        """;
+                    own.Parameters.AddWithValue("@sid", userSid);
+                    own.Parameters.AddWithValue("@host", host);
+                    own.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
+                    own.Parameters.AddWithValue("@seconds", seconds);
+                    await own.ExecuteNonQueryAsync();
+                }
                 await AddActivityAsync(tx, "site", host, seconds);
             }
             tx.Commit();
@@ -443,7 +660,7 @@ public class UsageDatabase : IDisposable
             INSERT INTO ActivityHours (Hour, Kind, Name, Seconds) VALUES (@hour, @kind, @name, @seconds)
             ON CONFLICT(Hour, Kind, Name) DO UPDATE SET Seconds = Seconds + @seconds;
             """;
-        cmd.Parameters.AddWithValue("@hour", DateTime.Now.ToString("yyyy-MM-dd HH"));
+        cmd.Parameters.AddWithValue("@hour", MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd HH"));
         cmd.Parameters.AddWithValue("@kind", kind);
         cmd.Parameters.AddWithValue("@name", name);
         cmd.Parameters.AddWithValue("@seconds", seconds);
@@ -535,7 +752,7 @@ public class UsageDatabase : IDisposable
         try
         {
             using var tx = _connection.BeginTransaction();
-            var date = DateTime.Today.ToString("yyyy-MM-dd");
+            var date = MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd");
 
             using (var cmd = _connection.CreateCommand())
             {
@@ -587,7 +804,7 @@ public class UsageDatabase : IDisposable
                 WHERE Date = @date
                 ORDER BY AppName;
                 """;
-            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
             using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
                 list.Add(new AppBonusTime
@@ -609,7 +826,7 @@ public class UsageDatabase : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = "SELECT BonusMinutes FROM AppBonusTime WHERE AppName = @app AND Date = @date";
             cmd.Parameters.AddWithValue("@app", appName);
-            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
             var result = await cmd.ExecuteScalarAsync();
             return result is long l ? (int)l : 0;
         }
@@ -631,7 +848,7 @@ public class UsageDatabase : IDisposable
                 SELECT BonusMinutes FROM AppBonusTime WHERE AppName = @app AND Date = @date;
                 """;
             cmd.Parameters.AddWithValue("@app", appName);
-            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
             cmd.Parameters.AddWithValue("@minutes", minutes);
             var result = await cmd.ExecuteScalarAsync();
             return result is long l ? (int)l : minutes;
@@ -647,7 +864,7 @@ public class UsageDatabase : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = "SELECT TotalSeconds FROM UsageRecords WHERE AppName = @app AND Date = @date";
             cmd.Parameters.AddWithValue("@app", appName);
-            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
             var result = await cmd.ExecuteScalarAsync();
             return result is long l ? l : 0L;
         }
@@ -716,7 +933,7 @@ public class UsageDatabase : IDisposable
         {
             var list = new List<ScheduleRule>();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT Id, AppName, DayOfWeek, StartTime, EndTime, Enabled FROM ScheduleRules";
+            cmd.CommandText = "SELECT Id, AppName, DayOfWeek, StartTime, EndTime, Enabled, UserSid FROM ScheduleRules";
             using var r = await cmd.ExecuteReaderAsync();
             while (await r.ReadAsync())
                 list.Add(new ScheduleRule
@@ -726,7 +943,8 @@ public class UsageDatabase : IDisposable
                     DayOfWeek = r.GetString(2),
                     StartTime = r.GetString(3),
                     EndTime = r.GetString(4),
-                    Enabled = r.GetBoolean(5)
+                    Enabled = r.GetBoolean(5),
+                    UserSid = r.GetString(6)
                 });
             return list;
         }
@@ -740,14 +958,15 @@ public class UsageDatabase : IDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO ScheduleRules (AppName, DayOfWeek, StartTime, EndTime, Enabled)
-                VALUES (@app, @day, @start, @end, @en);
+                INSERT INTO ScheduleRules (AppName, DayOfWeek, StartTime, EndTime, Enabled, UserSid)
+                VALUES (@app, @day, @start, @end, @en, @sid);
                 """;
             cmd.Parameters.AddWithValue("@app", rule.AppName ?? "");
             cmd.Parameters.AddWithValue("@day", rule.DayOfWeek);
             cmd.Parameters.AddWithValue("@start", rule.StartTime);
             cmd.Parameters.AddWithValue("@end", rule.EndTime);
             cmd.Parameters.AddWithValue("@en", rule.Enabled ? 1 : 0);
+            cmd.Parameters.AddWithValue("@sid", rule.UserSid ?? "");
             await cmd.ExecuteNonQueryAsync();
         }
         finally { _lock.Release(); }
@@ -760,9 +979,10 @@ public class UsageDatabase : IDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                UPDATE ScheduleRules SET AppName=@app, DayOfWeek=@day, StartTime=@start, EndTime=@end, Enabled=@en
+                UPDATE ScheduleRules SET AppName=@app, DayOfWeek=@day, StartTime=@start, EndTime=@end, Enabled=@en, UserSid=@sid
                 WHERE Id=@id;
                 """;
+            cmd.Parameters.AddWithValue("@sid", rule.UserSid ?? "");
             cmd.Parameters.AddWithValue("@id", rule.Id);
             cmd.Parameters.AddWithValue("@app", rule.AppName ?? "");
             cmd.Parameters.AddWithValue("@day", rule.DayOfWeek);
@@ -856,7 +1076,7 @@ public class UsageDatabase : IDisposable
     public static string LimitsFingerprint(IEnumerable<AppLimitRule> limits, IEnumerable<ScheduleRule> schedule)
     {
         var lines = limits.Select(l => $"L|{l.AppName}|{l.DailyMaxMinutes}|{(l.Enabled ? 1 : 0)}")
-            .Concat(schedule.Select(r => $"S|{r.AppName}|{r.DayOfWeek}|{r.StartTime}|{r.EndTime}|{(r.Enabled ? 1 : 0)}"))
+            .Concat(schedule.Select(r => $"S|{r.AppName}|{r.DayOfWeek}|{r.StartTime}|{r.EndTime}|{(r.Enabled ? 1 : 0)}|{r.UserSid}"))
             .OrderBy(x => x, StringComparer.Ordinal);
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(string.Join(';', lines))));
@@ -928,7 +1148,7 @@ public class UsageDatabase : IDisposable
         foreach (var l in await GetLimitRulesAsync())
             snapshot.Limits.Add(new() { App = l.AppName, Minutes = l.DailyMaxMinutes, Enabled = l.Enabled });
         foreach (var r in await GetScheduleRulesAsync())
-            snapshot.Schedule.Add(new() { App = r.AppName, Day = r.DayOfWeek, Start = r.StartTime, End = r.EndTime, Enabled = r.Enabled });
+            snapshot.Schedule.Add(new() { App = r.AppName, Day = r.DayOfWeek, Start = r.StartTime, End = r.EndTime, Enabled = r.Enabled, User = r.UserSid });
         snapshot.HomeworkApps = await GetHomeworkAppsAsync();
         snapshot.AllowOnly = await GetSettingAsync("SiteAllowOnly", "false") == "true";
         snapshot.SafeBrowsing = await GetSettingAsync("SafeBrowsing", "false") == "true";
@@ -936,8 +1156,10 @@ public class UsageDatabase : IDisposable
             snapshot.UserLimits.Add(new() { User = u.UserSid, App = u.AppName, Minutes = u.DailyMaxMinutes, Enabled = u.Enabled });
         foreach (var w in await GetSiteLimitsAsync())
             snapshot.Sites.Add(new() { Host = w.Host, Minutes = w.DailyMaxMinutes, Enabled = w.Enabled });
+        foreach (var w in await GetUserSiteLimitsAsync())
+            snapshot.Sites.Add(new() { Host = w.Host, Minutes = w.DailyMaxMinutes, Enabled = w.Enabled, User = w.UserSid });
         foreach (var g in await GetLimitGroupsAsync())
-            snapshot.Groups.Add(new() { Name = g.Name, Minutes = g.DailyMaxMinutes, Enabled = g.Enabled, Members = g.AppNames.ToList() });
+            snapshot.Groups.Add(new() { Name = g.Name, Minutes = g.DailyMaxMinutes, Enabled = g.Enabled, Members = g.AppNames.ToList(), User = g.UserSid });
         return snapshot;
     }
 
@@ -946,17 +1168,18 @@ public class UsageDatabase : IDisposable
     {
         await ReplaceLimitRulesAsync(snapshot.Limits.Select(l => new AppLimitRule { AppName = l.App, DailyMaxMinutes = l.Minutes, Enabled = l.Enabled }));
         await ReplaceScheduleRulesAsync(snapshot.Schedule.Select(s => new ScheduleRule
-            { AppName = s.App, DayOfWeek = s.Day, StartTime = s.Start, EndTime = s.End, Enabled = s.Enabled }));
+            { AppName = s.App, DayOfWeek = s.Day, StartTime = s.Start, EndTime = s.End, Enabled = s.Enabled, UserSid = s.User }));
         await ReplaceUserLimitRulesAsync(snapshot.UserLimits.Select(u => new AppLimitRule { UserSid = u.User, AppName = u.App, DailyMaxMinutes = u.Minutes, Enabled = u.Enabled }));
         await SetHomeworkAppsAsync(snapshot.HomeworkApps);
         await SetSettingAsync("SiteAllowOnly", snapshot.AllowOnly ? "true" : "false");
         await SetSettingAsync("SafeBrowsing", snapshot.SafeBrowsing ? "true" : "false");
-        await ReplaceSiteLimitsAsync(snapshot.Sites.Select(w => new SiteLimit { Host = w.Host, DailyMaxMinutes = w.Minutes, Enabled = w.Enabled }));
+        await ReplaceSiteLimitsAsync(snapshot.Sites.Where(w => string.IsNullOrEmpty(w.User)).Select(w => new SiteLimit { Host = w.Host, DailyMaxMinutes = w.Minutes, Enabled = w.Enabled }));
+        await ReplaceUserSiteLimitsAsync(snapshot.Sites.Where(w => !string.IsNullOrEmpty(w.User)).Select(w => new SiteLimit { Host = w.Host, DailyMaxMinutes = w.Minutes, Enabled = w.Enabled, UserSid = w.User }));
         var keep = new HashSet<string>(snapshot.Groups.Select(g => g.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var existing in await GetLimitGroupsAsync())
             if (!keep.Contains(existing.Name)) await DeleteLimitGroupAsync(existing.Id);
         foreach (var g in snapshot.Groups)
-            await SaveLimitGroupAsync(new AppLimitGroup { Name = g.Name, DailyMaxMinutes = g.Minutes, Enabled = g.Enabled, AppNames = g.Members.ToList() });
+            await SaveLimitGroupAsync(new AppLimitGroup { Name = g.Name, DailyMaxMinutes = g.Minutes, Enabled = g.Enabled, AppNames = g.Members.ToList(), UserSid = g.User });
     }
 
     public async Task ReplaceLimitRulesAsync(IEnumerable<AppLimitRule> rules)
@@ -1009,9 +1232,10 @@ public class UsageDatabase : IDisposable
                 using var cmd = _connection.CreateCommand();
                 cmd.Transaction = tx;
                 cmd.CommandText = """
-                    INSERT INTO ScheduleRules (AppName, DayOfWeek, StartTime, EndTime, Enabled)
-                    VALUES (@app, @day, @start, @end, @en);
+                    INSERT INTO ScheduleRules (AppName, DayOfWeek, StartTime, EndTime, Enabled, UserSid)
+                    VALUES (@app, @day, @start, @end, @en, @sid);
                     """;
+                cmd.Parameters.AddWithValue("@sid", rule.UserSid ?? "");
                 cmd.Parameters.AddWithValue("@app", rule.AppName ?? "");
                 cmd.Parameters.AddWithValue("@day", rule.DayOfWeek);
                 cmd.Parameters.AddWithValue("@start", rule.StartTime);
@@ -1202,7 +1426,7 @@ public class UsageDatabase : IDisposable
         try
         {
             using var tx = _connection.BeginTransaction();
-            var date = DateTime.Today.ToString("yyyy-MM-dd");
+            var date = MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd");
             foreach (var record in appRecords)
             {
                 var total = record.ForegroundSeconds + record.BackgroundSeconds;
@@ -1276,12 +1500,12 @@ public class UsageDatabase : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
                 SELECT g.Id, g.Name, g.DailyMaxMinutes, g.Enabled,
-                       COALESCE(u.TotalSeconds, 0)
+                       COALESCE(u.TotalSeconds, 0), g.UserSid
                 FROM LimitGroups g
                 LEFT JOIN LimitGroupUsage u ON u.GroupId = g.Id AND u.Date = @date
                 ORDER BY g.Name;
                 """;
-            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
                 groups.Add(new AppLimitGroup
@@ -1290,7 +1514,8 @@ public class UsageDatabase : IDisposable
                     Name = reader.GetString(1),
                     DailyMaxMinutes = reader.GetInt32(2),
                     Enabled = reader.GetBoolean(3),
-                    TodaySeconds = reader.GetInt64(4)
+                    TodaySeconds = reader.GetInt64(4),
+                    UserSid = reader.GetString(5)
                 });
 
             foreach (var group in groups)
@@ -1317,9 +1542,10 @@ public class UsageDatabase : IDisposable
             {
                 cmd.Transaction = tx;
                 cmd.CommandText = group.Id > 0
-                    ? "UPDATE LimitGroups SET Name=@name, DailyMaxMinutes=@max, Enabled=@enabled WHERE Id=@id"
-                    : "INSERT INTO LimitGroups (Name, DailyMaxMinutes, Enabled) VALUES (@name, @max, @enabled) ON CONFLICT(Name) DO UPDATE SET DailyMaxMinutes=@max, Enabled=@enabled";
+                    ? "UPDATE LimitGroups SET Name=@name, DailyMaxMinutes=@max, Enabled=@enabled, UserSid=@sid WHERE Id=@id"
+                    : "INSERT INTO LimitGroups (Name, DailyMaxMinutes, Enabled, UserSid) VALUES (@name, @max, @enabled, @sid) ON CONFLICT(Name) DO UPDATE SET DailyMaxMinutes=@max, Enabled=@enabled, UserSid=@sid";
                 cmd.Parameters.AddWithValue("@name", group.Name);
+                cmd.Parameters.AddWithValue("@sid", group.UserSid ?? "");
                 cmd.Parameters.AddWithValue("@max", group.DailyMaxMinutes);
                 cmd.Parameters.AddWithValue("@enabled", group.Enabled ? 1 : 0);
                 if (group.Id > 0) cmd.Parameters.AddWithValue("@id", group.Id);
@@ -1398,7 +1624,7 @@ public class UsageDatabase : IDisposable
                 ON CONFLICT(GroupId, Date) DO UPDATE SET TotalSeconds = TotalSeconds + @seconds;
                 """;
             cmd.Parameters.AddWithValue("@id", groupId);
-            cmd.Parameters.AddWithValue("@date", DateTime.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
             cmd.Parameters.AddWithValue("@seconds", seconds);
             await cmd.ExecuteNonQueryAsync();
             tx.Commit();

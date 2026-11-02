@@ -10,6 +10,8 @@ namespace MonitorAndControlWatchdog;
 /// Only an administrator (here: the SYSTEM service) can write these keys, so the child cannot undo
 /// them, and the browser shows its own "blocked by your administrator" page, also in private windows.
 /// Entries that were already in a browser's lists are left alone.
+/// Browser policy is machine-wide, so rules for one account are written while that account is the one
+/// at the screen and taken out again when someone else signs in or switches user.
 /// </summary>
 internal sealed class BrowserPolicy
 {
@@ -22,6 +24,14 @@ internal sealed class BrowserPolicy
         /// <summary>Value each forced setting had before we set it (null = it did not exist), so turning it off restores it.</summary>
         public Dictionary<string, int?> SafeOriginals { get; set; } = new();
         public Dictionary<string, List<string>> Owned { get; set; } = new();
+        /// <summary>Per Windows account (SID): what that account's DeviceMon reported for it alone.</summary>
+        public Dictionary<string, AccountSites> Accounts { get; set; } = new();
+    }
+
+    private sealed class AccountSites
+    {
+        public List<string> Blocked { get; set; } = new();
+        public List<string> Allowed { get; set; } = new();
     }
 
     private sealed record Target(string Root, string BlockKey, string AllowKey, bool Firefox, string InternalPages,
@@ -62,29 +72,44 @@ internal sealed class BrowserPolicy
         catch (Exception ex) { _log("Site blocking: could not save state: " + ex.Message); }
     }
 
-    /// <summary>Remembers what DeviceMon wants. Returns true when anything changed.</summary>
-    internal bool SetReported(List<string> blocked, List<string> allowed, bool allowOnly, bool safe)
+    private static List<string> Sorted(IEnumerable<string> x) => x.OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+    private static bool Same(IEnumerable<string> a, IEnumerable<string> b) => Sorted(a).SequenceEqual(Sorted(b), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Remembers what DeviceMon wants (rules for everyone, and for the calling account). Returns true when anything changed.</summary>
+    internal bool SetReported(List<string> blocked, List<string> allowed, bool allowOnly, bool safe,
+        string accountSid = "", List<string>? accountBlocked = null, List<string>? accountAllowed = null)
     {
-        static List<string> Sorted(IEnumerable<string> x) => x.OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
-        var b = Sorted(blocked);
-        var a = Sorted(allowed);
-        var same = b.SequenceEqual(Sorted(_state.Reported), StringComparer.OrdinalIgnoreCase)
-            && a.SequenceEqual(Sorted(_state.ReportedAllowed), StringComparer.OrdinalIgnoreCase)
-            && allowOnly == _state.ReportedAllowOnly && safe == _state.ReportedSafe;
+        accountBlocked ??= new();
+        accountAllowed ??= new();
+        var previous = accountSid.Length > 0 ? _state.Accounts.GetValueOrDefault(accountSid) : null;
+        var same = Same(blocked, _state.Reported) && Same(allowed, _state.ReportedAllowed)
+            && allowOnly == _state.ReportedAllowOnly && safe == _state.ReportedSafe
+            && (accountSid.Length == 0 || (previous == null
+                ? accountBlocked.Count == 0 && accountAllowed.Count == 0
+                : Same(accountBlocked, previous.Blocked) && Same(accountAllowed, previous.Allowed)));
         if (same) return false;
-        _state.Reported = b;
-        _state.ReportedAllowed = a;
+        _state.Reported = Sorted(blocked);
+        _state.ReportedAllowed = Sorted(allowed);
         _state.ReportedAllowOnly = allowOnly;
         _state.ReportedSafe = safe;
+        if (accountSid.Length > 0)
+        {
+            if (accountBlocked.Count == 0 && accountAllowed.Count == 0) _state.Accounts.Remove(accountSid);
+            else _state.Accounts[accountSid] = new AccountSites { Blocked = Sorted(accountBlocked), Allowed = Sorted(accountAllowed) };
+        }
         Save();
         return true;
     }
 
-    /// <summary>Combines what DeviceMon reported with what the parent sealed, then writes every browser's policy.</summary>
-    internal void Apply(SealedLimits? sealedContent, bool homework = false)
+    /// <summary>
+    /// Combines what DeviceMon reported with what the parent sealed, then writes every browser's policy.
+    /// <paramref name="activeSids"/> are the accounts at the screen; their own rules are added on top.
+    /// </summary>
+    internal void Apply(SealedLimits? sealedContent, bool homework, IReadOnlyCollection<string> activeSids)
     {
-        var plan = SiteBlocking.ComputePlan(_state.Reported, _state.ReportedAllowed, _state.ReportedAllowOnly,
-            _state.ReportedSafe, sealedContent, homework);
+        var own = activeSids.Select(sid => _state.Accounts.GetValueOrDefault(sid)).Where(a => a != null).ToList();
+        var plan = SiteBlocking.ComputePlan(_state.Reported.Concat(own.SelectMany(a => a!.Blocked)), _state.ReportedAllowed.Concat(own.SelectMany(a => a!.Allowed)),
+            _state.ReportedAllowOnly, _state.ReportedSafe, sealedContent, homework, activeSids);
         using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
         foreach (var target in Targets)
         {

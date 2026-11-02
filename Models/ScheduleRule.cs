@@ -8,4 +8,6 @@ public class ScheduleRule
     public string StartTime { get; set; } = "09:00";
     public string EndTime { get; set; } = "21:00";
     public bool Enabled { get; set; } = true;
+    /// <summary>Empty = applies to everyone; otherwise only this Windows account (SID).</summary>
+    public string UserSid { get; set; } = "";
 }

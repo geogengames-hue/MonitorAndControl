@@ -92,7 +92,7 @@ public sealed class WebsiteTracker : IDisposable
             batch = new Dictionary<string, long>(_pending);
             _pending.Clear();
         }
-        try { await _db.AddSiteUsageAsync(DateTime.Today, batch); }
+        try { await _db.AddSiteUsageAsync(MonitorAndControl.ScreenTime.ParentClock.Today, batch, AccountIdentity.CurrentSid); }
         catch (Exception ex)
         {
             lock (_sync)

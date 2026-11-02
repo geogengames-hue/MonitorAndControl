@@ -98,7 +98,8 @@ public class DashboardServer
         _app.Use(async (ctx, next) =>
         {
             if (ctx.Request.Path.StartsWithSegments("/api") &&
-                !ctx.Request.Path.StartsWithSegments("/api/auth"))
+                !ctx.Request.Path.StartsWithSegments("/api/auth") &&
+                !ctx.Request.Path.StartsWithSegments("/api/quick"))
             {
                 var auth = RequireWriteAccess(ctx);
                 if (auth != null)
@@ -269,7 +270,7 @@ public class DashboardServer
             else
             {
                 days = Math.Clamp(days, 1, 366);
-                endDate = DateTime.Today;
+                endDate = ParentClock.Today;
                 startDate = endDate.AddDays(-days + 1);
             }
 
@@ -285,8 +286,37 @@ public class DashboardServer
         app.MapGet("/api/site-limits", async () =>
         {
             var rules = await db.GetSiteLimitsAsync();
-            var usage = rules.Count == 0 ? new List<SiteUsageRecord>() : await db.GetSiteUsageRangeAsync(DateTime.Today, DateTime.Today);
+            var usage = rules.Count == 0 ? new List<SiteUsageRecord>() : await db.GetSiteUsageRangeAsync(ParentClock.Today, ParentClock.Today);
             return Results.Json(SiteLimitLogic.Evaluate(rules, usage), JsonOpts);
+        });
+
+        // "Not now" from a phone alert. The phone is not signed in, so the alert carries a single-use token
+        // instead; it can only decline the one request it was made for, which grants nothing.
+        app.MapPost("/api/quick/decline", async (HttpContext ctx) =>
+        {
+            if (ctx.Request.ContentLength is null or > 1024) return Results.BadRequest(new { error = "Invalid request." });
+            using var doc = await TryParseBodyAsync(ctx);
+            var token = doc != null && doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("token", out var t)
+                && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+            if (!QuickActions.LooksValid(token)) return Results.BadRequest(new { error = "Invalid request." });
+            var hash = QuickActions.Hash(token!);
+            if (await db.FindQuickActionAsync(hash, DateTimeOffset.UtcNow) is not { } action)
+                return Results.Json(new { error = "This link has expired or was already used." }, statusCode: StatusCodes.Status410Gone);
+            try
+            {
+                // Only the request the alert was about; a newer request from the same child stays open.
+                var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest
+                {
+                    Command = "dismiss-request", UserSid = action.UserSid, RequestId = action.RequestId
+                }, ctx.RequestAborted);
+                if (!reply.Ok) return Results.Json(new { error = reply.Error }, statusCode: StatusCodes.Status400BadRequest);
+                // Used up only once the answer is recorded, so a failed try can be repeated.
+                await db.MarkQuickActionUsedAsync(hash);
+                var dismissed = reply.Data is { } data && data.TryGetProperty("dismissed", out var d) && d.TryGetInt32(out var n) ? n : 0;
+                Logger.Instance.Info("A request for more PC time was declined from a phone alert.");
+                return Results.Json(new { message = dismissed > 0 ? "Declined. The child has been told." : "This request was already answered." });
+            }
+            catch { return Results.Json(new { error = "The screen-time service is unavailable." }, statusCode: StatusCodes.Status503ServiceUnavailable); }
         });
 
         // Whether the child's own session shows a "time left" tray icon.
@@ -348,6 +378,45 @@ public class DashboardServer
             return Results.Ok();
         });
 
+        // Website rules for one Windows account, counted from that account's own browsing.
+        app.MapGet("/api/user-site-limits", async () =>
+        {
+            var rules = await db.GetUserSiteLimitsAsync();
+            var result = new List<object>();
+            foreach (var group in rules.GroupBy(r => r.UserSid))
+                foreach (var status in SiteLimitLogic.Evaluate(group, await db.GetUserSiteUsageTodayAsync(group.Key)))
+                    result.Add(new { status.Host, status.DailyMaxMinutes, status.Enabled, status.UsedSeconds, status.Blocked, userSid = group.Key });
+            return Results.Json(result, JsonOpts);
+        });
+
+        app.MapPost("/api/user-site-limits", async (HttpContext ctx, SiteLimit limit) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            if (!MonitorAndControl.ScreenTime.SiteBlocking.TryNormalizeHost(limit.Host, out var host))
+                return Results.BadRequest(new { error = "Enter a site name such as youtube.com." });
+            if (limit.DailyMaxMinutes is < -1 or > 1440)
+                return Results.BadRequest(new { error = "Minutes per day must be 0 (block), 1 to 1440, or -1 (always allowed)." });
+            if (!AccountIdentity.IsValidSid(limit.UserSid))
+                return Results.BadRequest(new { error = "Choose a Windows account." });
+            var existing = await db.GetUserSiteLimitsAsync(limit.UserSid);
+            if (existing.Count >= MonitorAndControl.ScreenTime.SiteBlocking.MaxHosts && !existing.Any(r => r.Host == host))
+                return Results.BadRequest(new { error = "Too many website rules." });
+            limit.Host = host;
+            await db.SaveUserSiteLimitAsync(limit);
+            return Results.Json(new { host });
+        });
+
+        app.MapDelete("/api/user-site-limits/{host}/{userSid}", async (HttpContext ctx, string host, string userSid) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            if (!MonitorAndControl.ScreenTime.SiteBlocking.TryNormalizeHost(host, out var clean) || !AccountIdentity.IsValidSid(userSid))
+                return Results.BadRequest(new { error = "Invalid request." });
+            await db.DeleteUserSiteLimitAsync(clean, userSid);
+            return Results.Ok();
+        });
+
         // Browser-wide switches: only listed sites may open, and forced SafeSearch / YouTube Restricted Mode.
         app.MapGet("/api/site-settings", async () => Results.Json(new
         {
@@ -382,7 +451,7 @@ public class DashboardServer
                 return Results.BadRequest(new { error = "Too many website rules." });
             limit.Host = host;
             await db.SaveSiteLimitAsync(limit);
-            return Results.Ok();
+            return Results.Json(new { host });
         });
 
         app.MapDelete("/api/site-limits/{host}", async (HttpContext ctx, string host) =>
@@ -398,7 +467,7 @@ public class DashboardServer
         // What was in the foreground in each hour of a day (apps and websites), for the timeline.
         app.MapGet("/api/activity/day", async (string? date = null) =>
         {
-            var day = DateTime.Today;
+            var day = ParentClock.Today;
             if (!string.IsNullOrWhiteSpace(date) && !DateTime.TryParse(date, out day))
                 return Results.BadRequest(new { error = "Invalid date." });
             return Results.Json(await db.GetActivityDayAsync(day.Date), JsonOpts);
@@ -417,7 +486,7 @@ public class DashboardServer
             }
             else
             {
-                endDate = DateTime.Today;
+                endDate = ParentClock.Today;
                 startDate = endDate.AddDays(-Math.Clamp(days, 1, 366) + 1);
             }
             if (startDate > endDate || (endDate - startDate).TotalDays > 366)
@@ -428,7 +497,7 @@ public class DashboardServer
         // This week compared with last week, per day and per app (also used by the summary email).
         app.MapGet("/api/report/weekly", async (string? end = null) =>
         {
-            var endDate = DateTime.Today;
+            var endDate = ParentClock.Today;
             if (!string.IsNullOrWhiteSpace(end) && !DateTime.TryParse(end, out endDate))
                 return Results.BadRequest(new { error = "Invalid date." });
             endDate = endDate.Date;
@@ -449,7 +518,7 @@ public class DashboardServer
             else
             {
                 days = Math.Clamp(days, 1, 366);
-                endDate = DateTime.Today;
+                endDate = ParentClock.Today;
                 startDate = endDate.AddDays(-days + 1);
             }
             if (startDate > endDate)
@@ -671,7 +740,8 @@ public class DashboardServer
                 group.DailyMaxMinutes,
                 group.Enabled,
                 group.AppNames,
-                group.TodaySeconds
+                group.TodaySeconds,
+                group.UserSid
             }), JsonOpts);
         });
 
@@ -687,18 +757,23 @@ public class DashboardServer
             if (!IsValidAppName(group.Name) || group.DailyMaxMinutes is < 1 or > 1440 || group.AppNames.Count == 0 ||
                 group.AppNames.Any(name => !IsValidAppName(name)))
                 return Results.BadRequest(new { error = "A group requires a valid name, 1-1440 minutes, and at least one valid app." });
+            group.UserSid ??= "";
+            if (group.UserSid.Length > 0 && !AccountIdentity.IsValidSid(group.UserSid))
+                return Results.BadRequest(new { error = "Choose a Windows account." });
 
             var groups = await db.GetLimitGroupsAsync();
             if (group.Id > 0 && groups.All(existing => existing.Id != group.Id))
                 return Results.NotFound(new { error = "Limit group not found." });
             if (groups.Any(existing => existing.Id != group.Id && existing.Name.Equals(group.Name, StringComparison.OrdinalIgnoreCase)))
                 return Results.BadRequest(new { error = "A group with this name already exists." });
+            // Two groups clash only when some account would be under both (a group for everyone clashes with all).
             var duplicateMember = groups
-                .Where(existing => existing.Id != group.Id)
+                .Where(existing => existing.Id != group.Id &&
+                    (existing.UserSid.Length == 0 || group.UserSid.Length == 0 || existing.UserSid == group.UserSid))
                 .SelectMany(existing => existing.AppNames)
                 .FirstOrDefault(member => group.AppNames.Contains(member, StringComparer.OrdinalIgnoreCase));
             if (duplicateMember != null)
-                return Results.BadRequest(new { error = $"{duplicateMember} already belongs to another group." });
+                return Results.BadRequest(new { error = $"{duplicateMember} already belongs to another group for the same account." });
 
             var previousMembers = groups.FirstOrDefault(existing => existing.Id == group.Id)?.AppNames
                 ?? new List<string>();
@@ -777,9 +852,10 @@ public class DashboardServer
             if (limit == null)
                 return Results.BadRequest(new { error = "Bonus time can only be granted to apps with a limit." });
 
-            var now = DateTime.Now;
+            var now = ParentClock.Now;
             var rules = await scheduler.GetRulesAsync();
-            var allowedUntil = SchedulerService.GetCurrentAllowedWindowEnd(rules, appName, now)
+            // App bonus time is shared by everyone, so only the schedule rules for everyone bound it.
+            var allowedUntil = SchedulerService.GetCurrentAllowedWindowEnd(rules.Where(r => string.IsNullOrEmpty(r.UserSid)), appName, now)
                 ?? now.Date.AddDays(1);
             if (allowedUntil <= now)
                 return Results.BadRequest(new { error = "No remaining allowed time today." });
@@ -1169,7 +1245,9 @@ public class DashboardServer
             telegramChatId = await db.GetSettingAsync("PushTelegramChatId", ""),
             telegramTokenSet = !string.IsNullOrEmpty(await db.GetSettingAsync("PushTelegramToken", "")),
             dashboardUrl = await db.GetSettingAsync("PublicDashboardUrl", ""),
-            newAppAlerts = await db.GetSettingAsync("NewAppAlertsEnabled", "true") == "true"
+            newAppAlerts = await db.GetSettingAsync("NewAppAlertsEnabled", "true") == "true",
+            heartbeatUrl = await db.GetSettingAsync("HeartbeatUrl", ""),
+            heartbeat = ReadHeartbeatStatus()
         }, JsonOpts));
 
         app.MapPost("/api/settings/push", async (HttpContext ctx) =>
@@ -1202,6 +1280,15 @@ public class DashboardServer
             if (hasDashboardUrl) await db.SetSettingAsync("PublicDashboardUrl", dashboardUrl);
             if (root.TryGetProperty("newAppAlerts", out var na) && na.ValueKind is JsonValueKind.True or JsonValueKind.False)
                 await db.SetSettingAsync("NewAppAlertsEnabled", na.GetBoolean() ? "true" : "false");
+            if (root.TryGetProperty("heartbeatUrl", out _))
+            {
+                var heartbeat = Text("heartbeatUrl");
+                if (!Heartbeat.IsValidUrl(heartbeat))
+                    return Results.BadRequest(new { error = "The check-in address must be an https address on the internet, such as https://hc-ping.com/..." });
+                await db.SetSettingAsync("HeartbeatUrl", heartbeat);
+                try { await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "set-heartbeat", HeartbeatUrl = heartbeat }, ctx.RequestAborted); }
+                catch { /* sent again by the regular check */ }
+            }
             return Results.Ok();
         });
 
@@ -1729,6 +1816,7 @@ public class DashboardServer
 
         var path = ctx.Request.Path.Value ?? "";
         if (path.Equals("/login.html", StringComparison.OrdinalIgnoreCase) ||
+            path.Equals("/quick.html", StringComparison.OrdinalIgnoreCase) ||
             path.Equals("/favicon.ico", StringComparison.OrdinalIgnoreCase))
             return false;
 
@@ -1806,6 +1894,18 @@ public class DashboardServer
     private static readonly SemaphoreSlim _homeworkAppsGate = new(1, 1);
 
     private static bool IsHttpUrl(string value) => InputValidation.IsValidHttpUrl(value);
+
+    // The service's last check-in result, from its status file.
+    private static object? ReadHeartbeatStatus()
+    {
+        try
+        {
+            if (!File.Exists(ScreenTimeFiles.StatusPath)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(ScreenTimeFiles.StatusPath));
+            return doc.RootElement.TryGetProperty("heartbeat", out var h) ? JsonSerializer.Deserialize<object>(h.GetRawText()) : null;
+        }
+        catch { return null; }
+    }
 
     private static async Task<JsonDocument?> TryParseBodyAsync(HttpContext ctx)
     {
@@ -1938,7 +2038,7 @@ public class DashboardServer
                 return "Backup contains an invalid app limit.";
         }
 
-        var groupedApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var groupedApps = new List<(string Sid, string App)>();
         foreach (var group in backup.LimitGroups)
         {
             group.Id = 0;
@@ -1947,8 +2047,14 @@ public class DashboardServer
             if (!IsValidAppName(group.Name) || group.DailyMaxMinutes is < 1 or > 1440 || group.AppNames.Count == 0 ||
                 group.AppNames.Count > 100 || group.AppNames.Any(name => !IsValidAppName(name)))
                 return "Backup contains an invalid limit group.";
-            if (group.AppNames.Any(name => !groupedApps.Add(name)))
-                return "An app belongs to more than one limit group in the backup.";
+            group.UserSid ??= "";
+            if (group.UserSid.Length > 0 && !AccountIdentity.IsValidSid(group.UserSid))
+                return "Backup contains an invalid limit group.";
+            // Same rule as the dashboard: an app may not be in two groups that apply to the same account.
+            if (group.AppNames.Any(name => groupedApps.Any(g => g.App.Equals(name, StringComparison.OrdinalIgnoreCase)
+                    && (g.Sid.Length == 0 || group.UserSid.Length == 0 || g.Sid == group.UserSid))))
+                return "An app belongs to more than one limit group for the same account in the backup.";
+            groupedApps.AddRange(group.AppNames.Select(name => (group.UserSid, name)));
         }
 
         foreach (var rule in backup.Schedules)
@@ -2058,6 +2164,9 @@ public class DashboardServer
         rule.EndTime = Clean(rule.EndTime);
 
         if (!string.IsNullOrEmpty(rule.AppName) && !IsValidAppName(rule.AppName))
+            return false;
+        rule.UserSid ??= "";
+        if (rule.UserSid.Length > 0 && !AccountIdentity.IsValidSid(rule.UserSid))
             return false;
         if (!AllowedDays.Contains(rule.DayOfWeek))
             return false;

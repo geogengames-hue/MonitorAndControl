@@ -18,6 +18,8 @@ public sealed class SealedSchedule
     public string Start { get; set; } = "";
     public string End { get; set; } = "";
     public bool Enabled { get; set; }
+    /// <summary>Empty = everyone; otherwise only this Windows account (SID).</summary>
+    public string User { get; set; } = "";
 }
 
 public sealed class SealedGroup
@@ -26,6 +28,8 @@ public sealed class SealedGroup
     public int Minutes { get; set; }
     public bool Enabled { get; set; }
     public List<string> Members { get; set; } = new();
+    /// <summary>Empty = everyone; otherwise only this Windows account (SID).</summary>
+    public string User { get; set; } = "";
 }
 
 public sealed class SealedUserLimit
@@ -40,6 +44,8 @@ public sealed class SealedUserLimit
 public sealed class SealedLimits
 {
     public const int MaxEntries = 500;
+    /// <summary>Website rules for everyone plus each account's own, so they get more room.</summary>
+    public const int MaxSites = 2000;
     public List<SealedLimit> Limits { get; set; } = new();
     public List<SealedSchedule> Schedule { get; set; } = new();
     public List<SealedGroup> Groups { get; set; } = new();
@@ -69,28 +75,31 @@ public sealed class SealedLimits
         Schedule.RemoveAll(x => x == null);
         Groups.RemoveAll(x => x == null);
         Sites.RemoveAll(x => x == null);
-        foreach (var g in Groups) { g.Members ??= new(); g.Members.RemoveAll(m => m == null); g.Name ??= ""; }
+        foreach (var g in Groups) { g.Members ??= new(); g.Members.RemoveAll(m => m == null); g.Name ??= ""; g.User ??= ""; }
         foreach (var x in Limits) x.App ??= "";
-        foreach (var x in Schedule) { x.App ??= ""; x.Day ??= ""; x.Start ??= ""; x.End ??= ""; }
-        foreach (var x in Sites) x.Host ??= "";
+        foreach (var x in Schedule) { x.App ??= ""; x.Day ??= ""; x.Start ??= ""; x.End ??= ""; x.User ??= ""; }
+        foreach (var x in Sites) { x.Host ??= ""; x.User ??= ""; }
         return this;
     }
 
     public bool IsReasonable() =>
-        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxEntries && HomeworkApps.Count <= MaxEntries && UserLimits.Count <= MaxEntries
+        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxSites && HomeworkApps.Count <= MaxEntries && UserLimits.Count <= MaxEntries
         && Groups.All(g => g.Members.Count <= MaxEntries);
+
+    // An account is added only when set, so copies sealed before per-account rules existed keep their fingerprint.
+    private static string For(string? user) => string.IsNullOrEmpty(user) ? "" : "|u:" + user;
 
     /// <summary>Order-independent hash of the content, so two copies compare equal exactly when they mean the same.</summary>
     public string Fingerprint()
     {
         var lines = Limits.Select(l => $"L|{l.App}|{l.Minutes}|{(l.Enabled ? 1 : 0)}")
-            .Concat(Schedule.Select(s => $"S|{s.App}|{s.Day}|{s.Start}|{s.End}|{(s.Enabled ? 1 : 0)}"))
-            .Concat(Sites.Select(w => $"W|{w.Host}|{w.Minutes}|{(w.Enabled ? 1 : 0)}"))
+            .Concat(Schedule.Select(s => $"S|{s.App}|{s.Day}|{s.Start}|{s.End}|{(s.Enabled ? 1 : 0)}{For(s.User)}"))
+            .Concat(Sites.Select(w => $"W|{w.Host}|{w.Minutes}|{(w.Enabled ? 1 : 0)}{For(w.User)}"))
             .Concat(UserLimits.Select(u => $"U|{u.User}|{u.App}|{u.Minutes}|{(u.Enabled ? 1 : 0)}"))
             .Concat(HomeworkApps.Select(h => h.ToLowerInvariant()).Distinct().Select(h => $"H|{h}"))
             .Concat(AllowOnly || SafeBrowsing ? new[] { $"P|{(AllowOnly ? 1 : 0)}|{(SafeBrowsing ? 1 : 0)}" } : Array.Empty<string>())
             .Concat(Groups.Select(g => $"G|{g.Name}|{g.Minutes}|{(g.Enabled ? 1 : 0)}|" +
-                string.Join(',', g.Members.OrderBy(m => m, StringComparer.OrdinalIgnoreCase))))
+                string.Join(',', g.Members.OrderBy(m => m, StringComparer.OrdinalIgnoreCase)) + For(g.User)))
             .OrderBy(x => x, StringComparer.Ordinal);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join(';', lines))));
     }

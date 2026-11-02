@@ -37,6 +37,10 @@ public static class AccountIdentity
         }
     }
 
+    /// <summary>True for a rule meant for everyone (no account) or for the account this DeviceMon runs for.</summary>
+    public static bool AppliesHere(string? ruleSid) =>
+        string.IsNullOrEmpty(ruleSid) || ruleSid == CurrentSid;
+
     public static bool IsValidSid(string? sid) =>
         !string.IsNullOrEmpty(sid) && sid.Length <= 100 && System.Text.RegularExpressions.Regex.IsMatch(sid, @"^S-1-\d+(-\d+){3,14}\z");
 }

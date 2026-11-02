@@ -17,6 +17,12 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Account usage ignores capitals in the app name", TestAccountUsageCase),
     ("A claimed job runs in one account at a time", TestLeaseClaim),
     ("The time-left view reads clearly", TestTimeLeftView),
+    ("The time zone is pinned until a parent accepts a change", TestPinnedTimeZone),
+    ("Check-in addresses must be public https", TestHeartbeatUrls),
+    ("Alert buttons: deep links, one-tap decline and Telegram keys", TestAlertButtons),
+    ("Not now links work once and only before they expire", TestQuickActions),
+    ("Groups, schedule and website rules can belong to one account", TestPerAccountRules),
+    ("Older databases are upgraded for per-account groups", TestGroupMembersUpgrade),
     ("App limits can belong to one Windows account", TestPerAccountLimits),
     ("Homework mode times, plan and sealed apps", TestHomeworkMode),
     ("New programs are found once and described briefly", TestNewApps),
@@ -1688,4 +1694,155 @@ static async Task TestAccountUsageCase()
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
     }
+}
+
+static Task TestPinnedTimeZone()
+{
+    var now = new DateTimeOffset(2026, 11, 2, 18, 0, 0, TimeSpan.Zero);
+    var first = MonitorAndControl.ScreenTime.ParentClock.Observe(null, "W. Europe Standard Time", now);
+    AssertTrue(first.PinnedId == "W. Europe Standard Time" && first.ChangedUtc == null, "The first zone seen is pinned.");
+    var moved = MonitorAndControl.ScreenTime.ParentClock.Observe(first, "Tokyo Standard Time", now);
+    AssertTrue(moved.PinnedId == "W. Europe Standard Time" && moved.SystemId == "Tokyo Standard Time" && moved.ChangedUtc == now, "A change is recorded but the rules keep the pinned zone.");
+    var later = MonitorAndControl.ScreenTime.ParentClock.Observe(moved, "Tokyo Standard Time", now.AddMinutes(5));
+    AssertTrue(later.ChangedUtc == now, "The same change keeps its first time, so it is announced once.");
+    var other = MonitorAndControl.ScreenTime.ParentClock.Observe(later, "Pacific Standard Time", now.AddMinutes(9));
+    AssertTrue(other.ChangedUtc == now.AddMinutes(9), "A different zone is a new change.");
+    var back = MonitorAndControl.ScreenTime.ParentClock.Observe(other, "W. Europe Standard Time", now.AddMinutes(10));
+    AssertTrue(back.ChangedUtc == null && back.PinnedId == "W. Europe Standard Time", "Switching back clears the change.");
+    var accepted = MonitorAndControl.ScreenTime.ParentClock.Accept("Tokyo Standard Time");
+    AssertTrue(accepted.PinnedId == "Tokyo Standard Time" && accepted.ChangedUtc == null, "Accepting pins the new zone.");
+    var zone = MonitorAndControl.ScreenTime.ParentClock.Resolve(new MonitorAndControl.ScreenTime.TimeZoneState { PinnedId = "Tokyo Standard Time" });
+    AssertTrue(zone.Id == "Tokyo Standard Time", "The pinned zone is the one the rules use.");
+    AssertTrue(MonitorAndControl.ScreenTime.ParentClock.Resolve(new MonitorAndControl.ScreenTime.TimeZoneState { PinnedId = "No/Such zone" }).Id == TimeZoneInfo.Local.Id
+        && MonitorAndControl.ScreenTime.ParentClock.Resolve(null).Id == TimeZoneInfo.Local.Id, "An unknown or missing zone falls back to Windows' own.");
+    return Task.CompletedTask;
+}
+
+static Task TestHeartbeatUrls()
+{
+    foreach (var good in new[] { "", "https://hc-ping.com/5f1c2d6e-1111-2222-3333-444455556666", "https://example.org/ping?x=1" })
+        AssertTrue(MonitorAndControl.ScreenTime.Heartbeat.IsValidUrl(good), "Accepted: " + good);
+    foreach (var bad in new[] { "http://hc-ping.com/x", "https://localhost/ping", "https://192.168.1.5/ping", "https://10.0.0.1/x",
+                                "https://127.0.0.1/x", "https://[::1]/x", "https://pc/x", "https://user:pw@hc-ping.com/x", "ftp://hc-ping.com/x",
+                                "https://[::ffff:192.168.1.1]/x", "https://[::ffff:127.0.0.1]/x", "https://0.0.0.0/x", "https://[fd00::1]/x", "https://100.64.0.1/x",
+                                "https://hc-ping.com/" + new string('a', 300) })
+        AssertFalse(MonitorAndControl.ScreenTime.Heartbeat.IsValidUrl(bad), "Refused: " + bad);
+    AssertTrue(MonitorAndControl.ScreenTime.Heartbeat.IsValidUrl("https://8.8.8.8/x")
+        && MonitorAndControl.ScreenTime.Heartbeat.IsPublicAddress(System.Net.IPAddress.Parse("2606:4700::1111"))
+        && !MonitorAndControl.ScreenTime.Heartbeat.IsPublicAddress(System.Net.IPAddress.Parse("::ffff:10.0.0.5")), "Public addresses pass, home-network ones never do.");
+    return Task.CompletedTask;
+}
+
+static Task TestAlertButtons()
+{
+    AssertTrue(PushSender.BuildLink("http://pc:5000", "screen-time&grant=15&request=0123abcd") == "http://pc:5000/index.html#screen-time&grant=15&request=0123abcd",
+        "An Add button opens PC Time with the request filled in.");
+    AssertTrue(PushSender.BuildLink("http://pc:5000", "screen-time&grant=15&request=<x>") == "http://pc:5000/index.html#live", "Odd parameters fall back to the live view.");
+    AssertTrue(PushSender.BuildBase("https://home.example.com/monitor/index.html") == "https://home.example.com/monitor", "The base keeps a reverse-proxy prefix.");
+
+    var token = new string('a', 43);
+    var buttons = new[] { new PushButton("Add 15 min", "screen-time&grant=15&request=r1"), new PushButton("Not now", DeclineToken: token), new PushButton("x"), new PushButton("y") };
+    var actions = System.Text.Json.JsonSerializer.Serialize(PushSender.NtfyActions("http://pc:5000", buttons));
+    AssertTrue(actions.Contains("\"action\":\"view\"") && actions.Contains("index.html#screen-time\\u0026grant=15"), "ntfy opens the dashboard for Add.");
+    AssertTrue(actions.Contains("\"action\":\"http\"") && actions.Contains("http://pc:5000/api/quick/decline") && actions.Contains(token), "ntfy sends Not now straight from the phone.");
+    AssertTrue(System.Text.Json.JsonDocument.Parse(actions).RootElement.GetArrayLength() == 3, "ntfy takes at most three buttons.");
+    var keyboard = System.Text.Json.JsonSerializer.Serialize(PushSender.TelegramKeyboard("http://pc:5000", buttons.Take(2)));
+    AssertTrue(keyboard.Contains("http://pc:5000/quick.html#" + token) && keyboard.Contains("inline_keyboard"), "Telegram opens a page that asks before declining.");
+    AssertTrue(PushSender.PageFor("timezone_changed") == "screen-time", "A time zone alert opens PC Time.");
+    return Task.CompletedTask;
+}
+
+static async Task TestQuickActions()
+{
+    using var db = CreateTempDatabase();
+    var now = DateTimeOffset.UtcNow;
+    var token = await QuickActions.CreateDeclineAsync(db, "S-1-5-21-1-2-3-1001", "req1", now.AddHours(1));
+    AssertTrue(QuickActions.LooksValid(token) && token.Length == 43, "Tokens are long and URL-safe.");
+    AssertFalse(QuickActions.LooksValid("short") || QuickActions.LooksValid(new string('a', 30) + "/"), "Malformed tokens are refused before any lookup.");
+    AssertTrue(await db.FindQuickActionAsync(QuickActions.Hash("x" + token), now) == null, "An unknown token does nothing.");
+    AssertTrue(await db.FindQuickActionAsync(QuickActions.Hash(token), now) == ("S-1-5-21-1-2-3-1001", "req1"), "The token names the account and request it was made for.");
+    AssertTrue(await db.FindQuickActionAsync(QuickActions.Hash(token), now) != null, "A token stays usable until its answer is recorded.");
+    await db.MarkQuickActionUsedAsync(QuickActions.Hash(token));
+    AssertTrue(await db.FindQuickActionAsync(QuickActions.Hash(token), now) == null, "A token works only once.");
+    var old = await QuickActions.CreateDeclineAsync(db, "S-1-5-21-1-2-3-1001", "req2", now.AddMinutes(1));
+    AssertTrue(await db.FindQuickActionAsync(QuickActions.Hash(old), now.AddMinutes(2)) == null, "An expired token does nothing.");
+
+    var file = Path.Combine(Path.GetTempPath(), "requests-" + Guid.NewGuid().ToString("N") + ".json");
+    try
+    {
+        var t0 = DateTimeOffset.UtcNow;
+        MonitorAndControl.ScreenTime.TimeRequestStore.Add("S-1", "Tom", t0, file);
+        var first = MonitorAndControl.ScreenTime.TimeRequestStore.Pending(t0, file).Single();
+        MonitorAndControl.ScreenTime.TimeRequestStore.Resolve("S-1", file, first.Id);
+        MonitorAndControl.ScreenTime.TimeRequestStore.Add("S-1", "Tom", t0.AddMinutes(1), file);
+        AssertTrue(MonitorAndControl.ScreenTime.TimeRequestStore.Resolve("S-1", file, first.Id) == 0
+            && MonitorAndControl.ScreenTime.TimeRequestStore.Pending(t0.AddMinutes(1), file).Count == 1, "Not now on an old alert leaves a newer request open.");
+    }
+    finally { File.Delete(file); }
+}
+
+static async Task TestPerAccountRules()
+{
+    const string tom = "S-1-5-21-1-2-3-1001", ann = "S-1-5-21-1-2-3-1002";
+    using var db = CreateTempDatabase();
+    await db.SaveLimitGroupAsync(new AppLimitGroup { Name = "Games (Tom)", DailyMaxMinutes = 60, AppNames = new() { "Minecraft" }, UserSid = tom });
+    await db.SaveLimitGroupAsync(new AppLimitGroup { Name = "Games (Ann)", DailyMaxMinutes = 90, AppNames = new() { "Minecraft" }, UserSid = ann });
+    var groups = await db.GetLimitGroupsAsync();
+    AssertTrue(groups.Count == 2 && groups.Single(g => g.Name == "Games (Tom)").UserSid == tom, "Two accounts can each have a group with the same app.");
+
+    await db.SaveScheduleRuleAsync(new ScheduleRule { DayOfWeek = "Everyday", StartTime = "15:00", EndTime = "20:00", UserSid = ann });
+    AssertTrue((await db.GetScheduleRulesAsync()).Single().UserSid == ann, "A schedule rule keeps its account.");
+    AssertFalse(SchedulerService.AppliesHere(new ScheduleRule { UserSid = "S-1-5-21-9-9-9-9999" }), "A rule for another account is ignored here.");
+    AssertTrue(SchedulerService.AppliesHere(new ScheduleRule()), "A rule for everyone applies here.");
+
+    await db.SaveUserSiteLimitAsync(new SiteLimit { Host = "youtube.com", DailyMaxMinutes = 30, UserSid = tom });
+    await db.SaveSiteLimitAsync(new SiteLimit { Host = "tiktok.com", DailyMaxMinutes = 0 });
+    await db.AddSiteUsageAsync(MonitorAndControl.ScreenTime.ParentClock.Today, new Dictionary<string, long> { ["m.youtube.com"] = 1900 }, tom);
+    await db.AddSiteUsageAsync(MonitorAndControl.ScreenTime.ParentClock.Today, new Dictionary<string, long> { ["youtube.com"] = 50 }, ann);
+    var tomStatus = SiteLimitLogic.Evaluate(await db.GetUserSiteLimitsAsync(tom), await db.GetUserSiteUsageTodayAsync(tom));
+    AssertTrue(tomStatus.Single().Blocked && tomStatus.Single().UsedSeconds == 1900, "An account's website allowance counts only its own browsing.");
+    AssertTrue((await db.GetUserSiteUsageTodayAsync(ann)).Single().Seconds == 50, "Each account's browsing is kept apart.");
+
+    var snapshot = await db.ReadLimitsSnapshotAsync();
+    AssertTrue(snapshot.Sites.Any(s => s.Host == "youtube.com" && s.User == tom) && snapshot.Sites.Any(s => s.Host == "tiktok.com" && s.User == "")
+        && snapshot.Schedule.Single().User == ann && snapshot.Groups.All(g => g.User.Length > 0), "The sealed copy keeps which account each rule is for.");
+    using var other = CreateTempDatabase();
+    await other.ApplyLimitsSnapshotAsync(snapshot);
+    AssertTrue((await other.ReadLimitsSnapshotAsync()).Fingerprint() == snapshot.Fingerprint(), "Restoring the sealed copy brings the account rules back exactly.");
+
+    var plain = new MonitorAndControl.ScreenTime.SealedLimits { Sites = { new() { Host = "a.com", Enabled = true } } };
+    AssertTrue(plain.Fingerprint() == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("W|a.com|0|1"))),
+        "Rules for everyone hash exactly as before, so limits sealed by an older version still match.");
+
+    var sealedContent = new MonitorAndControl.ScreenTime.SealedLimits { Sites = { new() { Host = "games.com", Enabled = true, User = tom }, new() { Host = "tiktok.com", Enabled = true } } };
+    var forTom = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(Array.Empty<string>(), Array.Empty<string>(), false, false, sealedContent, activeSids: new[] { tom });
+    var forAnn = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(Array.Empty<string>(), Array.Empty<string>(), false, false, sealedContent, activeSids: new[] { ann });
+    var forBoth = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(Array.Empty<string>(), Array.Empty<string>(), false, false, sealedContent, activeSids: new[] { ann, tom });
+    AssertTrue(forBoth.BlockHosts.Contains("games.com"), "With two accounts signed in at once, both accounts' rules apply.");
+    AssertTrue(forTom.BlockHosts.Contains("games.com") && forTom.BlockHosts.Contains("tiktok.com"), "Tom at the screen: his sealed block and everyone's apply.");
+    AssertTrue(!forAnn.BlockHosts.Contains("games.com") && forAnn.BlockHosts.Contains("tiktok.com"), "Ann at the screen: Tom's rule is not in force.");
+}
+
+static async Task TestGroupMembersUpgrade()
+{
+    var path = Path.Combine(Path.GetTempPath(), "MonitorAndControlTests", $"{Guid.NewGuid():N}.db");
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    await using (var connection = new SqliteConnection($"Data Source={path}"))
+    {
+        await connection.OpenAsync();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE LimitGroups (Id INTEGER PRIMARY KEY AUTOINCREMENT, Name TEXT NOT NULL UNIQUE, DailyMaxMinutes INTEGER NOT NULL DEFAULT 180, Enabled INTEGER NOT NULL DEFAULT 1);
+            CREATE TABLE LimitGroupMembers (GroupId INTEGER NOT NULL, AppName TEXT NOT NULL UNIQUE, PRIMARY KEY (GroupId, AppName), FOREIGN KEY (GroupId) REFERENCES LimitGroups(Id) ON DELETE CASCADE);
+            INSERT INTO LimitGroups (Name, DailyMaxMinutes) VALUES ('Games', 60);
+            INSERT INTO LimitGroupMembers (GroupId, AppName) VALUES (1, 'Minecraft');
+            """;
+        await command.ExecuteNonQueryAsync();
+    }
+    SqliteConnection.ClearAllPools();
+    using var db = new UsageDatabase(path);
+    var old = (await db.GetLimitGroupsAsync()).Single();
+    AssertTrue(old.Name == "Games" && old.UserSid == "" && old.AppNames.Single() == "Minecraft", "Existing groups survive the upgrade and apply to everyone.");
+    await db.SaveLimitGroupAsync(new AppLimitGroup { Name = "Games (Tom)", DailyMaxMinutes = 30, AppNames = new() { "Minecraft" }, UserSid = "S-1-5-21-1-2-3-1001" });
+    AssertTrue((await db.GetLimitGroupsAsync()).Count == 2, "After the upgrade an app can be in a group for one account too.");
 }

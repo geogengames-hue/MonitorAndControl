@@ -34,7 +34,7 @@ public sealed class SiteBlockingService : IDisposable
             var rules = await _db.GetSiteLimitsAsync();
             var usage = rules.Count == 0
                 ? new List<Models.SiteUsageRecord>()
-                : await _db.GetSiteUsageRangeAsync(DateTime.Today, DateTime.Today);
+                : await _db.GetSiteUsageRangeAsync(MonitorAndControl.ScreenTime.ParentClock.Today, MonitorAndControl.ScreenTime.ParentClock.Today);
             var status = SiteLimitLogic.Evaluate(rules, usage);
             var blocked = SiteLimitLogic.BlockedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
             var allowOnly = await _db.GetSettingAsync("SiteAllowOnly", "false") == "true";
@@ -42,13 +42,28 @@ public sealed class SiteBlockingService : IDisposable
             var homework = HomeworkState.IsActiveNow();
             // Always sent (the service only uses it in allow-list or homework mode), so a new session starts with it already there.
             var allowed = SiteLimitLogic.AllowedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
-            var key = string.Join('|', blocked) + "#" + string.Join('|', allowed) + $"#{allowOnly}#{safe}#{homework}";
+
+            // Rules for this Windows account, counted from its own browsing. The service puts them in the
+            // browsers while this account is the one at the screen.
+            var sid = AccountIdentity.CurrentSid;
+            var ownRules = sid.Length == 0 ? new List<Models.SiteLimit>() : await _db.GetUserSiteLimitsAsync(sid);
+            var ownStatus = ownRules.Count == 0 ? new List<SiteLimitStatus>()
+                : SiteLimitLogic.Evaluate(ownRules, await _db.GetUserSiteUsageTodayAsync(sid));
+            var ownBlocked = SiteLimitLogic.BlockedHosts(ownStatus).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+            var ownAllowed = SiteLimitLogic.AllowedHosts(ownStatus).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+
+            var key = string.Join('|', blocked) + "#" + string.Join('|', allowed) + $"#{allowOnly}#{safe}#{homework}#" +
+                      string.Join('|', ownBlocked) + "#" + string.Join('|', ownAllowed);
             if (key == _lastSent && DateTime.UtcNow - _lastSentAt < Refresh) return;
 
-            var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "set-blocked-sites", BlockedHosts = blocked, AllowedHosts = allowed, AllowOnly = allowOnly, SafeBrowsing = safe }, CancellationToken.None);
+            var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest
+            {
+                Command = "set-blocked-sites", BlockedHosts = blocked, AllowedHosts = allowed, AllowOnly = allowOnly, SafeBrowsing = safe,
+                AccountBlockedHosts = ownBlocked, AccountAllowedHosts = ownAllowed
+            }, CancellationToken.None);
             if (reply.Ok)
             {
-                if (key != _lastSent) Logger.Instance.Info($"Browser rules sent: {blocked.Count} blocked, allow-list mode {(allowOnly ? "on (" + allowed.Count + " allowed)" : "off")}, safe browsing {(safe ? "on" : "off")}.");
+                if (key != _lastSent) Logger.Instance.Info($"Browser rules sent: {blocked.Count} blocked, allow-list mode {(allowOnly ? "on (" + allowed.Count + " allowed)" : "off")}, safe browsing {(safe ? "on" : "off")}, {ownBlocked.Count} blocked for this account only.");
                 _lastSent = key;
                 _lastSentAt = DateTime.UtcNow;
                 _serviceWarned = false;
