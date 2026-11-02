@@ -309,6 +309,18 @@ Place this file alongside `DeviceMon.exe`. All settings are optional — default
 
 Hover over almost any control in the dashboard for a short explanation. On touch screens, tap the **?** button to turn on help mode: tapping an item then shows what it does instead of activating it. Tap **?** again to leave help mode. Descriptions are translated with the rest of the dashboard.
 
+### Repeated-close alert and summary email
+
+When tamper alerts are on, you get a normal alert each time the GameHost watchdog has to restart DeviceMon, plus a second **repeated close** alert when it happens 3 times within 30 minutes (once per burst). The summary email (**Settings → Summary**: daily, weekly or monthly, with day and time) now also lists how many times DeviceMon was restarted and each PC Time account's latest usage.
+
+### Weekly trend report
+
+The **History** page has a **This week vs last week** panel: bars per day for the last 7 days against the same days a week earlier, plus the top apps with their change. The summary email ends with the same comparison.
+
+### Limits tamper guard
+
+While DeviceMon is running it checks every 10 seconds whether the app limits or allowed-hours schedule in `monitor.db` were changed by another program (for example a database tool used by the child). If so, the previous values are **restored automatically**, the event is logged, and you get a tamper alert if tamper alerts are on. Changes made through the dashboard are never flagged. **Limits of this guard:** it protects the app limits and schedule only (not groups or PC Time, which the service already protects), and it works only while DeviceMon runs; if the child closes DeviceMon first, the watchdog restart alert is what tells you.
+
 ### PC Time (per-account screen time)
 
 Besides per-app limits, you can give a standard Windows account a **daily PC-time allowance** that applies across all apps (for example 180 minutes a day for one child, without touching other accounts).
@@ -321,6 +333,10 @@ Besides per-app limits, you can give a standard Windows account a **daily PC-tim
 - **From another device, a remote PIN approves the change** instead, because no UAC prompt can be answered remotely. It is off until you set it: on the child PC, in an **Administrator** prompt, run `GameHost.exe --set-remote-pin` (and `GameHost.exe --clear-remote-pin` to turn it off). The PIN is typed there when you set it (not in the dashboard), and is stored only as a salted hash in a folder the child account cannot read; the service refuses remote changes if that folder is ever found to be readable or writable by the child. The dashboard asks for your admin password first, but it is the **PIN** that the service itself checks, so treat the PIN as the real key.
   - Five wrong PIN attempts lock remote changes for 15 minutes, doubling each time up to 24 hours (changes on the child PC keep working). A program running as the child can also try PINs directly against the service, bypassing the dashboard; the lockout limits that to a handful of guesses per day, and each lockout sends you an email or webhook alert even if general tamper alerts are off. Remote changes follow the tamper-alert switch.
   - **Trade-off:** the PIN travels through the dashboard process that runs under the child account, so a remote change is weaker than a UAC-approved one. Use a PIN that is long and different from your admin password. If you only ever make changes at the PC, leave the PIN unset.
+- **Weekend limit:** each account can have different minutes for Saturday and Sunday. Leave **Weekend minutes** at 0 to use the daily minutes every day.
+- **Bedtime:** set a **Bedtime** and **Wake-up time** and the account is signed out from bedtime until wake-up, whatever allowance is left (and again if it signs in during that time). Warnings appear 10, 5 and 1 minutes before. Optionally set a later **Weekend bedtime**, used on Friday and Saturday nights.
+- **Ask for more time:** at the 5-minute warning the child sees a Yes/No box, "Ask your parent for more time?". Answering Yes sends you an email/webhook alert (even if tamper alerts are off; turn it off with the database setting `TimeRequestAlertsEnabled=false`). Open **PC Time**, press **Add 15 / 30 / 60 min** next to the request, and save as usual (UAC on the PC, PIN from another device); saving closes the request. Only one request per account can wait at a time, and it expires after 12 hours. Requests extend the daily allowance, not bedtime.
+- **Lock now (pause this PC):** on **PC Time**, enter minutes and press **Lock now** to send the selected account back to the Windows sign-in screen immediately, for homework or dinner. Its programs keep running, and signing in again gets it locked again within a few seconds until the time is up; time spent locked is not counted against the allowance. **Unlock now** ends it early. Locking uses the same approval as other changes (UAC on the PC, the remote PIN from another device), lasts at most 12 hours, and works even for an account without a daily limit.
 - Requires the GameHost service to be installed and running.
 
 ### Recommended install: protected Program Files location (requires admin)

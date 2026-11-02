@@ -37,6 +37,14 @@
         <button id="screen-refresh" title="Reload the Windows accounts and today&#x27;s usage." class="btn-secondary" type="button">Refresh accounts</button>
       </div>
       <div id="screen-message" class="screen-notice" role="status" aria-live="polite">Loading accounts for this PC...</div>
+      <div id="screen-lock-panel" class="screen-notice screen-lock" title="Lock the selected account right now, for example for homework or dinner. Its programs keep running; it just returns to the sign-in screen.">
+        <strong>Pause this PC</strong>
+        <span id="screen-lock-status"></span>
+        <input type="number" id="screen-lock-minutes" title="How long to keep the account locked, in minutes (up to 720)." min="1" max="720" value="30">
+        <button type="button" id="screen-lock" title="Lock the selected account now for the number of minutes shown." class="btn-secondary">Lock now</button>
+        <button type="button" id="screen-unlock" title="End the lock early so the account can be used again." class="btn-secondary hidden">Unlock now</button>
+      </div>
+      <div id="screen-requests" class="screen-notice hidden" role="status" title="The child asked for more PC time. Approve to fill in the extra minutes, then save."></div>
       <div class="history-stats screen-stats">
         <div class="stat-card"><div class="label">Selected account</div><div class="value" id="screen-account-name">-</div><div class="sub">Administrators are never controlled</div></div>
         <div class="stat-card"><div class="label">Used today</div><div class="value" id="screen-used">-</div><div class="sub">Active, unlocked session</div></div>
@@ -52,6 +60,14 @@
           <label title="Daily PC time for this account, in minutes." for="screen-minutes">Minutes per day</label>
           <input type="number" id="screen-minutes" title="Daily PC time for this account, in minutes." min="1" max="1440" value="180" required>
           <p class="screen-help">180 minutes is 3 hours.</p>
+          <label title="Optional different allowance for Saturday and Sunday. Leave 0 to use the daily minutes every day." for="screen-weekend">Weekend minutes (0 = same as weekdays)</label>
+          <input type="number" id="screen-weekend" title="Optional different allowance for Saturday and Sunday. Leave 0 to use the daily minutes every day." min="0" max="1440" value="0">
+          <label title="Optional. The account is signed out from this time until the wake-up time." for="screen-bedtime">Bedtime (sign out from)</label>
+          <input type="time" id="screen-bedtime" title="Optional. The account is signed out from this time until the wake-up time.">
+          <label title="The time the account may sign in again in the morning." for="screen-wake">Wake-up time (sign in allowed from)</label>
+          <input type="time" id="screen-wake" title="The time the account may sign in again in the morning.">
+          <label title="Optional later bedtime for Friday and Saturday nights. Leave empty to use the normal bedtime." for="screen-weekend-bedtime">Weekend bedtime (Fri and Sat nights, optional)</label>
+          <input type="time" id="screen-weekend-bedtime" title="Optional later bedtime for Friday and Saturday nights. Leave empty to use the normal bedtime.">
           <label title="Turn the allowance on or off for this account."><input type="checkbox" id="screen-enabled"> Enable control for this account</label>
           <label title="Extra minutes for today only." for="screen-bonus">Bonus for today (total minutes)</label>
           <input type="number" id="screen-bonus" title="Extra minutes for today only." min="0" max="1440" value="0" required>
@@ -179,6 +195,12 @@
           <h3>Selected Day</h3>
           <div id="history-day-detail"></div>
         </div>
+      </div>
+      <div class="history-panel weekly-report" id="weekly-report">
+        <h3 title="The last 7 days compared with the 7 days before them.">This week vs last week</h3>
+        <div id="weekly-summary" class="weekly-summary"></div>
+        <div id="weekly-days" class="weekly-days"></div>
+        <div id="weekly-apps" class="table-container"></div>
       </div>
       <div class="table-container" id="history-table"></div>
       <h3 class="usage-groups-title">Shared Group Usage</h3>

@@ -22,6 +22,8 @@ internal sealed class ScreenTimeService : IDisposable
     private readonly RemotePinStore _remotePin;
     private readonly string _protectedDirectory;
     private ScreenTimeControlServer? _control;
+    private readonly HashSet<int> _asking = new();
+    private readonly Dictionary<int, long> _locks = new();
 
     internal static void PrepareDirectory()
     {
@@ -113,14 +115,27 @@ internal sealed class ScreenTimeService : IDisposable
             if (elapsed > 5) elapsed = 0;
             var today = DateOnly.FromDateTime(DateTime.Now);
             var policies = ScreenTimeFiles.ReadPolicies();
-            var sessions = policies.Any(p => p.Enabled) ? ScreenTimeWindows.Sessions() : new();
+            var utcNow = DateTimeOffset.UtcNow;
+            var sessions = policies.Any(p => p.Enabled || ScreenTimeRules.IsLocked(p, utcNow)) ? ScreenTimeWindows.Sessions() : new();
             foreach (var policy in policies)
             {
                 if (!_usage.TryGetValue(policy.ProfileId, out var usage))
                     _usage[policy.ProfileId] = usage = new();
                 var userSessions = sessions.Where(s => s.Sid == policy.UserSid).ToList();
                 ScreenTimeRules.Advance(usage, today,
-                    policy.Enabled && userSessions.Any(s => s.Unlocked) ? elapsed : 0);
+                    policy.Enabled && !ScreenTimeRules.IsLocked(policy, utcNow) && userSessions.Any(s => s.Unlocked) ? elapsed : 0);
+            }
+            // A parent's "lock now": keep the account at the sign-in screen (programs keep running)
+            // until the time is up. Signing back in just gets it locked again a few seconds later.
+            foreach (var policy in policies.Where(p => ScreenTimeRules.IsLocked(p, utcNow)))
+            {
+                foreach (var session in sessions.Where(s => s.Sid == policy.UserSid && s.Unlocked))
+                {
+                    if (_locks.TryGetValue(session.SessionId, out var lastLock) && tick - lastLock < 5000) continue;
+                    _locks[session.SessionId] = tick;
+                    try { ScreenTimeWindows.Lock(session.SessionId, policy.UserSid); _log("Screen-time: parent lock; disconnected " + policy.UserSid); }
+                    catch (Exception ex) { _log("Screen-time: could not lock session: " + ex.Message); }
+                }
             }
             // Checkpoint periodically (and always right before a logoff) rather than every
             // second: a restart loses at most a few seconds of usage, without constant disk churn.
@@ -129,28 +144,44 @@ internal sealed class ScreenTimeService : IDisposable
             {
                 var usage = _usage[policy.ProfileId];
                 var remaining = ScreenTimeRules.Remaining(policy, usage, today);
+                var now = DateTime.Now;
+                var bedtime = ScreenTimeRules.InBedtime(policy, now);
                 var warningKey = policy.ProfileId + ":" + usage.Day;
                 if (!_warnings.TryGetValue(warningKey, out var sent)) _warnings[warningKey] = sent = new();
+                var bedWarningKey = policy.ProfileId + ":bed:" + now.ToString("yyyy-MM-dd");
+                if (!_warnings.TryGetValue(bedWarningKey, out var bedSent)) _warnings[bedWarningKey] = bedSent = new();
+                var untilBed = ScreenTimeRules.MinutesUntilBedtime(policy, now);
                 foreach (var session in sessions.Where(s => s.Sid == policy.UserSid))
                 {
-                    if (remaining == 0)
+                    if (remaining == 0 || bedtime)
                     {
                         if (!_logoffs.TryGetValue(session.SessionId, out var last) || tick - last >= 5000)
                         {
                             PersistUsage(tick, force: true);
                             ScreenTimeWindows.Logoff(session.SessionId, policy.UserSid);
                             _logoffs[session.SessionId] = tick;
-                            _log("Screen-time: quota exhausted; logged off " + policy.UserSid);
+                            _log(bedtime ? "Screen-time: bedtime; logged off " + policy.UserSid
+                                         : "Screen-time: quota exhausted; logged off " + policy.UserSid);
                         }
                     }
                     else if (session.Unlocked)
                     {
                         var threshold = new[] { 1, 5, 10 }.FirstOrDefault(m => remaining <= m * 60);
-                        if (threshold > 0 && !sent.Contains(threshold))
+                        var bedThreshold = untilBed is { } left ? new[] { 1, 5, 10 }.FirstOrDefault(m => left <= m) : 0;
+                        if (bedThreshold > 0 && !bedSent.Contains(bedThreshold) && (threshold == 0 || untilBed * 60 < remaining))
                         {
+                            bedSent.Add(bedThreshold);
                             ScreenTimeWindows.Warn(session.SessionId,
-                                $"About {Math.Ceiling(remaining / 60.0)} minute(s) of PC time left today. Save your work - you will be signed out when time runs out.");
+                                $"Bedtime in about {untilBed} minute(s). Save your work - you will be signed out then.");
+                        }
+                        else if (threshold > 0 && !sent.Contains(threshold))
+                        {
                             sent.Add(threshold);
+                            var text = $"About {Math.Ceiling(remaining / 60.0)} minute(s) of PC time left today. Save your work - you will be signed out when time runs out.";
+                            // At the 5 minute warning the child may ask for more time. The question is
+                            // a Yes/No box, so it runs off the timer thread while it waits for an answer.
+                            if (threshold == 5) AskForMoreTime(session.SessionId, policy, text);
+                            else ScreenTimeWindows.Warn(session.SessionId, text);
                         }
                     }
                 }
@@ -168,6 +199,26 @@ internal sealed class ScreenTimeService : IDisposable
             try { WriteStatus(new(), DateOnly.FromDateTime(DateTime.Now), ex.Message); } catch { }
         }
         finally { Monitor.Exit(_sync); }
+    }
+
+    private void AskForMoreTime(int sessionId, ScreenTimePolicy policy, string text)
+    {
+        lock (_asking) { if (!_asking.Add(sessionId)) return; }
+        var sid = policy.UserSid;
+        var name = policy.DisplayName;
+        Task.Run(() =>
+        {
+            try
+            {
+                if (!ScreenTimeWindows.Ask(sessionId, text + " Ask your parent for more time?")) return;
+                var added = TimeRequestStore.Add(sid, name, DateTimeOffset.UtcNow);
+                _log(added ? $"Screen-time: {name} asked for more time." : $"Screen-time: {name} asked again; a request is already waiting.");
+                ScreenTimeWindows.Warn(sessionId, added ? "Your parent has been asked. You will be told if they add time."
+                                                       : "Your parent has already been asked. Please wait for their answer.");
+            }
+            catch (Exception ex) { _log("Screen-time: could not record the request: " + ex.Message); }
+            finally { lock (_asking) _asking.Remove(sessionId); }
+        });
     }
 
     private void PersistUsage(long tick, bool force)
@@ -240,6 +291,13 @@ internal sealed class ScreenTimeService : IDisposable
                     var policy = existing ?? new ScreenTimePolicy { UserSid = request.UserSid };
                     policy.DisplayName = account?.Name ?? policy.DisplayName;
                     policy.DailyMinutes = request.DailyMinutes;
+                    policy.WeekendMinutes = request.WeekendMinutes;
+                    policy.LockUntilUtc = ScreenTimeRules.ApplyLock(policy.LockUntilUtc, request.LockMinutes, DateTimeOffset.UtcNow);
+                    policy.BedtimeStart = request.BedtimeStart ?? "";
+                    policy.BedtimeEnd = request.BedtimeEnd ?? "";
+                    policy.WeekendBedtimeStart = request.WeekendBedtimeStart ?? "";
+                    var todayText = DateTime.Today.ToString("yyyy-MM-dd");
+                    var previousBonus = existing != null && existing.BonusDay == todayText ? existing.BonusMinutes : 0;
                     policy.Enabled = request.Enabled;
                     policy.BonusDay = DateTime.Today.ToString("yyyy-MM-dd");
                     policy.BonusMinutes = request.BonusMinutes;
@@ -247,8 +305,13 @@ internal sealed class ScreenTimeService : IDisposable
                     if (request.Command == "validate") return ScreenTimeReply.Success(new { valid = true });
                     if (existing == null) policies.Add(policy);
                     ScreenTimeFiles.WriteAtomic(ScreenTimeFiles.PoliciesPath, policies);
+                    // Adding time (or turning control off) answers any waiting request from this account.
+                    if (request.BonusMinutes > previousBonus || !policy.Enabled)
+                    {
+                        try { TimeRequestStore.Resolve(policy.UserSid); } catch (Exception ex) { _log("Screen-time: could not close request: " + ex.Message); }
+                    }
                     File.AppendAllText(Path.Combine(ScreenTimeFiles.DirectoryPath, "admin-audit.log"),
-                        $"{DateTimeOffset.Now:o} {(viaRemote ? "Remote PIN authorized" : "Windows admin authorized")} policy for {policy.UserSid}; minutes={policy.DailyMinutes}; enabled={policy.Enabled}; bonus={policy.BonusMinutes}{Environment.NewLine}");
+                        $"{DateTimeOffset.Now:o} {(viaRemote ? "Remote PIN authorized" : "Windows admin authorized")} policy for {policy.UserSid}; minutes={policy.DailyMinutes}; weekend={policy.WeekendMinutes}; bedtime={policy.BedtimeStart}-{policy.BedtimeEnd}/{policy.WeekendBedtimeStart}; lockUntil={policy.LockUntilUtc:o}; enabled={policy.Enabled}; bonus={policy.BonusMinutes}{Environment.NewLine}");
                     return ScreenTimeReply.Success(new { saved = true, userSid = policy.UserSid });
                 }
                 foreach (var policy in policies)
@@ -261,13 +324,17 @@ internal sealed class ScreenTimeService : IDisposable
                         var usage = _usage.GetValueOrDefault(p.ProfileId) ?? new ScreenTimeUsage();
                         return new {
                             profileId = p.ProfileId, userSid = p.UserSid, name = p.DisplayName,
-                            dailyMinutes = p.DailyMinutes, enabled = p.Enabled,
+                            dailyMinutes = p.DailyMinutes, weekendMinutes = p.WeekendMinutes, enabled = p.Enabled,
+                            bedtimeStart = p.BedtimeStart, bedtimeEnd = p.BedtimeEnd, weekendBedtimeStart = p.WeekendBedtimeStart,
+                            lockedUntilUtc = ScreenTimeRules.IsLocked(p, DateTimeOffset.UtcNow) ? p.LockUntilUtc : null,
                             bonusMinutes = p.BonusDay == today.ToString("yyyy-MM-dd") ? p.BonusMinutes : 0,
                             usedSeconds = (long)Math.Ceiling(usage.Seconds),
                             remainingSeconds = ScreenTimeRules.Remaining(p, usage, today)
                         };
                     }).ToList(),
                     remote = RemoteStatus(),
+                    requests = TimeRequestStore.Pending(DateTimeOffset.UtcNow)
+                        .Select(r => new { id = r.Id, userSid = r.UserSid, name = r.Name, createdUtc = r.CreatedUtc }).ToList(),
                     updatedUtc = DateTimeOffset.UtcNow,
                     error = string.IsNullOrEmpty(_lastError) ? null : "Screen-time enforcement error. Check the service log."
                 });

@@ -460,3 +460,20 @@ code { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; ba
 .help-bubble { position: fixed; z-index: 1000; max-width: min(300px, calc(100% - 16px)); padding: 10px 12px; border: 1px solid var(--primary); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 13px; line-height: 1.5; box-shadow: var(--shadow); pointer-events: none; }
 .screen-auth label { display: block; margin: 16px 0 6px; color: var(--text-soft); font-size: 13px; }
 .screen-auth input { width: 100%; }
+.screen-request { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0; }
+.screen-request button { padding: 6px 12px; }
+
+.weekly-report { margin-bottom: 16px; }
+.weekly-summary { margin: 4px 0 12px; font-weight: 600; }
+.weekly-day { display: grid; grid-template-columns: 48px 1fr 130px; align-items: center; gap: 10px; margin: 6px 0; }
+.weekly-label { color: var(--text-soft); font-size: 13px; }
+.weekly-bars { display: grid; gap: 3px; }
+.weekly-bar { height: 8px; border-radius: 4px; min-width: 2px; }
+.weekly-bar.now, .weekly-legend .now { background: var(--primary); }
+.weekly-bar.before, .weekly-legend .before { background: var(--surface-soft); border: 1px solid var(--border); }
+.weekly-value { font-size: 13px; text-align: right; }
+.weekly-value small { color: var(--text-soft); margin-left: 6px; }
+.weekly-legend { display: flex; gap: 14px; align-items: center; font-size: 12px; color: var(--text-soft); margin-top: 8px; }
+.weekly-legend span { display: inline-block; width: 12px; height: 8px; border-radius: 4px; margin-right: 4px; }
+.screen-lock { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.screen-lock input { width: 90px; }

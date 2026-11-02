@@ -15,6 +15,8 @@ public sealed class ParentReportService : IDisposable
     private long _lastTick;
     private DateTime _lastUtc;
     private int _checking;
+    private int _guarding;
+    private readonly System.Threading.Timer _guardTimer;
 
     public ParentReportService(UsageDatabase db, EmailService email, NotificationService notifications, string configPath)
     {
@@ -25,9 +27,31 @@ public sealed class ParentReportService : IDisposable
         _lastTick = Environment.TickCount64;
         _lastUtc = DateTime.UtcNow;
         _timer = new System.Threading.Timer(Check, null, Timeout.Infinite, Timeout.Infinite);
+        _guardTimer = new System.Threading.Timer(GuardCheck, null, Timeout.Infinite, Timeout.Infinite);
     }
 
-    public void Start() => _timer.Change(TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
+    public void Start()
+    {
+        _timer.Change(TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1));
+        _guardTimer.Change(TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(10));
+    }
+
+    // Checked far more often than the minute timer so a legitimate edit and an outside edit rarely share a window.
+    private async void GuardCheck(object? state)
+    {
+        if (Interlocked.Exchange(ref _guarding, 1) != 0) return;
+        try
+        {
+            var problem = await _db.CheckLimitsIntegrityAsync();
+            if (problem != null)
+            {
+                Logger.Instance.Warn("Limits tamper guard: " + problem);
+                await SendTamperAlertAsync("limits_changed", problem);
+            }
+        }
+        catch (Exception ex) { Logger.Instance.Error($"Limits tamper guard failed: {ex.Message}"); }
+        finally { Volatile.Write(ref _guarding, 0); }
+    }
 
     public async Task ReloadAndCheckAsync() => await CheckAsync();
 
@@ -70,12 +94,30 @@ public sealed class ParentReportService : IDisposable
 
     public async Task<bool> ReportWatchdogRestartAsync(string details)
     {
+        // Every restart is remembered (for the summary email and for spotting repeated closes),
+        // even when tamper alerts are off.
+        var now = DateTimeOffset.UtcNow;
+        var history = RepeatedCloseDetector.Parse(await _db.GetSettingAsync(RestartLogKey, ""));
+        history.Add(now);
+        await _db.SetSettingAsync(RestartLogKey, RepeatedCloseDetector.Serialize(history, now));
+
         if ((await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true")
             return true;
-        return await SendTamperAlertAsync(
+        var sent = await SendTamperAlertAsync(
             "watchdog_restart",
             $"DeviceMon was stopped and restarted by the GameHost watchdog.\n{details}");
+
+        _ = int.TryParse(await _db.GetSettingAsync("RepeatedCloseThreshold", "3"), out var threshold);
+        _ = int.TryParse(await _db.GetSettingAsync("RepeatedCloseWindowMinutes", "30"), out var window);
+        if (threshold < 2) threshold = 3;
+        if (window < 1) window = 30;
+        if (sent && RepeatedCloseDetector.IsFirstAtThreshold(history, now, TimeSpan.FromMinutes(window), threshold))
+            await SendTamperAlertAsync("repeated_close",
+                $"DeviceMon was closed {threshold} times in the last {window} minutes. Someone is probably closing it on purpose.");
+        return sent;
     }
+
+    private const string RestartLogKey = "WatchdogRestartLog";
 
     private async void Check(object? state)
     {
@@ -90,6 +132,29 @@ public sealed class ParentReportService : IDisposable
         await CheckScheduledSummaryAsync(DateTime.Now);
         await CheckTamperConditionsAsync();
         await CheckRemotePinLockoutsAsync();
+        await CheckTimeRequestsAsync();
+    }
+
+    // The SYSTEM service records a request when the child answers Yes to "ask for more time".
+    // Each one is announced once; approving it happens in the dashboard's PC Time page.
+    private async Task CheckTimeRequestsAsync()
+    {
+        try
+        {
+            if ((await _db.GetSettingAsync("TimeRequestAlertsEnabled", "true")) != "true") return;
+            var pending = ScreenTime.TimeRequestStore.Pending(DateTimeOffset.UtcNow);
+            if (pending.Count == 0) return;
+            var seen = (await _db.GetSettingAsync("TimeRequestsSeen", "")).Split(';', StringSplitOptions.RemoveEmptyEntries).ToList();
+            foreach (var request in pending.Where(r => !seen.Contains(r.Id)))
+            {
+                var message = $"{request.Name} asked for more PC time on {Environment.MachineName}. " +
+                              "Open the dashboard, go to PC Time, choose Add 15/30/60 min and save to approve.";
+                if (!await SendTamperAlertAsync("pc_time_request", message, ignoreSwitch: true)) continue;
+                seen.Add(request.Id);
+                await _db.SetSettingAsync("TimeRequestsSeen", string.Join(';', seen.TakeLast(50)));
+            }
+        }
+        catch (Exception ex) { Logger.Instance.Error($"Time request check failed: {ex.Message}"); }
     }
 
     private async Task CheckScheduledSummaryAsync(DateTime now)
@@ -124,9 +189,43 @@ public sealed class ParentReportService : IDisposable
         foreach (var item in grouped.Take(15))
             body.AppendLine($"{item.App}: {Format(item.Total)} (foreground {Format(item.Foreground)}, background {Format(item.Background)})");
 
+        var restarts = RepeatedCloseDetector.CountSince(
+            RepeatedCloseDetector.Parse(await _db.GetSettingAsync("WatchdogRestartLog", "")), new DateTimeOffset(from));
+        body.AppendLine().AppendLine($"Times DeviceMon was closed and restarted: {restarts}");
+        AppendPcTimeToday(body);
+        try
+        {
+            var end = due.AddTicks(-1).Date;
+            var trend = WeeklyReport.Build(await _db.GetUsageRangeAsync(end.AddDays(-13), end), end);
+            body.AppendLine().Append(WeeklyReport.ToText(trend));
+        }
+        catch (Exception ex) { Logger.Instance.Warn($"Summary trend section skipped: {ex.Message}"); }
+
         var error = await _email.SendSystemEmailAsync($"{frequency[..1].ToUpperInvariant() + frequency[1..]} Usage Summary", body.ToString());
         if (error == null)
             await _db.SetSettingAsync("SummaryLastSentDue", due.ToString("O"));
+    }
+
+    // PC Time counters belong to the SYSTEM service; its status file shows each account's latest day.
+    private static void AppendPcTimeToday(StringBuilder body)
+    {
+        try
+        {
+            var path = ScreenTime.ScreenTimeFiles.StatusPath;
+            if (!File.Exists(path)) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("profiles", out var profiles) || profiles.GetArrayLength() == 0) return;
+            body.AppendLine().AppendLine("PC Time (most recent day recorded for each account):");
+            foreach (var p in profiles.EnumerateArray())
+            {
+                var name = p.TryGetProperty("name", out var n) ? n.GetString() : "?";
+                var used = p.TryGetProperty("usedSeconds", out var u) ? u.GetInt64() : 0;
+                var day = p.TryGetProperty("day", out var d) ? d.GetString() : "";
+                var enabled = p.TryGetProperty("enabled", out var e) && e.GetBoolean();
+                body.AppendLine($"{name}: {Format(used)} on {day}{(enabled ? "" : " (not controlled)")}");
+            }
+        }
+        catch { /* the summary is still useful without it */ }
     }
 
     public static DateTime GetLatestDue(DateTime now, string frequency, TimeSpan time, int weeklyDay, int monthlyDay)
@@ -208,5 +307,34 @@ public sealed class ParentReportService : IDisposable
         ? $"{(int)value.TotalHours}h {value.Minutes}m"
         : "0m";
 
-    public void Dispose() => _timer.Dispose();
+    public void Dispose() { _timer.Dispose(); _guardTimer.Dispose(); }
+}
+
+/// <summary>Spots a child closing DeviceMon again and again, from the watchdog's restart log.</summary>
+public static class RepeatedCloseDetector
+{
+    private const int MaxEntries = 200;
+
+    public static List<DateTimeOffset> Parse(string text)
+    {
+        var list = new List<DateTimeOffset>();
+        foreach (var part in (text ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+            if (DateTimeOffset.TryParse(part, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var value))
+                list.Add(value);
+        return list;
+    }
+
+    public static string Serialize(List<DateTimeOffset> history, DateTimeOffset now) =>
+        string.Join(';', history.Where(h => now - h < TimeSpan.FromDays(35)).OrderBy(h => h)
+            .TakeLast(MaxEntries).Select(h => h.ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
+
+    public static int CountWithin(List<DateTimeOffset> history, DateTimeOffset now, TimeSpan window) =>
+        history.Count(h => h <= now && now - h <= window);
+
+    /// <summary>True only for the restart that reaches the threshold, so one burst sends one alert.</summary>
+    public static bool IsFirstAtThreshold(List<DateTimeOffset> history, DateTimeOffset now, TimeSpan window, int threshold) =>
+        CountWithin(history, now, window) == threshold;
+
+    public static int CountSince(List<DateTimeOffset> history, DateTimeOffset since) => history.Count(h => h >= since);
 }

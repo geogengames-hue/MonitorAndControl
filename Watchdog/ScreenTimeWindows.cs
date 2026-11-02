@@ -23,6 +23,8 @@ internal static class ScreenTimeWindows
     [DllImport("wtsapi32.dll", SetLastError = true)]
     private static extern bool WTSQuerySessionInformationW(IntPtr server, int session, int info, out IntPtr buffer, out int size);
     [DllImport("wtsapi32.dll", SetLastError = true)]
+    private static extern bool WTSDisconnectSession(IntPtr server, int sessionId, bool wait);
+    [DllImport("wtsapi32.dll", SetLastError = true)]
     private static extern bool WTSLogoffSession(IntPtr server, int sessionId, bool wait);
     [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode)]
     private static extern bool WTSSendMessageW(IntPtr server, int session, string title, int titleLength,
@@ -113,6 +115,21 @@ internal static class ScreenTimeWindows
         const string title = "Monitor & Control - PC time";
         WTSSendMessageW(IntPtr.Zero, session, title, title.Length * 2, message, message.Length * 2,
             0x40, 30, out _, false);
+    }
+    /// <summary>Shows a Yes/No box on the child's desktop and waits for the answer (or the timeout).</summary>
+    internal static bool Ask(int session, string message)
+    {
+        const string title = "Monitor & Control - PC time";
+        // MB_YESNO | MB_ICONQUESTION; IDYES = 6.
+        return WTSSendMessageW(IntPtr.Zero, session, title, title.Length * 2, message, message.Length * 2,
+            0x24, 45, out var response, true) && response == 6;
+    }
+    /// <summary>Sends the session back to the Windows sign-in screen without closing its programs.</summary>
+    internal static void Lock(int session, string expectedSid)
+    {
+        if (!Sessions().Any(s => s.SessionId == session && s.Sid == expectedSid)) return;
+        if (!WTSDisconnectSession(IntPtr.Zero, session, false))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
     }
     internal static void Logoff(int session, string expectedSid)
     {

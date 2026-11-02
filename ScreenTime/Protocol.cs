@@ -9,6 +9,12 @@ public sealed class ScreenTimeRequest
     public string UserSid { get; set; } = "";
     public int DailyMinutes { get; set; }
     public int BonusMinutes { get; set; }
+    public int WeekendMinutes { get; set; }
+    public string BedtimeStart { get; set; } = "";
+    public string BedtimeEnd { get; set; } = "";
+    public string WeekendBedtimeStart { get; set; } = "";
+    /// <summary>0 = leave the lock alone, negative = unlock now, positive = lock for that many minutes.</summary>
+    public int LockMinutes { get; set; }
     public bool Enabled { get; set; }
     public string TicketId { get; set; } = "";
     /// <summary>Remote PIN for "remote-save". Never logged and never stored in the request history.</summary>

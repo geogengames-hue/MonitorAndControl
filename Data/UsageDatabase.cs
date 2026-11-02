@@ -540,6 +540,66 @@ public class UsageDatabase : IDisposable
         finally { _lock.Release(); }
     }
 
+    // ---- Limits tamper guard -------------------------------------------------------------
+    // This process is the only one that should ever write monitor.db. SQLite's data_version
+    // changes only when a *different* connection modifies the file, so a child editing the limits
+    // with another tool shows up as "version changed AND limits differ from what we last saw".
+    // Our own legitimate edits never change data_version, so each quiet check just refreshes the
+    // baseline. Limitation: this guard lives in the child's own process; the service-side copy
+    // would be needed to survive DeviceMon being killed first.
+    private (List<AppLimitRule> Limits, List<ScheduleRule> Schedule, string Fingerprint)? _limitsBaseline;
+    private long _limitsDataVersion = -1;
+
+    private async Task<long> ReadDataVersionAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "PRAGMA data_version";
+            return Convert.ToInt64(await cmd.ExecuteScalarAsync());
+        }
+        finally { _lock.Release(); }
+    }
+
+    public static string LimitsFingerprint(IEnumerable<AppLimitRule> limits, IEnumerable<ScheduleRule> schedule)
+    {
+        var lines = limits.Select(l => $"L|{l.AppName}|{l.DailyMaxMinutes}|{(l.Enabled ? 1 : 0)}")
+            .Concat(schedule.Select(r => $"S|{r.AppName}|{r.DayOfWeek}|{r.StartTime}|{r.EndTime}|{(r.Enabled ? 1 : 0)}"))
+            .OrderBy(x => x, StringComparer.Ordinal);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(string.Join(';', lines))));
+    }
+
+    /// <summary>
+    /// Returns a description when the limits or schedule were changed behind this process's back
+    /// (and puts the previous values back), otherwise null.
+    /// </summary>
+    public async Task<string?> CheckLimitsIntegrityAsync()
+    {
+        var version = await ReadDataVersionAsync();
+        var limits = await GetLimitRulesAsync();
+        var schedule = await GetScheduleRulesAsync();
+        var fingerprint = LimitsFingerprint(limits, schedule);
+
+        if (_limitsBaseline is not { } baseline || version == _limitsDataVersion)
+        {
+            _limitsBaseline = (limits, schedule, fingerprint);
+            _limitsDataVersion = version;
+            return null;
+        }
+
+        _limitsDataVersion = version;
+        if (fingerprint == baseline.Fingerprint) return null;
+
+        await ReplaceLimitRulesAsync(baseline.Limits);
+        await ReplaceScheduleRulesAsync(baseline.Schedule);
+        _limitsDataVersion = await ReadDataVersionAsync();
+        return $"The app limits or schedule in the database were changed outside DeviceMon " +
+               $"(was {baseline.Limits.Count} limits and {baseline.Schedule.Count} schedule rules, " +
+               $"found {limits.Count} and {schedule.Count}). The previous values were restored.";
+    }
+
     public async Task ReplaceLimitRulesAsync(IEnumerable<AppLimitRule> rules)
     {
         await _lock.WaitAsync();

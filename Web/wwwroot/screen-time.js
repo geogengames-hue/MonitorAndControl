@@ -53,21 +53,70 @@ function screenRenderSelection(populate) {
   screenElement('used').textContent = profile ? screenDuration(profile.usedSeconds) : '0h 0m';
   screenElement('remaining').textContent = profile?.enabled ? screenDuration(profile.remainingSeconds) : t('Unlimited');
   screenElement('allowance').textContent = profile
-    ? t('{n} min/day', { n: profile.dailyMinutes }) + (profile.bonusMinutes ? ' ' + t('+ {n} min today', { n: profile.bonusMinutes }) : '')
+    ? t('{n} min/day', { n: profile.dailyMinutes }) + (profile.weekendMinutes ? ' · ' + t('{n} min at weekends', { n: profile.weekendMinutes }) : '') +
+      (profile.bedtimeStart ? ' · ' + t('bedtime {from}-{to}', { from: profile.bedtimeStart, to: profile.bedtimeEnd }) : '') + (profile.bonusMinutes ? ' ' + t('+ {n} min today', { n: profile.bonusMinutes }) : '')
     : t('No rule applied');
   screenElement('state').textContent = profile?.enabled
     ? (profile.remainingSeconds <= 0 ? t('Time is up') : t('Active'))
     : t('Not controlled');
   const editable = !!account && (account.eligible || !!profile);
   screenElement('save').disabled = !editable || !!screenData?.error || !!screenRemoteBlock();
+  const lockedUntil = profile?.lockedUntilUtc ? new Date(profile.lockedUntilUtc) : null;
+  const isLocked = !!lockedUntil && lockedUntil > new Date();
+  const canLock = !!account?.eligible && !screenData?.error && !screenRemoteBlock();
+  screenElement('lock').disabled = !canLock;
+  screenElement('unlock').disabled = !canLock;
+  screenElement('unlock').classList.toggle('hidden', !isLocked);
+  screenElement('lock-status').textContent = isLocked
+    ? t('Locked until {time}.', { time: lockedUntil.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+    : t('Not locked.');
   screenElement('enabled').disabled = !!account && !account.eligible;
   if (populate) {
     screenElement('minutes').value = profile?.dailyMinutes ?? 180;
+    screenElement('weekend').value = profile?.weekendMinutes ?? 0;
+    screenElement('bedtime').value = profile?.bedtimeStart || '';
+    screenElement('wake').value = profile?.bedtimeEnd || '';
+    screenElement('weekend-bedtime').value = profile?.weekendBedtimeStart || '';
     screenElement('bonus').value = profile?.bonusMinutes ?? 0;
     screenElement('enabled').checked = profile?.enabled ?? false;
     if (account && !account.eligible) screenElement('enabled').checked = false;
     screenDirty = false;
   }
+}
+
+// A child's "ask for more time" requests. Approving fills in the extra minutes; the parent still
+// presses Save and authorizes it (UAC on the PC, PIN from another device) like any other change.
+function screenRenderRequests() {
+  const box = screenElement('requests');
+  const requests = screenData?.requests || [];
+  box.replaceChildren();
+  box.classList.toggle('hidden', !requests.length);
+  requests.forEach(request => {
+    const row = document.createElement('div');
+    row.className = 'screen-request';
+    const label = document.createElement('span');
+    label.textContent = t('{name} asked for more PC time.', { name: request.name }) + ' ';
+    row.appendChild(label);
+    [15, 30, 60].forEach(minutes => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn-secondary';
+      button.textContent = t('Add {n} min', { n: minutes });
+      button.title = t('Fills in {n} extra minutes for today. Press Save settings to apply them.', { n: minutes });
+      button.addEventListener('click', () => {
+        const select = screenElement('account');
+        select.value = request.userSid;
+        screenRenderSelection(true);
+        const current = Number(screenElement('bonus').value) || 0;
+        screenElement('bonus').value = current + minutes;
+        screenElement('enabled').checked = true;
+        screenDirty = true;
+        screenElement('save').focus();
+      });
+      row.appendChild(button);
+    });
+    box.appendChild(row);
+  });
 }
 
 function screenRenderTable() {
@@ -77,7 +126,7 @@ function screenRenderTable() {
     const row = document.createElement('tr');
     [
       profile.name,
-      t('{n} min', { n: profile.dailyMinutes }),
+      t('{n} min', { n: profile.dailyMinutes }) + (profile.weekendMinutes ? ' / ' + t('{n} min', { n: profile.weekendMinutes }) : ''),
       screenDuration(profile.usedSeconds),
       profile.enabled ? screenDuration(profile.remainingSeconds) : '-',
       profile.enabled ? t('Active') : t('Disabled')
@@ -126,6 +175,7 @@ async function loadScreenTime(force = false) {
     screenElement('message').textContent = data.error || remoteBlock || t('Accounts refreshed. Choose who to control and save the limit.');
     screenElement('message').classList.toggle('screen-error', !!data.error || !!remoteBlock);
     screenRenderSelection(force || !screenDirty || select.value !== previousSid);
+    screenRenderRequests();
     screenRenderTable();
   } catch (error) {
     screenElement('message').textContent = error.message;
@@ -141,19 +191,30 @@ screenElement('account').addEventListener('change', () => screenRenderSelection(
 screenElement('form').addEventListener('input', () => { screenDirty = true; });
 screenElement('refresh').addEventListener('click', () => loadScreenTime());
 
-screenElement('form').addEventListener('submit', event => {
-  event.preventDefault();
+// "Lock now" re-sends the account's current rule unchanged, plus the lock; the service applies
+// it with the same approval (UAC on the PC, PIN from another device) as any other change.
+function screenAskLock(minutes) {
   const account = screenData?.accounts.find(a => a.sid === screenElement('account').value);
   if (!account?.eligible) return;
+  const profile = screenSelectedProfile();
   screenPending = {
     userSid: account.sid,
-    dailyMinutes: Number(screenElement('minutes').value),
-    bonusMinutes: Number(screenElement('bonus').value),
-    enabled: screenElement('enabled').checked
+    dailyMinutes: profile?.dailyMinutes ?? 180,
+    weekendMinutes: profile?.weekendMinutes ?? 0,
+    bedtimeStart: profile?.bedtimeStart || '',
+    bedtimeEnd: profile?.bedtimeEnd || '',
+    weekendBedtimeStart: profile?.weekendBedtimeStart || '',
+    bonusMinutes: profile?.bonusMinutes ?? 0,
+    enabled: profile?.enabled ?? false,
+    lockMinutes: minutes
   };
-  screenElement('auth-summary').textContent = screenPending.enabled
-    ? t('Apply {n} minutes per day to {name}. Other accounts are preserved.', { n: screenPending.dailyMinutes, name: account.name })
-    : t('Turn off control for {name}. Other accounts are preserved.', { name: account.name });
+  screenOpenAuth(minutes > 0
+    ? t('Lock {name} for {n} minutes. Its programs keep running; it returns to the sign-in screen.', { name: account.name, n: minutes })
+    : t('Unlock {name} now.', { name: account.name }));
+}
+
+function screenOpenAuth(summary) {
+  screenElement('auth-summary').textContent = summary;
   screenElement('auth-error').textContent = '';
   // Local: Windows asks for approval. Remote: ask for the PIN instead.
   screenElement('auth-uac').classList.toggle('hidden', !screenIsLocal);
@@ -161,6 +222,41 @@ screenElement('form').addEventListener('submit', event => {
   screenElement('auth-pin').value = '';
   screenElement('auth').showModal();
   screenElement('auth-submit').focus();
+}
+
+screenElement('lock').addEventListener('click', () => {
+  const minutes = Math.floor(Number(screenElement('lock-minutes').value));
+  if (!(minutes >= 1 && minutes <= 720)) {
+    screenElement('message').textContent = t('Enter a lock time between 1 and 720 minutes.');
+    screenElement('message').classList.add('screen-error');
+    return;
+  }
+  screenAskLock(minutes);
+});
+screenElement('unlock').addEventListener('click', () => screenAskLock(-1));
+
+screenElement('form').addEventListener('submit', event => {
+  event.preventDefault();
+  const account = screenData?.accounts.find(a => a.sid === screenElement('account').value);
+  if (!account?.eligible) return;
+  if (screenElement('bedtime').value && (!screenElement('wake').value || screenElement('wake').value === screenElement('bedtime').value)) {
+    screenElement('message').textContent = t('Choose a wake-up time that differs from the bedtime.');
+    screenElement('message').classList.add('screen-error');
+    return;
+  }
+  screenPending = {
+    userSid: account.sid,
+    dailyMinutes: Number(screenElement('minutes').value),
+    weekendMinutes: Number(screenElement('weekend').value) || 0,
+    bedtimeStart: screenElement('bedtime').value,
+    bedtimeEnd: screenElement('bedtime').value ? screenElement('wake').value : '',
+    weekendBedtimeStart: screenElement('bedtime').value ? screenElement('weekend-bedtime').value : '',
+    bonusMinutes: Number(screenElement('bonus').value),
+    enabled: screenElement('enabled').checked
+  };
+  screenOpenAuth(screenPending.enabled
+    ? t('Apply {n} minutes per day to {name}. Other accounts are preserved.', { n: screenPending.dailyMinutes, name: account.name })
+    : t('Turn off control for {name}. Other accounts are preserved.', { name: account.name }));
 });
 
 screenElement('auth-cancel').addEventListener('click', () => { if (!screenBusy) screenElement('auth').close(); });

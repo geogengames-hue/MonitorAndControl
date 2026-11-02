@@ -121,7 +121,7 @@ public static class ScreenTimeEndpoints
                 {
                     var sid = request.UserSid ?? "";
                     Raise($"PC Time was changed remotely from {source}: account ...{sid[^Math.Min(4, sid.Length)..]}, " +
-                        $"{(request.Enabled ? request.DailyMinutes + " min/day" : "control off")}, bonus {request.BonusMinutes} min.", false);
+                        $"{(request.Enabled ? request.DailyMinutes + " min/day" + (request.WeekendMinutes > 0 ? $", {request.WeekendMinutes} at weekends" : "") + (string.IsNullOrEmpty(request.BedtimeStart) ? "" : $", bedtime {request.BedtimeStart}-{request.BedtimeEnd}") : "control off")}{(request.LockMinutes > 0 ? $", locked for {request.LockMinutes} min" : request.LockMinutes < 0 ? ", unlocked" : "")}, bonus {request.BonusMinutes} min.", false);
                     return Results.Json(reply.Data);
                 }
 

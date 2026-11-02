@@ -280,6 +280,16 @@ public class DashboardServer
             return Results.Json(await db.GetUsageRangeAsync(startDate, endDate), JsonOpts);
         });
 
+        // This week compared with last week, per day and per app (also used by the summary email).
+        app.MapGet("/api/report/weekly", async (string? end = null) =>
+        {
+            var endDate = DateTime.Today;
+            if (!string.IsNullOrWhiteSpace(end) && !DateTime.TryParse(end, out endDate))
+                return Results.BadRequest(new { error = "Invalid date." });
+            endDate = endDate.Date;
+            return Results.Json(WeeklyReport.Build(await db.GetUsageRangeAsync(endDate.AddDays(-13), endDate), endDate), JsonOpts);
+        });
+
         app.MapGet("/api/usage/groups/history", async (int days = 7, string? from = null, string? to = null) =>
         {
             DateTime startDate;

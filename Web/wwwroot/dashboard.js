@@ -611,6 +611,39 @@ async function loadHistory(days) {
     groupHistoryRaw = groupUsage.map(u => ({ ...u, date: formatDateOnly(u.date) }));
     syncHistoryFilters();
     renderHistoryDashboard();
+    loadWeeklyReport();
+  } catch (e) { log(e); }
+}
+
+async function loadWeeklyReport() {
+  const panel = document.getElementById('weekly-report');
+  if (!panel) return;
+  try {
+    const data = await api('/api/report/weekly');
+    const change = data.changePercent == null
+      ? t('no usage to compare with')
+      : data.changePercent === 0 ? t('same as before') : (data.changePercent > 0 ? '+' : '') + data.changePercent + '%';
+    document.getElementById('weekly-summary').textContent =
+      t('Total {now} vs {before} ({change})', { now: formatDuration(data.thisWeekSeconds), before: formatDuration(data.lastWeekSeconds), change });
+    const max = Math.max(1, ...data.days.map(d => Math.max(d.thisWeekSeconds, d.lastWeekSeconds)));
+    const dayName = iso => new Date(iso + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short' });
+    document.getElementById('weekly-days').innerHTML = data.days.map(d =>
+      `<div class="weekly-day" title="${escAttr(d.date)}">
+         <span class="weekly-label">${esc(dayName(d.date))}</span>
+         <div class="weekly-bars">
+           <div class="weekly-bar now" style="width:${Math.round(d.thisWeekSeconds * 100 / max)}%"></div>
+           <div class="weekly-bar before" style="width:${Math.round(d.lastWeekSeconds * 100 / max)}%"></div>
+         </div>
+         <span class="weekly-value">${esc(formatDuration(d.thisWeekSeconds))} <small>${esc(formatDuration(d.lastWeekSeconds))}</small></span>
+       </div>`).join('') +
+      `<div class="weekly-legend"><span class="now"></span>${esc(t('This week'))} <span class="before"></span>${esc(t('Last week'))}</div>`;
+    document.getElementById('weekly-apps').innerHTML = data.apps.length
+      ? `<table><thead><tr><th>${esc(t('App'))}</th><th>${esc(t('This week'))}</th><th>${esc(t('Last week'))}</th><th>${esc(t('Change'))}</th></tr></thead><tbody>` +
+        data.apps.map(a => {
+          const pct = a.lastWeekSeconds > 0 ? Math.round((a.thisWeekSeconds - a.lastWeekSeconds) * 100 / a.lastWeekSeconds) : null;
+          return `<tr><td>${esc(a.app)}</td><td>${esc(formatDuration(a.thisWeekSeconds))}</td><td>${esc(formatDuration(a.lastWeekSeconds))}</td><td>${pct == null ? esc(t('new')) : (pct > 0 ? '+' : '') + pct + '%'}</td></tr>`;
+        }).join('') + '</tbody></table>'
+      : `<p>${esc(t('No tracked usage in this period.'))}</p>`;
   } catch (e) { log(e); }
 }
 

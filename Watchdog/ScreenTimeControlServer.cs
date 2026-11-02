@@ -87,7 +87,8 @@ internal sealed class ScreenTimeControlServer : IDisposable
                 try
                 {
                     var ticket = _approvals.Create(callerSid, new ScreenTimeChange(request.UserSid,
-                        request.DailyMinutes, request.BonusMinutes, request.Enabled), now);
+                        request.DailyMinutes, request.BonusMinutes, request.Enabled, request.WeekendMinutes,
+                        request.BedtimeStart, request.BedtimeEnd, request.WeekendBedtimeStart, request.LockMinutes), now);
                     return ScreenTimeReply.Success(new { ticketId = ticket, canApproveDirectly = elevated });
                 }
                 catch (InvalidOperationException ex) { return ScreenTimeReply.Failure(ex.Message); }
@@ -96,7 +97,9 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     return ScreenTimeReply.Failure("This change needs Windows administrator authorization and a valid request.");
                 var saved = _handle(new ScreenTimeRequest {
                     Command = "save", UserSid = change!.UserSid, DailyMinutes = change.DailyMinutes,
-                    BonusMinutes = change.BonusMinutes, Enabled = change.Enabled
+                    BonusMinutes = change.BonusMinutes, Enabled = change.Enabled, WeekendMinutes = change.WeekendMinutes,
+                    BedtimeStart = change.BedtimeStart, BedtimeEnd = change.BedtimeEnd, WeekendBedtimeStart = change.WeekendBedtimeStart,
+                    LockMinutes = change.LockMinutes
                 });
                 _approvals.Complete(request.TicketId, saved);
                 if (saved.Ok)

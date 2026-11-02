@@ -8,6 +8,15 @@ public sealed class ScreenTimePolicy
     public string UserSid { get; set; } = "";
     public string DisplayName { get; set; } = "";
     public int DailyMinutes { get; set; } = 180;
+    /// <summary>Saturday and Sunday allowance; 0 means the same as every other day.</summary>
+    public int WeekendMinutes { get; set; }
+    /// <summary>Bedtime: the account is signed out from BedtimeStart until BedtimeEnd ("HH:mm"; empty = no bedtime).</summary>
+    public string BedtimeStart { get; set; } = "";
+    public string BedtimeEnd { get; set; } = "";
+    /// <summary>Optional later bedtime for nights before a day off (Friday and Saturday nights); empty = same as BedtimeStart.</summary>
+    public string WeekendBedtimeStart { get; set; } = "";
+    /// <summary>A parent's "lock now": the account is kept at the lock screen until this moment.</summary>
+    public DateTimeOffset? LockUntilUtc { get; set; }
     public bool Enabled { get; set; } = true;
     public string BonusDay { get; set; } = "";
     public int BonusMinutes { get; set; }
@@ -15,7 +24,7 @@ public sealed class ScreenTimePolicy
     {
         if (!Guid.TryParseExact(ProfileId, "N", out _) || !UserSid.StartsWith("S-1-5-21-", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(DisplayName) || DisplayName.Length > 100
-            || DailyMinutes is < 1 or > 1440 || BonusMinutes is < 0 or > 1440)
+            || DailyMinutes is < 1 or > 1440 || WeekendMinutes is < 0 or > 1440 || !ScreenTimeRules.ValidBedtime(this) || BonusMinutes is < 0 or > 1440)
             throw new InvalidDataException("Invalid screen-time policy.");
     }
 }
@@ -28,12 +37,70 @@ public sealed class ScreenTimeUsage
 
 public static class ScreenTimeRules
 {
+    public static bool TryClock(string? text, out TimeSpan time)
+    {
+        time = default;
+        if (string.IsNullOrEmpty(text) || text.Length != 5 || text[2] != ':'
+            || !int.TryParse(text.AsSpan(0, 2), out var h) || !int.TryParse(text.AsSpan(3, 2), out var m)
+            || h is < 0 or > 23 || m is < 0 or > 59) return false;
+        time = new TimeSpan(h, m, 0);
+        return true;
+    }
+
+    public static bool ValidBedtime(ScreenTimePolicy p)
+    {
+        var any = !string.IsNullOrEmpty(p.BedtimeStart) || !string.IsNullOrEmpty(p.BedtimeEnd) || !string.IsNullOrEmpty(p.WeekendBedtimeStart);
+        if (!any) return true;
+        if (!TryClock(p.BedtimeStart, out var s) || !TryClock(p.BedtimeEnd, out var e) || s == e) return false;
+        return string.IsNullOrEmpty(p.WeekendBedtimeStart) || (TryClock(p.WeekendBedtimeStart, out var w) && w != e);
+    }
+
+    // The night that starts on a Friday or Saturday may use the later weekend bedtime.
+    private static TimeSpan? BedtimeStartFor(ScreenTimePolicy p, DayOfWeek nightStartsOn)
+    {
+        if (!TryClock(p.BedtimeStart, out var normal)) return null;
+        if (nightStartsOn is DayOfWeek.Friday or DayOfWeek.Saturday && TryClock(p.WeekendBedtimeStart, out var weekend)) return weekend;
+        return normal;
+    }
+
+    public static bool InBedtime(ScreenTimePolicy p, DateTime now)
+    {
+        if (!TryClock(p.BedtimeEnd, out var end)) return false;
+        var t = now.TimeOfDay;
+        if (BedtimeStartFor(p, now.DayOfWeek) is { } today)
+        {
+            if (today > end) { if (t >= today) return true; }
+            else if (t >= today && t < end) return true;
+        }
+        // A night that began yesterday and runs past midnight.
+        return BedtimeStartFor(p, now.AddDays(-1).DayOfWeek) is { } yesterday && yesterday > end && t < end;
+    }
+
+    /// <summary>Whole minutes until today's bedtime starts, or null when there is none ahead today.</summary>
+    public static int? MinutesUntilBedtime(ScreenTimePolicy p, DateTime now)
+    {
+        if (InBedtime(p, now) || BedtimeStartFor(p, now.DayOfWeek) is not { } start) return null;
+        var left = start - now.TimeOfDay;
+        return left > TimeSpan.Zero ? (int)Math.Ceiling(left.TotalMinutes) : null;
+    }
+
+    public const int MaxLockMinutes = 720;
+
+    public static bool IsLocked(ScreenTimePolicy policy, DateTimeOffset now) => policy.LockUntilUtc is { } until && until > now;
+
+    /// <summary>0 leaves the lock alone, a negative value unlocks, a positive value locks for that many minutes.</summary>
+    public static DateTimeOffset? ApplyLock(DateTimeOffset? current, int lockMinutes, DateTimeOffset now) =>
+        lockMinutes < 0 ? null : lockMinutes == 0 ? current : now.AddMinutes(Math.Min(lockMinutes, MaxLockMinutes));
+
+    public static int LimitFor(ScreenTimePolicy policy, DateOnly day) =>
+        day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday && policy.WeekendMinutes > 0 ? policy.WeekendMinutes : policy.DailyMinutes;
+
     public static long Remaining(ScreenTimePolicy policy, ScreenTimeUsage usage, DateOnly today)
     {
         policy.Validate();
         var day = today.ToString("yyyy-MM-dd");
         var bonus = policy.BonusDay == day ? policy.BonusMinutes : 0;
-        return Math.Max(0, (policy.DailyMinutes + bonus) * 60L - (long)Math.Ceiling(usage.Seconds));
+        return Math.Max(0, (LimitFor(policy, today) + bonus) * 60L - (long)Math.Ceiling(usage.Seconds));
     }
 
     // A clock rollback must not grant another allowance. A later calendar day resets once.

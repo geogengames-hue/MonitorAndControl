@@ -13,6 +13,13 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Remote PIN is stored hashed, verified, and survives restarts", TestRemotePinVerifyAndStorage),
     ("Remote PIN locks out guessing, with doubling lockouts", TestRemotePinLockout),
     ("Remote PIN rejects weak values", TestRemotePinRules),
+    ("Weekend limit applies on Saturday and Sunday only", TestWeekendLimit),
+    ("Parent lock sets, extends, clears and expires", TestParentLock),
+    ("Weekly report compares this week with last week", TestWeeklyReport),
+    ("Bedtime signs out overnight and honours the weekend bedtime", TestBedtime),
+    ("Time requests are de-duplicated, expire and resolve", TestTimeRequests),
+    ("Limits guard restores outside edits but accepts its own", TestLimitsGuard),
+    ("Repeated closes alert once at the threshold", TestRepeatedCloseDetector),
     ("Remote PIN lockouts are counted and the PIN folder check fails closed", TestRemotePinLockoutCounterAndFolderCheck),
     ("Hotkey registered flag clears on unregister", TestHotKeyRegisteredFlagClears),
     ("Screen time remote route needs an admin login and same origin", TestScreenTimeRemoteRouteBoundary),
@@ -987,4 +994,194 @@ static async Task TestScreenTimeHttpBoundary()
         AssertTrue(large.StatusCode == System.Net.HttpStatusCode.BadRequest, "Oversized body must be refused before service access.");
     }
     finally { await app.StopAsync(); }
+}
+
+static Task TestWeekendLimit()
+{
+    var policy = new MonitorAndControl.ScreenTime.ScreenTimePolicy
+    {
+        UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "kid", DailyMinutes = 60, WeekendMinutes = 120
+    };
+    var saturday = new DateOnly(2026, 11, 7);
+    var monday = new DateOnly(2026, 11, 9);
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.LimitFor(policy, saturday) == 120, "Saturday uses the weekend minutes.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.LimitFor(policy, saturday.AddDays(1)) == 120, "Sunday uses the weekend minutes.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.LimitFor(policy, monday) == 60, "A weekday uses the daily minutes.");
+    policy.WeekendMinutes = 0;
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.LimitFor(policy, saturday) == 60, "Zero weekend minutes means the same limit every day.");
+    var usage = new MonitorAndControl.ScreenTime.ScreenTimeUsage { Day = "2026-11-07", Seconds = 600 };
+    policy.WeekendMinutes = 120;
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.Remaining(policy, usage, saturday) == 120 * 60 - 600, "Remaining uses the weekend limit.");
+    policy.WeekendMinutes = 2000;
+    var refused = false;
+    try { policy.Validate(); } catch (InvalidDataException) { refused = true; }
+    AssertTrue(refused, "An out-of-range weekend limit is rejected.");
+    return Task.CompletedTask;
+}
+
+static Task TestRepeatedCloseDetector()
+{
+    var now = new DateTimeOffset(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+    var window = TimeSpan.FromMinutes(30);
+    var history = new List<DateTimeOffset> { now.AddMinutes(-90), now.AddMinutes(-20), now.AddMinutes(-10) };
+    AssertTrue(MonitorAndControl.Services.RepeatedCloseDetector.CountWithin(history, now, window) == 2, "Only restarts inside the window count.");
+    AssertFalse(MonitorAndControl.Services.RepeatedCloseDetector.IsFirstAtThreshold(history, now, window, 3), "Two recent closes do not reach three.");
+    history.Add(now);
+    AssertTrue(MonitorAndControl.Services.RepeatedCloseDetector.IsFirstAtThreshold(history, now, window, 3), "The third close inside the window alerts.");
+    history.Add(now.AddMinutes(1));
+    AssertFalse(MonitorAndControl.Services.RepeatedCloseDetector.IsFirstAtThreshold(history, now.AddMinutes(1), window, 3), "The fourth close does not alert again.");
+    var round = MonitorAndControl.Services.RepeatedCloseDetector.Parse(MonitorAndControl.Services.RepeatedCloseDetector.Serialize(history, now.AddMinutes(1)));
+    AssertTrue(round.Count == 5, "History survives a save and load.");
+    AssertTrue(MonitorAndControl.Services.RepeatedCloseDetector.Parse("garbage;;").Count == 0, "Corrupt history is ignored.");
+    return Task.CompletedTask;
+}
+
+static async Task TestLimitsGuard()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Guard-Test-" + Guid.NewGuid().ToString("N"));
+    var path = Path.Combine(dir, "monitor.db");
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(path);
+        await db.SaveLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "Game", DailyMaxMinutes = 60, Enabled = true });
+        AssertTrue(await db.CheckLimitsIntegrityAsync() == null, "The first check only records a baseline.");
+
+        await db.SaveLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "Game", DailyMaxMinutes = 90, Enabled = true });
+        AssertTrue(await db.CheckLimitsIntegrityAsync() == null, "An edit made through the app is accepted.");
+
+        // Another connection (the child using a database tool) lifts the limit.
+        using (var outside = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + path))
+        {
+            outside.Open();
+            using var cmd = outside.CreateCommand();
+            cmd.CommandText = "UPDATE AppLimits SET DailyMaxMinutes = 1440, Enabled = 0";
+            cmd.ExecuteNonQuery();
+        }
+        var problem = await db.CheckLimitsIntegrityAsync();
+        AssertTrue(problem != null && problem.Contains("restored"), "An outside edit is reported.");
+        var rules = await db.GetLimitRulesAsync();
+        AssertTrue(rules.Count == 1 && rules[0].DailyMaxMinutes == 90 && rules[0].Enabled, "The original limit was put back.");
+        AssertTrue(await db.CheckLimitsIntegrityAsync() == null, "After restoring, the guard is quiet again.");
+
+        // Writes to unrelated tables by another connection are not a limits change.
+        using (var outside = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + path))
+        {
+            outside.Open();
+            using var cmd = outside.CreateCommand();
+            cmd.CommandText = "INSERT INTO Settings (Key, Value) VALUES ('x', 'y') ON CONFLICT(Key) DO UPDATE SET Value='y'";
+            cmd.ExecuteNonQuery();
+        }
+        AssertTrue(await db.CheckLimitsIntegrityAsync() == null, "An outside write that leaves limits alone is not flagged.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static Task TestBedtime()
+{
+    var p = new MonitorAndControl.ScreenTime.ScreenTimePolicy
+    {
+        UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "kid", BedtimeStart = "21:00", BedtimeEnd = "07:00", WeekendBedtimeStart = "23:00"
+    };
+    p.Validate();
+    // 2026-11-09 is a Monday.
+    bool In(string day, int h, int m) => MonitorAndControl.ScreenTime.ScreenTimeRules.InBedtime(p, DateTime.Parse(day + $" {h:00}:{m:00}"));
+    AssertFalse(In("2026-11-09", 12, 0), "Midday on a school day is allowed.");
+    AssertTrue(In("2026-11-09", 21, 0), "Bedtime starts on the minute.");
+    AssertTrue(In("2026-11-09", 23, 59), "Late evening is bedtime.");
+    AssertTrue(In("2026-11-10", 6, 59), "The early morning after is still bedtime.");
+    AssertFalse(In("2026-11-10", 7, 0), "Wake-up time ends bedtime.");
+    // Friday 2026-11-13: the night uses the 23:00 weekend bedtime; Saturday morning runs to 07:00.
+    AssertFalse(In("2026-11-13", 22, 0), "Friday 22:00 is before the weekend bedtime.");
+    AssertTrue(In("2026-11-13", 23, 0), "Friday 23:00 is the weekend bedtime.");
+    AssertTrue(In("2026-11-14", 6, 0), "Saturday early morning is still the Friday night.");
+    AssertFalse(In("2026-11-14", 22, 0), "Saturday 22:00 is before the weekend bedtime.");
+    AssertTrue(In("2026-11-15", 21, 30), "Sunday night uses the normal 21:00 bedtime.");
+
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.MinutesUntilBedtime(p, DateTime.Parse("2026-11-09 20:51")) == 9, "Nine minutes before bedtime.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.MinutesUntilBedtime(p, DateTime.Parse("2026-11-09 22:00")) == null, "No countdown during bedtime.");
+
+    var bad = new MonitorAndControl.ScreenTime.ScreenTimePolicy { UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "kid", BedtimeStart = "21:00" };
+    var refused = false;
+    try { bad.Validate(); } catch (InvalidDataException) { refused = true; }
+    AssertTrue(refused, "A bedtime without a wake-up time is rejected.");
+    bad.BedtimeEnd = "25:00";
+    refused = false;
+    try { bad.Validate(); } catch (InvalidDataException) { refused = true; }
+    AssertTrue(refused, "An impossible clock time is rejected.");
+    var none = new MonitorAndControl.ScreenTime.ScreenTimePolicy { UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "kid" };
+    none.Validate();
+    AssertFalse(MonitorAndControl.ScreenTime.ScreenTimeRules.InBedtime(none, DateTime.Parse("2026-11-09 23:00")), "No bedtime configured means never bedtime.");
+    return Task.CompletedTask;
+}
+
+static Task TestTimeRequests()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "DeviceMon-Req-Test-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    var path = Path.Combine(directory, "time-requests.json");
+    try
+    {
+        var now = new DateTimeOffset(2026, 11, 9, 12, 0, 0, TimeSpan.Zero);
+        AssertTrue(MonitorAndControl.ScreenTime.TimeRequestStore.Add("S-1", "kid", now, path), "The first request is recorded.");
+        AssertFalse(MonitorAndControl.ScreenTime.TimeRequestStore.Add("S-1", "kid", now.AddMinutes(1), path), "A second request while one waits is ignored.");
+        AssertTrue(MonitorAndControl.ScreenTime.TimeRequestStore.Add("S-2", "sibling", now, path), "Other accounts have their own request.");
+        AssertTrue(MonitorAndControl.ScreenTime.TimeRequestStore.Pending(now.AddMinutes(5), path).Count == 2, "Both are waiting.");
+        AssertTrue(MonitorAndControl.ScreenTime.TimeRequestStore.Pending(now.AddHours(13), path).Count == 0, "Old requests expire.");
+        AssertTrue(MonitorAndControl.ScreenTime.TimeRequestStore.Resolve("S-1", path) == 1, "Approving closes the request.");
+        AssertTrue(MonitorAndControl.ScreenTime.TimeRequestStore.Pending(now.AddMinutes(5), path).Single().UserSid == "S-2", "Only the other account still waits.");
+        AssertTrue(MonitorAndControl.ScreenTime.TimeRequestStore.Add("S-1", "kid", now.AddMinutes(10), path), "After an answer the child may ask again.");
+        File.WriteAllText(path, "not json");
+        AssertTrue(MonitorAndControl.ScreenTime.TimeRequestStore.Pending(now, path).Count == 0, "A corrupt file is treated as empty.");
+    }
+    finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    return Task.CompletedTask;
+}
+
+static Task TestWeeklyReport()
+{
+    var end = new DateTime(2026, 11, 15);
+    MonitorAndControl.Models.AppUsageRecord Rec(string app, DateTime day, long seconds) =>
+        new() { AppName = app, Date = day, TotalSeconds = seconds };
+    var records = new List<MonitorAndControl.Models.AppUsageRecord>
+    {
+        Rec("Game", end, 3600), Rec("Game", end.AddDays(-1), 1800), Rec("Video", end.AddDays(-2), 600),
+        Rec("Game", end.AddDays(-7), 1800), Rec("Game", end.AddDays(-8), 1800), Rec("Chat", end.AddDays(-9), 600),
+        Rec("Old", end.AddDays(-20), 9999), Rec("Future", end.AddDays(1), 9999)
+    };
+    var report = MonitorAndControl.Services.WeeklyReport.Build(records, end);
+    AssertTrue(report.From == "2026-11-09" && report.To == "2026-11-15", "This week is the 7 days ending today.");
+    AssertTrue(report.PreviousFrom == "2026-11-02" && report.PreviousTo == "2026-11-08", "Last week is the 7 days before that.");
+    AssertTrue(report.ThisWeekSeconds == 6000 && report.LastWeekSeconds == 4200, "Totals ignore anything outside the two weeks.");
+    AssertTrue(report.ChangePercent == 43, "The change is rounded to whole percent.");
+    AssertTrue(report.Days.Count == 7 && report.Days[6].ThisWeekSeconds == 3600 && report.Days[6].LastWeekSeconds == 1800, "Each day is lined up with the same day a week earlier.");
+    AssertTrue(report.Apps[0].App == "Game" && report.Apps[0].ThisWeekSeconds == 5400 && report.Apps[0].LastWeekSeconds == 3600, "Apps are ranked by this week's use.");
+    AssertTrue(report.Apps.Any(a => a.App == "Chat" && a.ThisWeekSeconds == 0), "An app used only last week still appears.");
+    AssertFalse(report.Apps.Any(a => a.App is "Old" or "Future"), "Out-of-range records are ignored.");
+    AssertTrue(MonitorAndControl.Services.WeeklyReport.Build(new List<MonitorAndControl.Models.AppUsageRecord>(), end).ChangePercent == null, "No usage last week means no percentage.");
+    AssertTrue(MonitorAndControl.Services.WeeklyReport.ToText(report).Contains("Game: 1h 30m vs 1h 0m (+50%)"), "The email text lists the app change.");
+    return Task.CompletedTask;
+}
+
+static Task TestParentLock()
+{
+    var now = new DateTimeOffset(2026, 11, 9, 16, 0, 0, TimeSpan.Zero);
+    var policy = new MonitorAndControl.ScreenTime.ScreenTimePolicy { UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "kid" };
+    AssertFalse(MonitorAndControl.ScreenTime.ScreenTimeRules.IsLocked(policy, now), "A new rule is not locked.");
+
+    policy.LockUntilUtc = MonitorAndControl.ScreenTime.ScreenTimeRules.ApplyLock(policy.LockUntilUtc, 30, now);
+    AssertTrue(policy.LockUntilUtc == now.AddMinutes(30), "Locking sets the end time.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.IsLocked(policy, now.AddMinutes(29)), "The account stays locked until the end time.");
+    AssertFalse(MonitorAndControl.ScreenTime.ScreenTimeRules.IsLocked(policy, now.AddMinutes(30)), "The lock ends on time.");
+
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.ApplyLock(policy.LockUntilUtc, 0, now.AddMinutes(5)) == now.AddMinutes(30), "A normal save leaves the lock alone.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.ApplyLock(policy.LockUntilUtc, -1, now.AddMinutes(5)) == null, "Unlock clears it.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeRules.ApplyLock(null, 99999, now) == now.AddMinutes(720), "A lock is capped at 12 hours.");
+    var json = System.Text.Json.JsonSerializer.Serialize(policy);
+    AssertTrue(System.Text.Json.JsonSerializer.Deserialize<MonitorAndControl.ScreenTime.ScreenTimePolicy>(json)!.LockUntilUtc == policy.LockUntilUtc, "The lock survives a save and load.");
+    AssertTrue(System.Text.Json.JsonSerializer.Deserialize<MonitorAndControl.ScreenTime.ScreenTimePolicy>("{\"UserSid\":\"S-1-5-21-1-2-3-1001\",\"DisplayName\":\"kid\"}")!.LockUntilUtc == null, "Older rule files load as unlocked.");
+    return Task.CompletedTask;
 }
