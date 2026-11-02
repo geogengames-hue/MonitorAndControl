@@ -15,6 +15,13 @@ public sealed class ScreenTimeRequest
     public string WeekendBedtimeStart { get; set; } = "";
     /// <summary>0 = leave the lock alone, negative = unlock now, positive = lock for that many minutes.</summary>
     public int LockMinutes { get; set; }
+    /// <summary>"limits-open" or "limits-clear": approved changes to the sealed app limits (no account needed).</summary>
+    public string Operation { get; set; } = "";
+    public int LimitsMinutes { get; set; }
+    /// <summary>Content for the "limits-seal" command (a SealedLimits document).</summary>
+    public string LimitsJson { get; set; } = "";
+    /// <summary>For "set-blocked-sites": the websites to block in browsers right now.</summary>
+    public List<string> BlockedHosts { get; set; } = new();
     public bool Enabled { get; set; }
     public string TicketId { get; set; } = "";
     /// <summary>Remote PIN for "remote-save". Never logged and never stored in the request history.</summary>

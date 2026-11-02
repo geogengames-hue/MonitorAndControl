@@ -12,9 +12,9 @@
     <Product>UpdateAgent</Product>
     <Description>Self-update helper for DeviceMon</Description>
     <AssemblyTitle>UpdateAgent</AssemblyTitle>
-    <Version>1.7.2</Version>
-    <AssemblyVersion>1.7.2.0</AssemblyVersion>
-    <FileVersion>1.7.2.0</FileVersion>
+    <Version>1.8.0</Version>
+    <AssemblyVersion>1.8.0.0</AssemblyVersion>
+    <FileVersion>1.8.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

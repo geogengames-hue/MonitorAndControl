@@ -51,7 +51,7 @@ public static class DiagnosticsService
                 lastFinished = update.Finished,
                 lastMessage = update.Message,
                 // A protected install can only update through the SYSTEM service.
-                dashboardUpdateAvailable = !protectedInstall || channel == "system"
+                canUpdateFromDashboard = !protectedInstall || channel == "system"
             },
             screenTime = ReadScreenTime(),
             data = new

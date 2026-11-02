@@ -313,13 +313,35 @@ Hover over almost any control in the dashboard for a short explanation. On touch
 
 When tamper alerts are on, you get a normal alert each time the GameHost watchdog has to restart DeviceMon, plus a second **repeated close** alert when it happens 3 times within 30 minutes (once per burst). The summary email (**Settings → Summary**: daily, weekly or monthly, with day and time) now also lists how many times DeviceMon was restarted and each PC Time account's latest usage.
 
+### Website time (no browser extension)
+
+DeviceMon can show how long each website was open in the browser being used. It reads the address bar of the foreground **Chrome, Edge, Brave, Opera, Vivaldi or Firefox** window through Windows UI Automation, so nothing is installed in the browser.
+
+- **Only the site name is stored** (for example `youtube.com`), never the page, search text or title. Time counts only while the browser is in front and the user is active (same idle and lock rules as apps). Private/Incognito/InPrivate windows are counted as one anonymous entry, `(private window)`; anything that cannot be read is `(unknown site)`.
+- See it under **History > Top Websites** and in the summary email. Turn it off with **Settings > Track time on websites** (existing data stays until you clear history).
+- **Limits of this approach:** it reports what the address bar shows, so it can miss a site while the user is typing in the address bar, and a browser update that changes its address-bar control can break it (Firefox is best effort). It cannot see sites in apps that embed a browser, or block sites; it only measures time. Local network names without a dot (for example `router`) show as `(unknown site)`.
+
+### Website limits and blocking
+
+On the **Limits** page, under **Website Limits**, block a site completely (enter **0** minutes) or give it a **daily allowance** (for example `youtube.com`, 30 minutes). Subdomains such as `m.youtube.com` are included. When a site is blocked, **Chrome, Edge, Brave and Firefox show their own "blocked by your administrator" page**, also in private windows. A site with an allowance is unblocked again at midnight.
+
+- **How it works:** DeviceMon tells the GameHost service every 30 seconds which sites are blocked, and the service writes them into the browsers Windows policy (`URLBlocklist`, and `WebsiteFilter` for Firefox). Only an administrator can change those keys, so the child cannot remove a block. Entries that were already in a browsers policy are left alone, and only the ones DeviceMon added are removed. Needs the GameHost service.
+- **Protect limits includes website rules:** once you seal the limits, sites you block outright (0 minutes) stay blocked from the sealed copy, even if DeviceMon is closed or its database edited.
+- **Limits:** other browsers (Opera, Vivaldi, portable or unusual ones) are not covered, a child who is an administrator can undo policies, and time allowances depend on the website-time tracking being on. A browser may need a minute to pick up a change, and a page already open can keep working until it is reloaded.
+
 ### Weekly trend report
 
 The **History** page has a **This week vs last week** panel: bars per day for the last 7 days against the same days a week earlier, plus the top apps with their change. The summary email ends with the same comparison.
 
-### Limits tamper guard
+### Protecting the app limits
 
-While DeviceMon is running it checks every 10 seconds whether the app limits or allowed-hours schedule in `monitor.db` were changed by another program (for example a database tool used by the child). If so, the previous values are **restored automatically**, the event is logged, and you get a tamper alert if tamper alerts are on. Changes made through the dashboard are never flagged. **Limits of this guard:** it protects the app limits and schedule only (not groups or PC Time, which the service already protects), and it works only while DeviceMon runs; if the child closes DeviceMon first, the watchdog restart alert is what tells you.
+Two layers keep the child from lifting limits by editing `monitor.db`:
+
+- **Always on (guard):** while DeviceMon runs it checks every 10 seconds whether the app limits or allowed-hours schedule were changed by another program. If so, the previous values are restored, logged, and you get a tamper alert if those are on. Changes made through the dashboard are never flagged. This cannot help if the child closes DeviceMon first.
+- **Protect limits (sealed copy):** under **PC Time > Protect limits**, press **Protect limits** and approve it (Windows prompt on the PC, remote PIN from another device). The SYSTEM service then keeps a copy of your app limits, schedule and shared groups that the child cannot change. From then on DeviceMon puts them back if the database ever differs from the copy, **even after being closed and restarted**, and alerts you (even when general tamper alerts are off).
+  - To change limits on purpose: press **Edit limits (10 min)**, approve it, make your changes on the Limits, Schedule and groups pages, then press **Finish editing** (or wait; DeviceMon seals the new limits when the window ends). If nobody finishes, the old copy is restored.
+  - While protected, the Limits and Schedule pages show a notice. Importing a config also needs an editing window. **Remove protection** turns it off (needs approval).
+  - Limits of this: the copy covers app limits, schedule and groups (PC Time rules are already service-protected). A child who is already an administrator can still remove it.
 
 ### PC Time (per-account screen time)
 

@@ -44,6 +44,14 @@
         <button type="button" id="screen-lock" title="Lock the selected account now for the number of minutes shown." class="btn-secondary">Lock now</button>
         <button type="button" id="screen-unlock" title="End the lock early so the account can be used again." class="btn-secondary hidden">Unlock now</button>
       </div>
+      <div id="screen-limits-panel" class="screen-notice screen-lock" title="Protect the app limits, schedule and groups so they can only be changed after you approve it (Windows prompt on the PC, remote PIN from another device).">
+        <strong>Protect limits</strong>
+        <span id="screen-limits-status"></span>
+        <button type="button" id="screen-limits-protect" title="Seal the current app limits, schedule and groups. Needs your approval." class="btn-secondary hidden">Protect limits</button>
+        <button type="button" id="screen-limits-edit" title="Allow changes to the app limits for 10 minutes. Needs your approval." class="btn-secondary hidden">Edit limits (10 min)</button>
+        <button type="button" id="screen-limits-finish" title="Close the editing window now and seal the new limits." class="btn-secondary hidden">Finish editing</button>
+        <button type="button" id="screen-limits-remove" title="Turn the protection off. Needs your approval." class="btn-secondary hidden">Remove protection</button>
+      </div>
       <div id="screen-requests" class="screen-notice hidden" role="status" title="The child asked for more PC time. Approve to fill in the extra minutes, then save."></div>
       <div class="history-stats screen-stats">
         <div class="stat-card"><div class="label">Selected account</div><div class="value" id="screen-account-name">-</div><div class="sub">Administrators are never controlled</div></div>
@@ -196,6 +204,10 @@
           <div id="history-day-detail"></div>
         </div>
       </div>
+      <div class="history-panel" id="history-sites-panel">
+        <h3 title="Time spent on websites in the foreground of a browser, for the selected date range.">Top Websites</h3>
+        <div id="history-sites"></div>
+      </div>
       <div class="history-panel weekly-report" id="weekly-report">
         <h3 title="The last 7 days compared with the 7 days before them.">This week vs last week</h3>
         <div id="weekly-summary" class="weekly-summary"></div>
@@ -209,6 +221,7 @@
     </div>
     <div id="view-limits" class="view">
       <h2>App Limits</h2>
+      <div id="limits-protect-banner" class="screen-notice hidden" role="status"></div>
       <p style="font-size:13px;color:#888">Background and overlay settings apply per process and save immediately, even when no daily limit is set.</p>
       <h3 title="All apps in a group share one daily time pool. Apps running together count once.">Shared Limit Groups</h3>
       <p style="font-size:13px;color:#888">All apps in a group share one daily time pool. Simultaneous apps count only once.</p>
@@ -232,6 +245,16 @@
         <button id="limit-save" title="Save this limit.">Save</button>
         <button id="limit-cancel" title="Stop editing and discard the changes." class="btn-secondary hidden">Cancel</button>
       </div>
+      <h3 class="individual-limits-title" title="Block websites or limit the time per day. Chrome, Edge, Brave and Firefox then show a &quot;blocked by your administrator&quot; page.">Website Limits</h3>
+      <p style="font-size:13px;color:#888">Block a site completely or give it a daily time allowance. When a site is blocked, Chrome, Edge, Brave and Firefox show a "blocked by your administrator" page, also in private windows. Needs the GameHost service. Other browsers are not covered.</p>
+      <div class="table-container" id="site-limits-table"></div>
+      <div class="add-form">
+        <h3>Add / Edit Website Limit</h3>
+        <input type="text" id="site-host" title="The site to limit, for example youtube.com. Its subdomains (m.youtube.com, music.youtube.com) are included." placeholder="Site (e.g. youtube.com)" autocomplete="off">
+        <input type="number" id="site-minutes" title="Minutes per day allowed on this site. Enter 0 to block it completely." placeholder="Minutes per day (0 = block)" min="0" max="1440" value="0">
+        <button id="site-save" title="Save this website limit.">Save</button>
+        <p id="site-message" class="screen-error hidden" role="status"></p>
+      </div>
     </div>
     <div id="view-discover" class="view">
       <h2>Discover Apps &amp; Games</h2>
@@ -243,6 +266,7 @@
     </div>
     <div id="view-schedule" class="view">
       <h2>Allowed Hours Schedule</h2>
+      <div id="schedule-protect-banner" class="screen-notice hidden" role="status"></div>
       <div class="table-container" id="schedule-table"></div>
       <div class="add-form">
         <h3>Add Allowed Hours Rule</h3>
@@ -382,6 +406,10 @@
         <label title="Warn you by email or webhook about tampering, such as deleted data, a changed clock or the app being closed." style="display:flex;align-items:center;gap:8px;margin-top:10px">
           <input type="checkbox" id="set-tamper-alerts" style="width:auto"> Send tamper alerts by configured email and webhook
         </label>
+        <label title="Record how long each website is open in the browser you are using. Only the site name is stored, never pages, searches or titles." style="display:flex;align-items:center;gap:8px;margin-top:10px">
+          <input type="checkbox" id="set-track-websites" style="width:auto"> Track time on websites in Chrome, Edge, Firefox and other browsers
+        </label>
+        <p style="font-size:12px;color:#888">Only the site name (for example youtube.com) is stored, never the page, search text or title. Private windows are counted as one anonymous entry. No browser extension is needed.</p>
         <p style="font-size:12px;color:#888">Alerts cover database/config deletion, major clock changes, watchdog failure or recovery (including DeviceMon being forcibly closed), and repeated dashboard login failures.</p>
         <hr>
         <h3>Backup &amp; Restore</h3>
@@ -445,6 +473,7 @@
 
 <script src="dashboard.js"></script>
 <script src="screen-time.js"></script>
+<script src="sites.js"></script>
 <script src="help.js"></script>
 </body>
 </html>

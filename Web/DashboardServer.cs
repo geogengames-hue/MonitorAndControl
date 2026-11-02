@@ -280,6 +280,61 @@ public class DashboardServer
             return Results.Json(await db.GetUsageRangeAsync(startDate, endDate), JsonOpts);
         });
 
+        // Website limits: blocked outright (0 minutes) or a daily allowance. The SYSTEM service turns them into browser policy.
+        app.MapGet("/api/site-limits", async () =>
+        {
+            var rules = await db.GetSiteLimitsAsync();
+            var usage = rules.Count == 0 ? new List<SiteUsageRecord>() : await db.GetSiteUsageRangeAsync(DateTime.Today, DateTime.Today);
+            return Results.Json(SiteLimitLogic.Evaluate(rules, usage), JsonOpts);
+        });
+
+        app.MapPost("/api/site-limits", async (HttpContext ctx, SiteLimit limit) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            if (!MonitorAndControl.ScreenTime.SiteBlocking.TryNormalizeHost(limit.Host, out var host))
+                return Results.BadRequest(new { error = "Enter a site name such as youtube.com." });
+            if (limit.DailyMaxMinutes is < 0 or > 1440)
+                return Results.BadRequest(new { error = "Minutes per day must be between 0 (block) and 1440." });
+            var existing = await db.GetSiteLimitsAsync();
+            if (existing.Count >= MonitorAndControl.ScreenTime.SiteBlocking.MaxHosts && !existing.Any(r => r.Host == host))
+                return Results.BadRequest(new { error = "Too many website rules." });
+            limit.Host = host;
+            await db.SaveSiteLimitAsync(limit);
+            return Results.Ok();
+        });
+
+        app.MapDelete("/api/site-limits/{host}", async (HttpContext ctx, string host) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            if (!MonitorAndControl.ScreenTime.SiteBlocking.TryNormalizeHost(host, out var clean))
+                return Results.BadRequest(new { error = "Invalid site name." });
+            await db.DeleteSiteLimitAsync(clean);
+            return Results.Ok();
+        });
+
+        // Foreground browser time per website (host names only), for the History page.
+        app.MapGet("/api/usage/sites/history", async (int days = 7, string? from = null, string? to = null) =>
+        {
+            DateTime startDate, endDate;
+            if (!string.IsNullOrWhiteSpace(from) || !string.IsNullOrWhiteSpace(to))
+            {
+                if (!DateTime.TryParse(from, out startDate) || !DateTime.TryParse(to, out endDate))
+                    return Results.BadRequest(new { error = "Invalid date range." });
+                startDate = startDate.Date;
+                endDate = endDate.Date;
+            }
+            else
+            {
+                endDate = DateTime.Today;
+                startDate = endDate.AddDays(-Math.Clamp(days, 1, 366) + 1);
+            }
+            if (startDate > endDate || (endDate - startDate).TotalDays > 366)
+                return Results.BadRequest(new { error = "Invalid date range." });
+            return Results.Json(await db.GetSiteUsageRangeAsync(startDate, endDate), JsonOpts);
+        });
+
         // This week compared with last week, per day and per app (also used by the summary email).
         app.MapGet("/api/report/weekly", async (string? end = null) =>
         {
@@ -741,6 +796,7 @@ public class DashboardServer
             var summaryWeeklyDay = await db.GetSettingAsync("SummaryWeeklyDay", "0");
             var summaryMonthlyDay = await db.GetSettingAsync("SummaryMonthlyDay", "1");
             var tamperAlertsEnabled = await db.GetSettingAsync("TamperAlertsEnabled", "false");
+            var trackWebsites = await db.GetSettingAsync("TrackWebsites", "true");
             var config = Program.GetConfig();
             var (hotKeyModifiers, hotKeyKey) = await Program.GetDashboardHotKeySettings(config);
             var hostname = Environment.MachineName;
@@ -774,6 +830,7 @@ public class DashboardServer
                 summaryWeeklyDay = int.TryParse(summaryWeeklyDay, out var weeklyDay) ? weeklyDay : 0,
                 summaryMonthlyDay = int.TryParse(summaryMonthlyDay, out var monthlyDay) ? monthlyDay : 1,
                 tamperAlertsEnabled = tamperAlertsEnabled == "true",
+                trackWebsites = trackWebsites == "true",
                 hotKeyModifiers,
                 hotKeyKey,
                 hotKey = $"{hotKeyModifiers}+{hotKeyKey}",
@@ -907,6 +964,8 @@ public class DashboardServer
                 if (value is < 1 or > 31) return Results.BadRequest(new { error = "Invalid monthly summary day." });
                 await db.SetSettingAsync("SummaryMonthlyDay", value.ToString());
             }
+            if (root.TryGetProperty("trackWebsites", out var trackSites))
+                await db.SetSettingAsync("TrackWebsites", trackSites.GetBoolean() ? "true" : "false");
             if (root.TryGetProperty("tamperAlertsEnabled", out var tamperEnabled))
                 await db.SetSettingAsync("TamperAlertsEnabled", tamperEnabled.GetBoolean() ? "true" : "false");
             if (root.TryGetProperty("hotKeyModifiers", out var hkm) || root.TryGetProperty("hotKeyKey", out var hkk))
@@ -1571,6 +1630,7 @@ public class DashboardServer
         "SummaryWeeklyDay",
         "SummaryMonthlyDay",
         "TamperAlertsEnabled",
+        "TrackWebsites",
         "HotKeyModifiers",
         "HotKeyKey"
     };
@@ -1643,6 +1703,7 @@ public class DashboardServer
                 case "PauseTrackingWhenIdle":
                 case "SummaryEnabled":
                 case "TamperAlertsEnabled":
+                case "TrackWebsites":
                 case "EmailNotifyEnabled":
                 case "EmailBreachNotifyEnabled":
                 case "EmailKillNotifyEnabled":

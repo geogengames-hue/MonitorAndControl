@@ -77,6 +77,19 @@ public class UsageDatabase : IDisposable
                 IgnoreOverlayFocus INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS SiteLimits (
+                Host TEXT PRIMARY KEY,
+                DailyMaxMinutes INTEGER NOT NULL DEFAULT 0,
+                Enabled INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS SiteUsage (
+                Host TEXT NOT NULL,
+                Date TEXT NOT NULL,
+                Seconds INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (Host, Date)
+            );
+
             CREATE TABLE IF NOT EXISTS AppBonusTime (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 AppName TEXT NOT NULL,
@@ -195,6 +208,123 @@ public class UsageDatabase : IDisposable
         return await GetUsageRangeAsync(DateTime.Today, DateTime.Today);
     }
 
+    public async Task<List<SiteLimit>> GetSiteLimitsAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var list = new List<SiteLimit>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT Host, DailyMaxMinutes, Enabled FROM SiteLimits ORDER BY Host";
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new SiteLimit { Host = r.GetString(0), DailyMaxMinutes = r.GetInt32(1), Enabled = r.GetBoolean(2) });
+            return list;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task SaveSiteLimitAsync(SiteLimit limit)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO SiteLimits (Host, DailyMaxMinutes, Enabled) VALUES (@host, @max, @en)
+                ON CONFLICT(Host) DO UPDATE SET DailyMaxMinutes = @max, Enabled = @en;
+                """;
+            cmd.Parameters.AddWithValue("@host", limit.Host);
+            cmd.Parameters.AddWithValue("@max", limit.DailyMaxMinutes);
+            cmd.Parameters.AddWithValue("@en", limit.Enabled ? 1 : 0);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task DeleteSiteLimitAsync(string host)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM SiteLimits WHERE Host = @host";
+            cmd.Parameters.AddWithValue("@host", host);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task ReplaceSiteLimitsAsync(IEnumerable<SiteLimit> limits)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            using (var clear = _connection.CreateCommand())
+            {
+                clear.Transaction = tx;
+                clear.CommandText = "DELETE FROM SiteLimits";
+                await clear.ExecuteNonQueryAsync();
+            }
+            foreach (var limit in limits)
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = "INSERT OR REPLACE INTO SiteLimits (Host, DailyMaxMinutes, Enabled) VALUES (@host, @max, @en)";
+                cmd.Parameters.AddWithValue("@host", limit.Host);
+                cmd.Parameters.AddWithValue("@max", limit.DailyMaxMinutes);
+                cmd.Parameters.AddWithValue("@en", limit.Enabled ? 1 : 0);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task AddSiteUsageAsync(DateTime date, IReadOnlyDictionary<string, long> secondsByHost)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var tx = _connection.BeginTransaction();
+            foreach (var (host, seconds) in secondsByHost)
+            {
+                if (seconds <= 0 || string.IsNullOrWhiteSpace(host)) continue;
+                using var cmd = _connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO SiteUsage (Host, Date, Seconds) VALUES (@host, @date, @seconds)
+                    ON CONFLICT(Host, Date) DO UPDATE SET Seconds = Seconds + @seconds;
+                    """;
+                cmd.Parameters.AddWithValue("@host", host);
+                cmd.Parameters.AddWithValue("@date", date.ToString("yyyy-MM-dd"));
+                cmd.Parameters.AddWithValue("@seconds", seconds);
+                await cmd.ExecuteNonQueryAsync();
+            }
+            tx.Commit();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<List<SiteUsageRecord>> GetSiteUsageRangeAsync(DateTime from, DateTime to)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var list = new List<SiteUsageRecord>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT Host, Date, Seconds FROM SiteUsage WHERE Date >= @from AND Date <= @to ORDER BY Seconds DESC";
+            cmd.Parameters.AddWithValue("@from", from.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@to", to.ToString("yyyy-MM-dd"));
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add(new SiteUsageRecord { Host = r.GetString(0), Date = DateTime.Parse(r.GetString(1)), Seconds = r.GetInt64(2) });
+            return list;
+        }
+        finally { _lock.Release(); }
+    }
+
     public async Task<List<AppUsageRecord>> GetUsageRangeAsync(DateTime from, DateTime to)
     {
         await _lock.WaitAsync();
@@ -232,7 +362,7 @@ public class UsageDatabase : IDisposable
         try
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "DELETE FROM UsageRecords; DELETE FROM LimitGroupUsage; DELETE FROM LimitGroupUsageArchive";
+            cmd.CommandText = "DELETE FROM UsageRecords; DELETE FROM LimitGroupUsage; DELETE FROM LimitGroupUsageArchive; DELETE FROM SiteUsage";
             await cmd.ExecuteNonQueryAsync();
         }
         finally { _lock.Release(); }
@@ -598,6 +728,37 @@ public class UsageDatabase : IDisposable
         return $"The app limits or schedule in the database were changed outside DeviceMon " +
                $"(was {baseline.Limits.Count} limits and {baseline.Schedule.Count} schedule rules, " +
                $"found {limits.Count} and {schedule.Count}). The previous values were restored.";
+    }
+
+    // ---- Sealed limits ---------------------------------------------------------------------
+    public void ResetLimitsBaseline() { _limitsBaseline = null; _limitsDataVersion = -1; }
+
+    public async Task<MonitorAndControl.ScreenTime.SealedLimits> ReadLimitsSnapshotAsync()
+    {
+        var snapshot = new MonitorAndControl.ScreenTime.SealedLimits();
+        foreach (var l in await GetLimitRulesAsync())
+            snapshot.Limits.Add(new() { App = l.AppName, Minutes = l.DailyMaxMinutes, Enabled = l.Enabled });
+        foreach (var r in await GetScheduleRulesAsync())
+            snapshot.Schedule.Add(new() { App = r.AppName, Day = r.DayOfWeek, Start = r.StartTime, End = r.EndTime, Enabled = r.Enabled });
+        foreach (var w in await GetSiteLimitsAsync())
+            snapshot.Sites.Add(new() { Host = w.Host, Minutes = w.DailyMaxMinutes, Enabled = w.Enabled });
+        foreach (var g in await GetLimitGroupsAsync())
+            snapshot.Groups.Add(new() { Name = g.Name, Minutes = g.DailyMaxMinutes, Enabled = g.Enabled, Members = g.AppNames.ToList() });
+        return snapshot;
+    }
+
+    /// <summary>Puts limits, schedule and groups back exactly as sealed. Groups are matched by name so their usage history survives.</summary>
+    public async Task ApplyLimitsSnapshotAsync(MonitorAndControl.ScreenTime.SealedLimits snapshot)
+    {
+        await ReplaceLimitRulesAsync(snapshot.Limits.Select(l => new AppLimitRule { AppName = l.App, DailyMaxMinutes = l.Minutes, Enabled = l.Enabled }));
+        await ReplaceScheduleRulesAsync(snapshot.Schedule.Select(s => new ScheduleRule
+            { AppName = s.App, DayOfWeek = s.Day, StartTime = s.Start, EndTime = s.End, Enabled = s.Enabled }));
+        await ReplaceSiteLimitsAsync(snapshot.Sites.Select(w => new SiteLimit { Host = w.Host, DailyMaxMinutes = w.Minutes, Enabled = w.Enabled }));
+        var keep = new HashSet<string>(snapshot.Groups.Select(g => g.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var existing in await GetLimitGroupsAsync())
+            if (!keep.Contains(existing.Name)) await DeleteLimitGroupAsync(existing.Id);
+        foreach (var g in snapshot.Groups)
+            await SaveLimitGroupAsync(new AppLimitGroup { Name = g.Name, DailyMaxMinutes = g.Minutes, Enabled = g.Enabled, AppNames = g.Members.ToList() });
     }
 
     public async Task ReplaceLimitRulesAsync(IEnumerable<AppLimitRule> rules)

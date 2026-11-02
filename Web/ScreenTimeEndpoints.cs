@@ -96,6 +96,54 @@ public static class ScreenTimeEndpoints
             catch { return Results.Json(new { error = "Could not reach the service. No confirmation that the change was saved was received." }, statusCode: 503); }
         });
 
+        // Anyone may read whether the limits are sealed (the Limits page shows a notice); only the service changes it.
+        app.MapGet("/api/limits/protection", () =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var file = LimitsSealStore.Read();
+            var phase = LimitsSealStore.Phase(file, now);
+            return Results.Json(new
+            {
+                phase = phase.ToString().ToLowerInvariant(),
+                protectedLimits = phase is SealPhase.Enforce or SealPhase.Editing or SealPhase.SealNow && file?.Protected == true,
+                editOpenUntilUtc = phase == SealPhase.Editing ? file?.OpenUntilUtc : null
+            });
+        });
+
+        // Ends an approved editing window early so the new limits get sealed. It grants nothing, so no approval.
+        app.MapPost("/api/limits/finish-editing", async (HttpContext ctx) =>
+        {
+            if ((!TrustedLocalRequest(ctx) && isAdminAuthenticated?.Invoke(ctx) != true) || !SameOriginOrNone(ctx))
+                return Results.Json(new { error = "Sign in to the dashboard with the admin password first." }, statusCode: 403);
+            try
+            {
+                var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "limits-close" }, ctx.RequestAborted);
+                return reply.Ok ? Results.Json(reply.Data) : Results.Json(new { error = reply.Error }, statusCode: 400);
+            }
+            catch { return Results.Json(new { error = "The screen-time service is unavailable." }, statusCode: 503); }
+        });
+
+        // "Not now" on a child's request for more time: closes the request and tells the child. No approval
+        // is needed because it grants nothing; it still needs the PC itself or an admin login.
+        app.MapPost("/api/screen-time/dismiss-request", async (HttpContext ctx) =>
+        {
+            if ((!TrustedLocalRequest(ctx) && isAdminAuthenticated?.Invoke(ctx) != true) || !SameOriginOrNone(ctx))
+                return Results.Json(new { error = "Sign in to the dashboard with the admin password first." }, statusCode: 403);
+            try
+            {
+                var bytes = new byte[2049];
+                int size = 0, read;
+                while (size < bytes.Length && (read = await ctx.Request.Body.ReadAsync(bytes.AsMemory(size), ctx.RequestAborted)) > 0) size += read;
+                if (size > 2048) return Results.BadRequest(new { error = "Request too large." });
+                var request = JsonSerializer.Deserialize<ScreenTimeRequest>(bytes.AsSpan(0, size), ScreenTimeProtocol.Json);
+                if (request == null || string.IsNullOrWhiteSpace(request.UserSid)) return Results.BadRequest(new { error = "Select an account." });
+                var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "dismiss-request", UserSid = request.UserSid }, ctx.RequestAborted);
+                return reply.Ok ? Results.Json(reply.Data) : Results.Json(new { error = reply.Error }, statusCode: 400);
+            }
+            catch (JsonException) { return Results.BadRequest(new { error = "Invalid request." }); }
+            catch { return Results.Json(new { error = "The screen-time service is unavailable." }, statusCode: 503); }
+        });
+
         // Remote change: authorized by the dashboard admin login AND the remote PIN, which the service
         // verifies (with lockout). There is no Windows UAC prompt on this path, by necessity.
         app.MapPost("/api/screen-time/remote-policy", async (HttpContext ctx) =>

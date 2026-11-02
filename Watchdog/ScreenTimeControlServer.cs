@@ -46,7 +46,7 @@ internal sealed class ScreenTimeControlServer : IDisposable
                 await pipe.WaitForConnectionAsync(_stop.Token);
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
                 deadline.CancelAfter(TimeSpan.FromSeconds(5));
-                var request = await ScreenTimeProtocol.ReadAsync<ScreenTimeRequest>(pipe, 16384, deadline.Token);
+                var request = await ScreenTimeProtocol.ReadAsync<ScreenTimeRequest>(pipe, 131072, deadline.Token);
                 string callerSid = "";
                 bool elevated = false;
                 pipe.RunAsClient(() => {
@@ -88,7 +88,8 @@ internal sealed class ScreenTimeControlServer : IDisposable
                 {
                     var ticket = _approvals.Create(callerSid, new ScreenTimeChange(request.UserSid,
                         request.DailyMinutes, request.BonusMinutes, request.Enabled, request.WeekendMinutes,
-                        request.BedtimeStart, request.BedtimeEnd, request.WeekendBedtimeStart, request.LockMinutes), now);
+                        request.BedtimeStart, request.BedtimeEnd, request.WeekendBedtimeStart, request.LockMinutes,
+                        request.Operation, request.LimitsMinutes), now);
                     return ScreenTimeReply.Success(new { ticketId = ticket, canApproveDirectly = elevated });
                 }
                 catch (InvalidOperationException ex) { return ScreenTimeReply.Failure(ex.Message); }
@@ -99,7 +100,7 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     Command = "save", UserSid = change!.UserSid, DailyMinutes = change.DailyMinutes,
                     BonusMinutes = change.BonusMinutes, Enabled = change.Enabled, WeekendMinutes = change.WeekendMinutes,
                     BedtimeStart = change.BedtimeStart, BedtimeEnd = change.BedtimeEnd, WeekendBedtimeStart = change.WeekendBedtimeStart,
-                    LockMinutes = change.LockMinutes
+                    LockMinutes = change.LockMinutes, Operation = change.Operation, LimitsMinutes = change.LimitsMinutes
                 });
                 _approvals.Complete(request.TicketId, saved);
                 if (saved.Ok)
@@ -118,6 +119,16 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     _log($"Screen-time policy changed through the remote PIN (requested by {callerSid}).");
                 }
                 return remote;
+            case "set-blocked-sites":
+            case "limits-seal":
+            case "limits-close":
+                // No approval here: the service only accepts them inside a window the parent opened.
+                _snapshot = null;
+                return _handle(request);
+            case "dismiss-request":
+                // Only closes a waiting "more time" request, so it needs no approval. The child gains nothing from it.
+                _snapshot = null;
+                return _handle(request);
             case "result": return _approvals.Result(request.TicketId, callerSid, now);
             case "cancel":
                 _approvals.Cancel(request.TicketId, callerSid);

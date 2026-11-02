@@ -22,6 +22,8 @@ internal static class Program
     private static UsageDatabase? _db;
     private static WindowTracker? _tracker;
     private static UsageTracker? _usageTracker;
+    private static WebsiteTracker? _websiteTracker;
+    private static SiteBlockingService? _siteBlocking;
     private static LimitEnforcer? _enforcer;
     private static SchedulerService? _scheduler;
     private static NotificationService? _notifier;
@@ -540,6 +542,12 @@ internal static class Program
         _usageTracker = new UsageTracker(_db!, _tracker, _enforcer, _scheduler);
         _usageTracker.Start(config.FlushIntervalSec);
 
+        _websiteTracker = new WebsiteTracker(_db!, _tracker);
+        _websiteTracker.Start();
+
+        _siteBlocking = new SiteBlockingService(_db!);
+        _siteBlocking.Start();
+
         var webTask = Task.Run(() => StartWebServer(config));
     }
 
@@ -803,6 +811,8 @@ internal static class Program
         Logger.Instance.Info("Monitor shutting down");
         _usageTracker?.Stop();
         _tracker?.Stop();
+        _siteBlocking?.Dispose();
+        _websiteTracker?.Dispose();
         DashboardServer.LoginLockoutDetected = null;
         ScreenTimeEndpoints.RemoteEvent = null;
         _parentReportService?.Dispose();

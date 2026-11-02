@@ -24,6 +24,8 @@ internal sealed class ScreenTimeService : IDisposable
     private ScreenTimeControlServer? _control;
     private readonly HashSet<int> _asking = new();
     private readonly Dictionary<int, long> _locks = new();
+    private readonly BrowserPolicy _sites;
+    private long _lastPolicy;
 
     internal static void PrepareDirectory()
     {
@@ -76,6 +78,8 @@ internal sealed class ScreenTimeService : IDisposable
         _protectedDirectory = protectedDirectory;
         _remotePin = new RemotePinStore(Path.Combine(protectedDirectory, "remote-pin.json"));
         PrepareDirectory();
+        _sites = new BrowserPolicy(Path.Combine(protectedDirectory, "site-blocklist.json"), log);
+        ApplySiteBlocking();
         _usage = ReadUsage();
         _lastTick = _clock.ElapsedMilliseconds;
         try { _control = new ScreenTimeControlServer(HandleControl, _log); }
@@ -186,6 +190,8 @@ internal sealed class ScreenTimeService : IDisposable
                     }
                 }
             }
+            // Browsers can lose their policy (a Windows policy refresh, a reset); put the block list back now and then.
+            if (tick - _lastPolicy >= 300000) { _lastPolicy = tick; ApplySiteBlocking(); }
             if (tick - _lastStatus >= 5000)
             {
                 WriteStatus(policies, today, null);
@@ -199,6 +205,33 @@ internal sealed class ScreenTimeService : IDisposable
             try { WriteStatus(new(), DateOnly.FromDateTime(DateTime.Now), ex.Message); } catch { }
         }
         finally { Monitor.Exit(_sync); }
+    }
+
+    // Sites the parent blocked outright and sealed are enforced from the sealed copy, whatever DeviceMon reports.
+    private void ApplySiteBlocking()
+    {
+        try
+        {
+            var file = LimitsSealStore.Read();
+            var always = LimitsSealStore.Phase(file, DateTimeOffset.UtcNow) != SealPhase.Off && file?.Content != null
+                ? file.Content.Sites.Where(s => s.Enabled && s.Minutes == 0).Select(s => s.Host)
+                : Enumerable.Empty<string>();
+            _sites.Apply(always);
+        }
+        catch (Exception ex) { _log("Site blocking could not be applied: " + ex.Message); }
+    }
+
+    private static object DescribeLimitsProtection()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var file = LimitsSealStore.Read();
+        var phase = LimitsSealStore.Phase(file, now);
+        return new
+        {
+            phase = phase.ToString().ToLowerInvariant(),
+            sealedUtc = file?.SealedUtc,
+            editOpenUntilUtc = phase == SealPhase.Editing ? file?.OpenUntilUtc : null
+        };
     }
 
     private void AskForMoreTime(int sessionId, ScreenTimePolicy policy, string text)
@@ -278,6 +311,71 @@ internal sealed class ScreenTimeService : IDisposable
                     request.Command = "save";
                 }
 
+                if (request.Command == "set-blocked-sites")
+                {
+                    var hosts = SiteBlocking.NormalizeAll(request.BlockedHosts);
+                    if (_sites.SetReported(hosts))
+                    {
+                        _log($"Site blocking: {hosts.Count} website(s) blocked in browsers now.");
+                        ApplySiteBlocking();
+                    }
+                    return ScreenTimeReply.Success(new { blocked = hosts.Count });
+                }
+
+                if (request.Command == "limits-close")
+                {
+                    var open = LimitsSealStore.Read();
+                    if (open != null) LimitsSealStore.Write(LimitsSealStore.Close(open, DateTimeOffset.UtcNow));
+                    return ScreenTimeReply.Success(new { closed = true });
+                }
+                if (request.Command == "limits-seal")
+                {
+                    SealedLimits? content;
+                    try { content = System.Text.Json.JsonSerializer.Deserialize<SealedLimits>(request.LimitsJson ?? ""); }
+                    catch { content = null; }
+                    if (content == null || !LimitsSealStore.TrySeal(LimitsSealStore.Read(), content, DateTimeOffset.UtcNow, out var sealedFile))
+                        return ScreenTimeReply.Failure("No limits editing window is waiting to be sealed.");
+                    LimitsSealStore.Write(sealedFile);
+                    ApplySiteBlocking();
+                    _log($"Screen-time: app limits sealed ({content.Limits.Count} limits, {content.Schedule.Count} schedule rules, {content.Groups.Count} groups).");
+                    return ScreenTimeReply.Success(new { sealedAt = sealedFile.SealedUtc });
+                }
+
+                if (request.Command == "dismiss-request")
+                {
+                    if (string.IsNullOrEmpty(request.UserSid)) return ScreenTimeReply.Failure("Select an account.");
+                    var closed = TimeRequestStore.Resolve(request.UserSid);
+                    if (closed > 0)
+                    {
+                        _log("Screen-time: a parent declined a request for more time.");
+                        try
+                        {
+                            foreach (var session in ScreenTimeWindows.Sessions().Where(s => s.Sid == request.UserSid && s.Unlocked))
+                                ScreenTimeWindows.Warn(session.SessionId, "Your parent did not add more time this time.");
+                        }
+                        catch { /* the answer is recorded even if the message cannot be shown */ }
+                    }
+                    return ScreenTimeReply.Success(new { dismissed = closed });
+                }
+
+                if (request.Command is "save" or "validate" && !string.IsNullOrEmpty(request.Operation))
+                {
+                    // Sealed app limits: approved like any other change, but not tied to an account.
+                    if (request.Operation == "limits-open" && request.LimitsMinutes is < 1 or > LimitsSealStore.MaxWindowMinutes)
+                        return ScreenTimeReply.Failure("Choose between 1 and 60 minutes.");
+                    if (request.Operation is not ("limits-open" or "limits-clear"))
+                        return ScreenTimeReply.Failure("Unknown operation.");
+                    if (request.Command == "validate") return ScreenTimeReply.Success(new { valid = true });
+                    var now = DateTimeOffset.UtcNow;
+                    if (request.Operation == "limits-open")
+                        LimitsSealStore.Write(LimitsSealStore.Open(LimitsSealStore.Read(), request.LimitsMinutes, now));
+                    else
+                        LimitsSealStore.Clear();
+                    File.AppendAllText(Path.Combine(ScreenTimeFiles.DirectoryPath, "admin-audit.log"),
+                        $"{DateTimeOffset.Now:o} {(viaRemote ? "Remote PIN authorized" : "Windows admin authorized")} {request.Operation} minutes={request.LimitsMinutes}{Environment.NewLine}");
+                    return ScreenTimeReply.Success(new { saved = true, operation = request.Operation });
+                }
+
                 if (request.Command is "save" or "validate")
                 {
                     var account = accounts.FirstOrDefault(a => a.Sid == request.UserSid);
@@ -333,6 +431,7 @@ internal sealed class ScreenTimeService : IDisposable
                         };
                     }).ToList(),
                     remote = RemoteStatus(),
+                    limitsProtection = DescribeLimitsProtection(),
                     requests = TimeRequestStore.Pending(DateTimeOffset.UtcNow)
                         .Select(r => new { id = r.Id, userSid = r.UserSid, name = r.Name, createdUtc = r.CreatedUtc }).ToList(),
                     updatedUtc = DateTimeOffset.UtcNow,

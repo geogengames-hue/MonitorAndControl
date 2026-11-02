@@ -22,7 +22,11 @@ public sealed class WeeklyReportData
     public List<WeeklyApp> Apps { get; init; } = new();
 }
 
-/// <summary>Compares the last 7 days with the 7 days before them, per day and per app.</summary>
+/// <summary>
+/// Compares the last 7 days with the 7 days before them, per day and per app. Only time an app
+/// was in the foreground (or not classified, in older records) counts: background time overlaps
+/// with other apps, so adding it up would make a day look longer than it was.
+/// </summary>
 public static class WeeklyReport
 {
     private const int MaxApps = 10;
@@ -41,9 +45,10 @@ public static class WeeklyReport
         {
             var day = r.Date.Date;
             if (day < lastStart || day > end) continue;
-            byDay[day] = byDay.GetValueOrDefault(day) + r.TotalSeconds;
+            var seconds = r.ForegroundSeconds + r.UnclassifiedSeconds;
+            byDay[day] = byDay.GetValueOrDefault(day) + seconds;
             var target = day >= thisStart ? thisApps : lastApps;
-            target[r.AppName] = target.GetValueOrDefault(r.AppName) + r.TotalSeconds;
+            target[r.AppName] = target.GetValueOrDefault(r.AppName) + seconds;
         }
 
         var days = Enumerable.Range(0, 7).Select(i =>

@@ -14,9 +14,9 @@
     <Product>DeviceMon</Product>
     <Description>Local parental monitoring and app limit dashboard</Description>
     <AssemblyTitle>DeviceMon</AssemblyTitle>
-    <Version>1.7.2</Version>
-    <AssemblyVersion>1.7.2.0</AssemblyVersion>
-    <FileVersion>1.7.2.0</FileVersion>
+    <Version>1.8.0</Version>
+    <AssemblyVersion>1.8.0.0</AssemblyVersion>
+    <FileVersion>1.8.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -32,6 +32,8 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- Only for System.Windows.Automation (reading the browser address bar); no WPF UI is used. -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
   </ItemGroup>
 
   <ItemGroup>

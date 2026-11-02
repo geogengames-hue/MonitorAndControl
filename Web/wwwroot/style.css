@@ -477,3 +477,9 @@ code { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; ba
 .weekly-legend span { display: inline-block; width: 12px; height: 8px; border-radius: 4px; margin-right: 4px; }
 .screen-lock { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .screen-lock input { width: 90px; }
+@media (max-width: 620px) {
+  .screen-lock input { width: 100%; }
+  .screen-lock button, .screen-request button { flex: 1 1 40%; min-height: 44px; }
+  .weekly-day { grid-template-columns: 38px 1fr 76px; gap: 8px; }
+  .weekly-value small { display: none; }
+}

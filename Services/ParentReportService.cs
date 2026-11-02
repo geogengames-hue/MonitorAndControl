@@ -36,17 +36,45 @@ public sealed class ParentReportService : IDisposable
         _guardTimer.Change(TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(10));
     }
 
+    // When the parent sealed the limits (service-held copy), the database must match it. This also
+    // holds after a restart, so closing DeviceMon first and editing the database no longer helps.
+    private async Task<string?> CheckSealedLimitsAsync()
+    {
+        var file = ScreenTime.LimitsSealStore.Read();
+        var phase = ScreenTime.LimitsSealStore.Phase(file, DateTimeOffset.UtcNow);
+        if (phase == ScreenTime.SealPhase.Off) return null;
+        _db.ResetLimitsBaseline(); // the in-process guard resumes cleanly once sealing ends
+
+        if (phase == ScreenTime.SealPhase.Editing) return null;
+        var current = await _db.ReadLimitsSnapshotAsync();
+        if (phase == ScreenTime.SealPhase.SealNow)
+        {
+            var reply = await ScreenTimeClient.SendAsync(new ScreenTime.ScreenTimeRequest
+            {
+                Command = "limits-seal",
+                LimitsJson = System.Text.Json.JsonSerializer.Serialize(current)
+            }, CancellationToken.None);
+            Logger.Instance.Info(reply.Ok ? "App limits sealed after editing." : "Could not seal the app limits: " + reply.Error);
+            return null;
+        }
+
+        if (file?.Content == null || current.Fingerprint() == file.Fingerprint) return null;
+        await _db.ApplyLimitsSnapshotAsync(file.Content);
+        return "The app limits, schedule or groups were changed without approval and have been put back from the sealed copy. " +
+               "To change them on purpose, open editing under PC Time > Protect limits.";
+    }
+
     // Checked far more often than the minute timer so a legitimate edit and an outside edit rarely share a window.
     private async void GuardCheck(object? state)
     {
         if (Interlocked.Exchange(ref _guarding, 1) != 0) return;
         try
         {
-            var problem = await _db.CheckLimitsIntegrityAsync();
+            var problem = await CheckSealedLimitsAsync() ?? await _db.CheckLimitsIntegrityAsync();
             if (problem != null)
             {
                 Logger.Instance.Warn("Limits tamper guard: " + problem);
-                await SendTamperAlertAsync("limits_changed", problem);
+                await SendTamperAlertAsync("limits_changed", problem, ignoreSwitch: ScreenTime.LimitsSealStore.Read()?.Protected == true);
             }
         }
         catch (Exception ex) { Logger.Instance.Error($"Limits tamper guard failed: {ex.Message}"); }
@@ -193,6 +221,7 @@ public sealed class ParentReportService : IDisposable
             RepeatedCloseDetector.Parse(await _db.GetSettingAsync("WatchdogRestartLog", "")), new DateTimeOffset(from));
         body.AppendLine().AppendLine($"Times DeviceMon was closed and restarted: {restarts}");
         AppendPcTimeToday(body);
+        await AppendTopSitesAsync(body, from.Date, due.AddTicks(-1).Date);
         try
         {
             var end = due.AddTicks(-1).Date;
@@ -204,6 +233,22 @@ public sealed class ParentReportService : IDisposable
         var error = await _email.SendSystemEmailAsync($"{frequency[..1].ToUpperInvariant() + frequency[1..]} Usage Summary", body.ToString());
         if (error == null)
             await _db.SetSettingAsync("SummaryLastSentDue", due.ToString("O"));
+    }
+
+    private async Task AppendTopSitesAsync(StringBuilder body, DateTime from, DateTime to)
+    {
+        try
+        {
+            if ((await _db.GetSettingAsync("TrackWebsites", "true")) != "true") return;
+            var sites = (await _db.GetSiteUsageRangeAsync(from, to))
+                .GroupBy(r => r.Host, StringComparer.OrdinalIgnoreCase)
+                .Select(g => (Host: g.Key, Seconds: g.Sum(x => x.Seconds)))
+                .OrderByDescending(x => x.Seconds).Take(8).ToList();
+            if (sites.Count == 0) return;
+            body.AppendLine().AppendLine("Top websites:");
+            foreach (var (host, seconds) in sites) body.AppendLine($"{host}: {Format(seconds)}");
+        }
+        catch { /* the summary is still useful without it */ }
     }
 
     // PC Time counters belong to the SYSTEM service; its status file shows each account's latest day.

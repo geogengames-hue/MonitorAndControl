@@ -67,6 +67,17 @@ function screenRenderSelection(populate) {
   screenElement('lock').disabled = !canLock;
   screenElement('unlock').disabled = !canLock;
   screenElement('unlock').classList.toggle('hidden', !isLocked);
+  const protection = screenData?.limitsProtection;
+  const phase = protection?.phase || 'off';
+  const canProtect = !!screenData && !screenData.error && !screenRemoteBlock();
+  screenElement('limits-protect').classList.toggle('hidden', phase !== 'off');
+  screenElement('limits-edit').classList.toggle('hidden', phase !== 'enforce');
+  screenElement('limits-remove').classList.toggle('hidden', phase !== 'enforce');
+  screenElement('limits-finish').classList.toggle('hidden', phase !== 'editing');
+  ['protect', 'edit', 'remove', 'finish'].forEach(name => { screenElement('limits-' + name).disabled = !canProtect; });
+  screenElement('limits-status').textContent = phase === 'enforce' ? t('Protected.')
+    : phase === 'editing' ? t('Editing is open until {time}.', { time: new Date(protection.editOpenUntilUtc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+    : phase === 'sealnow' ? t('Saving the new limits...') : t('Not protected.');
   screenElement('lock-status').textContent = isLocked
     ? t('Locked until {time}.', { time: lockedUntil.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
     : t('Not locked.');
@@ -115,6 +126,27 @@ function screenRenderRequests() {
       });
       row.appendChild(button);
     });
+    const decline = document.createElement('button');
+    decline.type = 'button';
+    decline.className = 'btn-secondary';
+    decline.textContent = t('Not now');
+    decline.title = t('Decline this request. The child is told that no time was added.');
+    decline.addEventListener('click', async () => {
+      decline.disabled = true;
+      try {
+        await screenApi('/api/screen-time/dismiss-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userSid: request.userSid })
+        });
+        await loadScreenTime();
+      } catch (error) {
+        screenElement('message').textContent = error.message;
+        screenElement('message').classList.add('screen-error');
+        decline.disabled = false;
+      }
+    });
+    row.appendChild(decline);
     box.appendChild(row);
   });
 }
@@ -212,6 +244,50 @@ function screenAskLock(minutes) {
     ? t('Lock {name} for {n} minutes. Its programs keep running; it returns to the sign-in screen.', { name: account.name, n: minutes })
     : t('Unlock {name} now.', { name: account.name }));
 }
+
+function screenAskLimits(operation, minutes, summary) {
+  screenPending = { userSid: '', dailyMinutes: 180, enabled: false, bonusMinutes: 0, operation, limitsMinutes: minutes };
+  screenOpenAuth(summary);
+}
+
+screenElement('limits-protect').addEventListener('click', () => screenAskLimits('limits-open', 1,
+  t('Protect the current app limits, schedule and groups. They can then only be changed after you approve it.')));
+screenElement('limits-edit').addEventListener('click', () => screenAskLimits('limits-open', 10,
+  t('Allow changes to the app limits for 10 minutes.')));
+screenElement('limits-remove').addEventListener('click', () => screenAskLimits('limits-clear', 0,
+  t('Turn off the protection of the app limits.')));
+screenElement('limits-finish').addEventListener('click', async () => {
+  screenElement('limits-finish').disabled = true;
+  try {
+    await screenApi('/api/limits/finish-editing', { method: 'POST' });
+    await loadScreenTime(true);
+  } catch (error) {
+    screenElement('message').textContent = error.message;
+    screenElement('message').classList.add('screen-error');
+  } finally { screenElement('limits-finish').disabled = false; }
+});
+
+// A notice on the Limits and Schedule pages, so changes that will be undone are not a surprise.
+async function loadLimitsProtection() {
+  try {
+    const response = await fetch('/api/limits/protection');
+    if (!response.ok) return;
+    const data = await response.json();
+    const text = data.phase === 'editing'
+      ? t('Editing is open until {time}. Press Finish editing in PC Time when you are done.', { time: new Date(data.editOpenUntilUtc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+      : data.protectedLimits ? t('App limits are protected. Changes made here are undone unless you open editing first (PC Time > Protect limits).') : '';
+    ['limits', 'schedule'].forEach(name => {
+      const banner = document.getElementById(name + '-protect-banner');
+      if (!banner) return;
+      banner.textContent = text;
+      banner.classList.toggle('hidden', !text);
+    });
+  } catch { /* the notice is optional */ }
+}
+document.querySelectorAll('[data-view="limits"], [data-view="schedule"]').forEach(a => a.addEventListener('click', loadLimitsProtection));
+setInterval(() => {
+  if (['view-limits', 'view-schedule'].some(id => document.getElementById(id)?.classList.contains('active'))) loadLimitsProtection();
+}, 10000);
 
 function screenOpenAuth(summary) {
   screenElement('auth-summary').textContent = summary;

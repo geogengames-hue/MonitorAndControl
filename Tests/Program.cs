@@ -14,6 +14,13 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Remote PIN locks out guessing, with doubling lockouts", TestRemotePinLockout),
     ("Remote PIN rejects weak values", TestRemotePinRules),
     ("Weekend limit applies on Saturday and Sunday only", TestWeekendLimit),
+    ("Website limits block outright or after the daily allowance", TestSiteLimitLogic),
+    ("Browser block lists keep entries that are not ours", TestBlocklistMerge),
+    ("Sealed limits include website rules", TestSealedSites),
+    ("Site names keep only the host of a normal website", TestSiteNames),
+    ("Website time is stored per host and day", TestSiteUsageStorage),
+    ("Sealed limits follow approve, edit, seal and enforce", TestLimitsSealStateMachine),
+    ("Sealed limits are restored in the database", TestSealedLimitsRestore),
     ("Parent lock sets, extends, clears and expires", TestParentLock),
     ("Weekly report compares this week with last week", TestWeeklyReport),
     ("Bedtime signs out overnight and honours the weekend bedtime", TestBedtime),
@@ -1161,6 +1168,12 @@ static Task TestWeeklyReport()
     AssertTrue(report.Apps[0].App == "Game" && report.Apps[0].ThisWeekSeconds == 5400 && report.Apps[0].LastWeekSeconds == 3600, "Apps are ranked by this week's use.");
     AssertTrue(report.Apps.Any(a => a.App == "Chat" && a.ThisWeekSeconds == 0), "An app used only last week still appears.");
     AssertFalse(report.Apps.Any(a => a.App is "Old" or "Future"), "Out-of-range records are ignored.");
+    var overlapping = new List<MonitorAndControl.Models.AppUsageRecord>
+    {
+        new() { AppName = "Game", Date = end, TotalSeconds = 3600, ForegroundSeconds = 1800, BackgroundSeconds = 1800 },
+        new() { AppName = "Music", Date = end, TotalSeconds = 3600, ForegroundSeconds = 0, BackgroundSeconds = 3600 }
+    };
+    AssertTrue(MonitorAndControl.Services.WeeklyReport.Build(overlapping, end).ThisWeekSeconds == 1800, "Background time that overlaps other apps is not added to the total.");
     AssertTrue(MonitorAndControl.Services.WeeklyReport.Build(new List<MonitorAndControl.Models.AppUsageRecord>(), end).ChangePercent == null, "No usage last week means no percentage.");
     AssertTrue(MonitorAndControl.Services.WeeklyReport.ToText(report).Contains("Game: 1h 30m vs 1h 0m (+50%)"), "The email text lists the app change.");
     return Task.CompletedTask;
@@ -1184,4 +1197,194 @@ static Task TestParentLock()
     AssertTrue(System.Text.Json.JsonSerializer.Deserialize<MonitorAndControl.ScreenTime.ScreenTimePolicy>(json)!.LockUntilUtc == policy.LockUntilUtc, "The lock survives a save and load.");
     AssertTrue(System.Text.Json.JsonSerializer.Deserialize<MonitorAndControl.ScreenTime.ScreenTimePolicy>("{\"UserSid\":\"S-1-5-21-1-2-3-1001\",\"DisplayName\":\"kid\"}")!.LockUntilUtc == null, "Older rule files load as unlocked.");
     return Task.CompletedTask;
+}
+
+static Task TestLimitsSealStateMachine()
+{
+    var now = new DateTimeOffset(2026, 11, 9, 16, 0, 0, TimeSpan.Zero);
+    var seal = MonitorAndControl.ScreenTime.LimitsSealStore.Phase;
+    AssertTrue(seal(null, now) == MonitorAndControl.ScreenTime.SealPhase.Off, "Nothing sealed means no protection.");
+
+    var content = new MonitorAndControl.ScreenTime.SealedLimits();
+    content.Limits.Add(new() { App = "Game", Minutes = 60, Enabled = true });
+    var tooEarly = MonitorAndControl.ScreenTime.LimitsSealStore.TrySeal(null, content, now, out _);
+    AssertFalse(tooEarly, "Content cannot be sealed without an approved window.");
+
+    var opened = MonitorAndControl.ScreenTime.LimitsSealStore.Open(null, 1, now);
+    AssertTrue(seal(opened, now.AddSeconds(30)) == MonitorAndControl.ScreenTime.SealPhase.Editing, "The window is open for editing.");
+    AssertFalse(MonitorAndControl.ScreenTime.LimitsSealStore.TrySeal(opened, content, now.AddSeconds(30), out _), "Sealing waits until the window has closed.");
+    AssertTrue(seal(opened, now.AddSeconds(90)) == MonitorAndControl.ScreenTime.SealPhase.SealNow, "After the window DeviceMon is asked to seal.");
+    AssertFalse(MonitorAndControl.ScreenTime.LimitsSealStore.TrySeal(opened, content, now.AddMinutes(10), out _), "The grace period for sealing expires.");
+    AssertTrue(seal(opened, now.AddMinutes(10)) == MonitorAndControl.ScreenTime.SealPhase.Off, "An abandoned first window leaves nothing to enforce.");
+
+    AssertTrue(MonitorAndControl.ScreenTime.LimitsSealStore.TrySeal(opened, content, now.AddSeconds(90), out var sealedFile), "Content is sealed after the window.");
+    AssertTrue(seal(sealedFile, now.AddMinutes(5)) == MonitorAndControl.ScreenTime.SealPhase.Enforce, "A sealed file is enforced.");
+    AssertFalse(MonitorAndControl.ScreenTime.LimitsSealStore.TrySeal(sealedFile, content, now.AddMinutes(5), out _), "Sealed content cannot be replaced without a new window.");
+
+    var reopened = MonitorAndControl.ScreenTime.LimitsSealStore.Open(sealedFile, 10, now.AddMinutes(20));
+    AssertTrue(reopened.Content != null && seal(reopened, now.AddMinutes(21)) == MonitorAndControl.ScreenTime.SealPhase.Editing, "Re-opening keeps the old copy while editing.");
+    AssertTrue(seal(reopened, now.AddMinutes(60)) == MonitorAndControl.ScreenTime.SealPhase.Enforce, "An abandoned edit window falls back to the old sealed copy.");
+    var closed = MonitorAndControl.ScreenTime.LimitsSealStore.Close(reopened, now.AddMinutes(22));
+    AssertTrue(seal(closed, now.AddMinutes(22)) == MonitorAndControl.ScreenTime.SealPhase.SealNow, "Finishing early asks DeviceMon to seal at once.");
+
+    var a1 = new MonitorAndControl.ScreenTime.SealedLimits();
+    a1.Limits.Add(new() { App = "A", Minutes = 1, Enabled = true });
+    a1.Limits.Add(new() { App = "B", Minutes = 2, Enabled = true });
+    var a2 = new MonitorAndControl.ScreenTime.SealedLimits();
+    a2.Limits.Add(new() { App = "B", Minutes = 2, Enabled = true });
+    a2.Limits.Add(new() { App = "A", Minutes = 1, Enabled = true });
+    AssertTrue(a1.Fingerprint() == a2.Fingerprint(), "The fingerprint ignores order.");
+    a2.Limits[0].Minutes = 3;
+    AssertTrue(a1.Fingerprint() != a2.Fingerprint(), "The fingerprint notices a changed limit.");
+    return Task.CompletedTask;
+}
+
+static async Task TestSealedLimitsRestore()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Seal-Test-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        await db.SaveLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "Game", DailyMaxMinutes = 60, Enabled = true });
+        await db.SaveScheduleRuleAsync(new MonitorAndControl.Models.ScheduleRule { AppName = "Game", DayOfWeek = "Weekday", StartTime = "15:00", EndTime = "18:00", Enabled = true });
+        await db.SaveLimitGroupAsync(new MonitorAndControl.Models.AppLimitGroup { Name = "Games", DailyMaxMinutes = 120, Enabled = true, AppNames = { "Game", "Other" } });
+        var sealedContent = await db.ReadLimitsSnapshotAsync();
+        var fingerprint = sealedContent.Fingerprint();
+
+        // Tamper with everything: lift the limit, drop the schedule, change and add groups.
+        await db.SaveLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "Game", DailyMaxMinutes = 1440, Enabled = false });
+        await db.ReplaceScheduleRulesAsync(new List<MonitorAndControl.Models.ScheduleRule>());
+        var groups = await db.GetLimitGroupsAsync();
+        groups[0].DailyMaxMinutes = 1440;
+        groups[0].AppNames.Clear();
+        await db.SaveLimitGroupAsync(groups[0]);
+        await db.SaveLimitGroupAsync(new MonitorAndControl.Models.AppLimitGroup { Name = "Extra", DailyMaxMinutes = 5, Enabled = true });
+        AssertTrue((await db.ReadLimitsSnapshotAsync()).Fingerprint() != fingerprint, "The tampering is visible in the fingerprint.");
+
+        await db.ApplyLimitsSnapshotAsync(sealedContent);
+        AssertTrue((await db.ReadLimitsSnapshotAsync()).Fingerprint() == fingerprint, "Applying the sealed copy restores limits, schedule and groups.");
+        var restored = await db.GetLimitGroupsAsync();
+        AssertTrue(restored.Count == 1 && restored[0].Name == "Games" && restored[0].AppNames.Count == 2, "An extra group is removed and members come back.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static Task TestSiteNames()
+{
+    string? Host(string? raw) => MonitorAndControl.Services.SiteName.TryGetHost(raw, out var h) ? h : null;
+    AssertTrue(Host("https://www.YouTube.com/watch?v=abc&t=1") == "youtube.com", "The path, query and www are dropped.");
+    AssertTrue(Host("youtube.com/watch?v=abc") == "youtube.com", "A value without a scheme works (Chrome hides it).");
+    AssertTrue(Host("https://user:pw@example.org:8443/a#b") == "example.org", "User info and port are dropped.");
+    AssertTrue(Host("https://mail.google.com/") == "mail.google.com", "Subdomains are kept.");
+    AssertTrue(Host("http://localhost:5000/index.html") == "localhost", "Localhost counts as a site.");
+    AssertTrue(Host("  Example.COM  ") == "example.com", "Case and spaces are normalised.");
+    AssertTrue(Host("chrome://newtab") == null && Host("edge://settings") == null && Host("about:blank") == null && Host("file:///C:/x.txt") == null,
+        "Internal browser pages are not websites.");
+    AssertTrue(Host("how to bake bread") == null && Host("bake") == null, "Search text being typed is never recorded.");
+    AssertTrue(Host("") == null && Host(null) == null && Host(new string('a', 3000)) == null, "Empty and absurd values are ignored.");
+    AssertTrue(MonitorAndControl.Services.SiteName.IsPrivateTitle("New tab - Google Chrome - Incognito"), "Incognito is recognised.");
+    AssertTrue(MonitorAndControl.Services.SiteName.IsPrivateTitle("Bing and 1 more page - Personal - Microsoft Edge [InPrivate]"), "InPrivate is recognised.");
+    AssertFalse(MonitorAndControl.Services.SiteName.IsPrivateTitle("YouTube - Google Chrome"), "A normal window is not private.");
+    return Task.CompletedTask;
+}
+
+static async Task TestSiteUsageStorage()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Sites-Test-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        var day = new DateTime(2026, 11, 9);
+        await db.AddSiteUsageAsync(day, new Dictionary<string, long> { ["youtube.com"] = 60, ["school.example"] = 30 });
+        await db.AddSiteUsageAsync(day, new Dictionary<string, long> { ["youtube.com"] = 40, ["zero.example"] = 0 });
+        await db.AddSiteUsageAsync(day.AddDays(1), new Dictionary<string, long> { ["youtube.com"] = 10 });
+        var rows = await db.GetSiteUsageRangeAsync(day, day);
+        AssertTrue(rows.Count == 2 && rows.Single(r => r.Host == "youtube.com").Seconds == 100, "Time adds up per host and day; zero seconds are skipped.");
+        AssertTrue((await db.GetSiteUsageRangeAsync(day, day.AddDays(1))).Sum(r => r.Seconds) == 140, "A range includes every day in it.");
+        await db.ClearUsageHistoryAsync();
+        AssertTrue((await db.GetSiteUsageRangeAsync(day, day.AddDays(1))).Count == 0, "Clearing history also clears website time.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static Task TestSiteLimitLogic()
+{
+    var rules = new List<MonitorAndControl.Models.SiteLimit>
+    {
+        new() { Host = "youtube.com", DailyMaxMinutes = 30, Enabled = true },
+        new() { Host = "tiktok.com", DailyMaxMinutes = 0, Enabled = true },
+        new() { Host = "reddit.com", DailyMaxMinutes = 0, Enabled = false },
+        new() { Host = "chess.com", DailyMaxMinutes = 60, Enabled = true }
+    };
+    var usage = new List<MonitorAndControl.Models.SiteUsageRecord>
+    {
+        new() { Host = "youtube.com", Seconds = 900 }, new() { Host = "m.youtube.com", Seconds = 900 },
+        new() { Host = "notyoutube.com", Seconds = 99999 }, new() { Host = "chess.com", Seconds = 600 }
+    };
+    var status = MonitorAndControl.Services.SiteLimitLogic.Evaluate(rules, usage);
+    AssertTrue(status.Single(s => s.Host == "youtube.com").UsedSeconds == 1800, "A site and its subdomains share one allowance, and look-alike names do not count.");
+    AssertTrue(status.Single(s => s.Host == "youtube.com").Blocked, "Reaching the daily allowance blocks the site.");
+    AssertTrue(status.Single(s => s.Host == "tiktok.com").Blocked, "Zero minutes blocks the site outright.");
+    AssertFalse(status.Single(s => s.Host == "reddit.com").Blocked, "A switched-off rule blocks nothing.");
+    AssertFalse(status.Single(s => s.Host == "chess.com").Blocked, "Time left on the allowance keeps the site open.");
+    var blocked = MonitorAndControl.Services.SiteLimitLogic.BlockedHosts(status);
+    AssertTrue(blocked.Count == 2 && blocked.Contains("youtube.com") && blocked.Contains("tiktok.com"), "Only blocked sites are reported to the service.");
+
+    string? Norm(string? raw) => MonitorAndControl.ScreenTime.SiteBlocking.TryNormalizeHost(raw, out var h) ? h : null;
+    AssertTrue(Norm(" WWW.YouTube.com ") == "youtube.com", "Site names are tidied.");
+    AssertTrue(Norm("youtube") == null && Norm("a b.com") == null && Norm("youtube.com/watch") == null && Norm("") == null && Norm("-bad.com") == null,
+        "Bare words, spaces, paths and bad names are refused.");
+    AssertTrue(MonitorAndControl.ScreenTime.SiteBlocking.Covers("youtube.com", "music.youtube.com") && !MonitorAndControl.ScreenTime.SiteBlocking.Covers("youtube.com", "xyoutube.com"),
+        "Subdomains are covered, look-alikes are not.");
+    return Task.CompletedTask;
+}
+
+static Task TestBlocklistMerge()
+{
+    var current = new[] { "corporate-blocked.example", "old-ours.com" };
+    var merged = MonitorAndControl.ScreenTime.SiteBlocking.Merge(current, new[] { "old-ours.com" }, new[] { "youtube.com", "tiktok.com" });
+    AssertTrue(merged.SequenceEqual(new[] { "corporate-blocked.example", "youtube.com", "tiktok.com" }),
+        "Entries from other sources stay; ours are replaced by the current set.");
+    AssertTrue(MonitorAndControl.ScreenTime.SiteBlocking.Merge(new[] { "old-ours.com" }, new[] { "old-ours.com" }, Array.Empty<string>()).Count == 0,
+        "With nothing to block, our old entries disappear.");
+    AssertTrue(MonitorAndControl.ScreenTime.SiteBlocking.Merge(new[] { "YouTube.com" }, Array.Empty<string>(), new[] { "youtube.com" }).Count == 1,
+        "An entry that already exists is not added twice.");
+    var firefox = MonitorAndControl.ScreenTime.SiteBlocking.FirefoxEntries(new[] { "youtube.com" });
+    AssertTrue(firefox.SequenceEqual(new[] { "*://youtube.com/*", "*://*.youtube.com/*" }), "Firefox gets match patterns for the site and its subdomains.");
+    return Task.CompletedTask;
+}
+
+static async Task TestSealedSites()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-SealSites-Test-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        await db.SaveSiteLimitAsync(new MonitorAndControl.Models.SiteLimit { Host = "tiktok.com", DailyMaxMinutes = 0, Enabled = true });
+        var sealedContent = await db.ReadLimitsSnapshotAsync();
+        AssertTrue(sealedContent.Sites.Count == 1, "Website rules are part of the sealed snapshot.");
+        var fingerprint = sealedContent.Fingerprint();
+
+        await db.SaveSiteLimitAsync(new MonitorAndControl.Models.SiteLimit { Host = "tiktok.com", DailyMaxMinutes = 1440, Enabled = false });
+        await db.SaveSiteLimitAsync(new MonitorAndControl.Models.SiteLimit { Host = "extra.com", DailyMaxMinutes = 5, Enabled = true });
+        AssertTrue((await db.ReadLimitsSnapshotAsync()).Fingerprint() != fingerprint, "Changing a website rule changes the fingerprint.");
+
+        await db.ApplyLimitsSnapshotAsync(sealedContent);
+        var rules = await db.GetSiteLimitsAsync();
+        AssertTrue(rules.Count == 1 && rules[0].Host == "tiktok.com" && rules[0].DailyMaxMinutes == 0 && rules[0].Enabled, "The sealed website rules are restored.");
+        AssertTrue((await db.ReadLimitsSnapshotAsync()).Fingerprint() == fingerprint, "The database matches the seal again.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
 }

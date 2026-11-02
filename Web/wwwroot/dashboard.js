@@ -612,6 +612,22 @@ async function loadHistory(days) {
     syncHistoryFilters();
     renderHistoryDashboard();
     loadWeeklyReport();
+    loadHistorySites(url.replace('/api/usage/history', '/api/usage/sites/history'));
+  } catch (e) { log(e); }
+}
+
+async function loadHistorySites(url) {
+  const box = document.getElementById('history-sites');
+  if (!box) return;
+  try {
+    const rows = await api(url);
+    const totals = new Map();
+    rows.forEach(r => totals.set(r.host, (totals.get(r.host) || 0) + r.seconds));
+    const top = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const max = top[0]?.[1] || 1;
+    box.innerHTML = top.length
+      ? top.map(([host, seconds]) => historyBarRow(host.startsWith('(') ? t(host) : host, seconds, max)).join('')
+      : `<p>${esc(t('No website time recorded yet. It appears after the browser has been used for a few minutes.'))}</p>`;
   } catch (e) { log(e); }
 }
 
@@ -1335,6 +1351,7 @@ async function loadSettings() {
     document.getElementById('set-summary-weekly-day').value = String(s.summaryWeeklyDay ?? 0);
     document.getElementById('set-summary-monthly-day').value = s.summaryMonthlyDay || 1;
     document.getElementById('set-tamper-alerts').checked = s.tamperAlertsEnabled;
+    document.getElementById('set-track-websites').checked = s.trackWebsites !== false;
     initHotkeyKeyOptions();
     setHotkeyControls(s.hotKeyModifiers, s.hotKeyKey);
     document.getElementById('current-hotkey').textContent = s.hotKey || `${s.hotKeyModifiers || 'Control+Alt'}+${s.hotKeyKey || 'H'}`;
@@ -1434,8 +1451,8 @@ function buildHealthItems(h) {
     : t('Not working') + (d.hotkey?.problem ? ': ' + d.hotkey.problem : ''), d.hotkey?.registered ? 'ok' : 'bad']);
   const channel = d.updates?.channel === 'system'
     ? t('Remote silent updates (service)')
-    : d.updates?.dashboardUpdateAvailable ? t('Built-in updater') : t('Not available: protected install without a trusted update source');
-  items.push([t('Updates'), channel, d.updates?.dashboardUpdateAvailable ? 'ok' : 'warn']);
+    : d.updates?.canUpdateFromDashboard ? t('Built-in updater') : t('Not available: protected install without a trusted update source');
+  items.push([t('Updates'), channel, d.updates?.canUpdateFromDashboard ? 'ok' : 'warn']);
   const last = d.updates?.lastStatus;
   items.push([t('Last update'), !last || last === 'none' ? t('None recorded')
     : [last, d.updates?.lastFinished ? formatDateTime(d.updates.lastFinished) : '', d.updates?.lastMessage].filter(Boolean).join(' - '),
@@ -1549,13 +1566,14 @@ document.getElementById('settings-save').addEventListener('click', async () => {
   const summaryWeeklyDay = parseInt(document.getElementById('set-summary-weekly-day').value);
   const summaryMonthlyDay = parseInt(document.getElementById('set-summary-monthly-day').value) || 1;
   const tamperAlertsEnabled = document.getElementById('set-tamper-alerts').checked;
+  const trackWebsites = document.getElementById('set-track-websites').checked;
   const autoStart = document.getElementById('set-auto-start').checked;
   const pauseTrackingWhenIdle = document.getElementById('set-pause-idle').checked;
   const idleThresholdMinutes = parseInt(document.getElementById('set-idle-threshold').value) || 10;
   const hotKeyModifiers = getHotkeyModifiers();
   const hotKeyKey = document.getElementById('set-hotkey-key').value;
   uiLanguage = document.getElementById('set-language').value;
-  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, emailDeviceId, autoStart, pauseTrackingWhenIdle, idleThresholdMinutes, emailBreachNotifyEnabled, emailKillNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled, summaryEnabled, summaryFrequency, summaryTime, summaryWeeklyDay, summaryMonthlyDay, tamperAlertsEnabled, uiLanguage, hotKeyModifiers, hotKeyKey };
+  const payload = { killDelay, showWarning, warningMessage, webhookUrl, emailAddress, emailAllowedSender, emailDeviceId, autoStart, pauseTrackingWhenIdle, idleThresholdMinutes, emailBreachNotifyEnabled, emailKillNotifyEnabled, emailStartNotifyEnabled, emailControlEnabled, summaryEnabled, summaryFrequency, summaryTime, summaryWeeklyDay, summaryMonthlyDay, tamperAlertsEnabled, trackWebsites, uiLanguage, hotKeyModifiers, hotKeyKey };
   if (emailPassword) payload.emailPassword = emailPassword;
   await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   document.getElementById('set-email-pw').value = '';
@@ -1725,7 +1743,7 @@ document.getElementById('settings-run-update').addEventListener('click', async (
   let updates = {};
   try { updates = (await api('/api/health')).runtime?.diagnostics?.updates || {}; } catch (_) {}
   const viaService = updates.channel === 'system';
-  if (!viaService && updates.dashboardUpdateAvailable === false) {
+  if (!viaService && updates.canUpdateFromDashboard === false) {
     el.style.color = '#ff4444';
     el.textContent = t('This is a protected install: the dashboard cannot write to the app folder. Updates run through the GameHost service. Re-run install.ps1 as administrator with -UpdateSource to enable remote updates.');
     return;
