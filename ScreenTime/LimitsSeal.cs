@@ -37,6 +37,24 @@ public sealed class SealedLimits
     public List<SealedGroup> Groups { get; set; } = new();
     public List<SealedSite> Sites { get; set; } = new();
 
+    /// <summary>Replaces any list that arrived as null, so later code can count and hash the content safely.</summary>
+    public SealedLimits Normalized()
+    {
+        Limits ??= new();
+        Schedule ??= new();
+        Groups ??= new();
+        Sites ??= new();
+        Limits.RemoveAll(x => x == null);
+        Schedule.RemoveAll(x => x == null);
+        Groups.RemoveAll(x => x == null);
+        Sites.RemoveAll(x => x == null);
+        foreach (var g in Groups) { g.Members ??= new(); g.Members.RemoveAll(m => m == null); g.Name ??= ""; }
+        foreach (var x in Limits) x.App ??= "";
+        foreach (var x in Schedule) { x.App ??= ""; x.Day ??= ""; x.Start ??= ""; x.End ??= ""; }
+        foreach (var x in Sites) x.Host ??= "";
+        return this;
+    }
+
     public bool IsReasonable() =>
         Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxEntries
         && Groups.All(g => g.Members.Count <= MaxEntries);

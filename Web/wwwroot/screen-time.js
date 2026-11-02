@@ -320,6 +320,12 @@ screenElement('form').addEventListener('submit', event => {
     screenElement('message').classList.add('screen-error');
     return;
   }
+  const bed = screenElement('bedtime').value, wake = screenElement('wake').value, weekendBed = screenElement('weekend-bedtime').value;
+  if (bed && weekendBed && (bed > wake) !== (weekendBed > wake)) {
+    screenElement('message').textContent = t('The weekend bedtime must be an evening time after the wake-up time, like the normal bedtime (for example 23:00).');
+    screenElement('message').classList.add('screen-error');
+    return;
+  }
   screenPending = {
     userSid: account.sid,
     dailyMinutes: Number(screenElement('minutes').value),

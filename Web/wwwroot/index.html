@@ -199,14 +199,14 @@
           <h3>Top Apps</h3>
           <div id="history-top-apps"></div>
         </div>
+        <div class="history-panel" id="history-sites-panel">
+          <h3 title="Time spent on websites in the foreground of a browser, for the selected date range.">Top Websites</h3>
+          <div id="history-sites"></div>
+        </div>
         <div class="history-panel">
           <h3>Selected Day</h3>
           <div id="history-day-detail"></div>
         </div>
-      </div>
-      <div class="history-panel" id="history-sites-panel">
-        <h3 title="Time spent on websites in the foreground of a browser, for the selected date range.">Top Websites</h3>
-        <div id="history-sites"></div>
       </div>
       <div class="history-panel weekly-report" id="weekly-report">
         <h3 title="The last 7 days compared with the 7 days before them.">This week vs last week</h3>
@@ -409,7 +409,7 @@
         <label title="Record how long each website is open in the browser you are using. Only the site name is stored, never pages, searches or titles." style="display:flex;align-items:center;gap:8px;margin-top:10px">
           <input type="checkbox" id="set-track-websites" style="width:auto"> Track time on websites in Chrome, Edge, Firefox and other browsers
         </label>
-        <p style="font-size:12px;color:#888">Only the site name (for example youtube.com) is stored, never the page, search text or title. Private windows are counted as one anonymous entry. No browser extension is needed.</p>
+        <p style="font-size:12px;color:#888">Only the site name (for example youtube.com) is stored, never the page, search text or title. Time in private windows counts too, so site limits cannot be avoided that way. No browser extension is needed.</p>
         <p style="font-size:12px;color:#888">Alerts cover database/config deletion, major clock changes, watchdog failure or recovery (including DeviceMon being forcibly closed), and repeated dashboard login failures.</p>
         <hr>
         <h3>Backup &amp; Restore</h3>

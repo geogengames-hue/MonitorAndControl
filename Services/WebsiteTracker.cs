@@ -42,7 +42,7 @@ public sealed class WebsiteTracker : IDisposable
         try
         {
             var now = Environment.TickCount64;
-            var elapsed = (int)Math.Clamp((now - _lastSampleTick) / 1000, 0, 2 * SampleSeconds);
+            var elapsed = (int)Math.Clamp(Math.Round((now - _lastSampleTick) / 1000.0), 0, 2 * SampleSeconds);
             _lastSampleTick = now;
 
             if (now - _lastFlushTick >= FlushSeconds * 1000L)
@@ -72,12 +72,15 @@ public sealed class WebsiteTracker : IDisposable
 
         var title = new System.Text.StringBuilder(512);
         NativeMethods.GetWindowText(window, title, title.Capacity);
-        if (SiteName.IsPrivateTitle(title.ToString())) return SiteName.PrivateWindow;
+        var isPrivate = SiteName.IsPrivateTitle(title.ToString());
 
         // UI Automation can stall while a browser is busy; give up after two seconds rather than block.
         var read = Task.Run(() => _reader.Read(window, process!));
-        if (!read.Wait(TimeSpan.FromSeconds(2))) return SiteName.UnknownSite;
-        return SiteName.TryGetHost(read.Result, out var host) ? host : SiteName.UnknownSite;
+        // Private windows are read like any other, so a site's daily limit also counts time spent in them;
+        // the anonymous bucket is only the fallback when the address bar cannot be read.
+        var fallback = isPrivate ? SiteName.PrivateWindow : SiteName.UnknownSite;
+        if (!read.Wait(TimeSpan.FromSeconds(2))) return fallback;
+        return SiteName.TryGetHost(read.Result, out var host) ? host : fallback;
     }
 
     public async Task FlushAsync()

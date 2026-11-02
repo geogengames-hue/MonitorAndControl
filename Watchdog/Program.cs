@@ -467,7 +467,7 @@ internal sealed class WatchdogService : ServiceBase
         LoadLastAutoCheck();
         // Per-account screen-time enforcement is independent of the monitor: if it
         // cannot start, log it and keep the rest of the watchdog running.
-        try { _screenTime = new ScreenTimeService(Log, Path.Combine(_options.DataDirectory, "Protected")); }
+        try { _screenTime = new ScreenTimeService(Log, Path.Combine(_options.DataDirectory, "Protected"), _options.MonitorPath); }
         catch (Exception ex) { Log("Screen-time unavailable: " + ex); }
         Log($"Watchdog started. Monitor={_options.MonitorPath}");
         _timer.Change(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(_options.IntervalSeconds));

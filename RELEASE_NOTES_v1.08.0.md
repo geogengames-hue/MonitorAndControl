@@ -9,8 +9,8 @@
   list into the browsers' Windows policy, which a standard user cannot change.
 - **Website time, without a browser extension.** DeviceMon reads the address bar of the
   foreground browser through Windows UI Automation and adds up time per site. Only the
-  site name is stored, never the page, search text or title; private windows are one
-  anonymous entry. See **History > Top Websites** and the summary email. Turn it off in
+  site name is stored, never the page, search text or title; time in private windows
+  counts too, so site limits cannot be avoided that way. See **History > Top Websites** and the summary email. Turn it off in
   Settings.
 - **Protect limits.** Under PC Time, seal your app limits, schedule, groups and website
   rules so they can only be changed after you approve it (Windows prompt on the PC,

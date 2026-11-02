@@ -140,7 +140,7 @@
   "No new apps found. Everything is already tracked.": "Новых приложений не найдено. Всё уже отслеживается.",
   "Installed Games & Apps": "Установленные игры и приложения",
   "Process": "Процесс",
-  "Source": "Источник",
+  "Source": "Source",
   "Actions": "Действия",
   "Add & Set Limit": "Добавить и задать лимит",
   "Currently Running (untracked)": "Сейчас запущено (не отслеживается)",
@@ -291,42 +291,40 @@
   "Update started. Reopen the dashboard after the app restarts.": "Обновление запущено. Откройте панель снова после перезапуска приложения.",
   "Update failed": "Обновление не удалось",
   "Password for the update share": "Пароль для сетевой папки обновления",
-  "PCNAME\\username or user@example.com": "PCNAME\\username или user@example.com"
-, "Shared Limit Groups": "Группы с общим лимитом"
-, "All apps in a group share one daily time pool. Simultaneous apps count only once.": "Все приложения группы используют общий дневной лимит. Одновременная работа учитывается только один раз."
-, "Create / Edit Group": "Создать / изменить группу"
-, "Group name (e.g. Games)": "Название группы (например, Игры)"
-, "Save Group": "Сохранить группу"
-, "Individual Apps": "Отдельные приложения"
-, "Group": "Группа"
-, "Apps": "Приложения"
-, "No shared limit groups configured.": "Группы с общим лимитом не настроены."
-, "Add tracked apps before creating a group.": "Добавьте отслеживаемые приложения перед созданием группы."
-, "Enter a group name, daily limit, and select at least one app.": "Введите название, дневной лимит и выберите хотя бы одно приложение."
-, "Remove shared limit group {group}?": "Удалить группу с общим лимитом {group}?"
-, "Shared Group Usage": "Использование общих групп"
-, "Shared Total": "Общее время группы"
-, "Group totals are a shared pool and are not added to the individual-app total.": "Время группы является общим лимитом и не добавляется к сумме отдельных приложений."
-, "Historical shared-pool time is shown separately to avoid double-counting app usage.": "История общего времени показывается отдельно, чтобы избежать двойного подсчёта."
-, "Expected ZIP SHA-256 (required for HTTPS updates)": "Ожидаемый SHA-256 ZIP (обязателен для обновлений HTTPS)"
-, "64-character SHA-256": "SHA-256 из 64 символов"
-, "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "Обновления по URL требуют HTTPS и точного SHA-256. Программа обновления запрашивает права администратора для защиты маркера watchdog."
-, "Send email when a limit is reached": "Отправлять письмо при достижении лимита"
-, "Send email when an app is closed by enforcement": "Отправлять письмо, когда приложение закрыто системой контроля"
-, "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.": "Оповещения охватывают удаление базы данных или конфигурации, значительные изменения времени, сбой или восстановление watchdog и повторные неудачные входы."
-, "No update has been recorded yet.": "No update has been recorded yet."
-, "Last update succeeded": "Last update succeeded"
-, "Last update failed": "Last update failed"
-, "Update is running": "Update is running"
-, "Update is starting": "Update is starting"
-, "Update status unknown": "Update status unknown"
-, "Update status": "Update status"
-, "Show update log": "Show update log"
-, "Started": "Started"
-, "Finished": "Finished"
-, "Source": "Source"
-, "Could not load update status.": "Could not load update status."
-, "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.": "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.",
+  "PCNAME\\username or user@example.com": "PCNAME\\username или user@example.com",
+  "Shared Limit Groups": "Группы с общим лимитом",
+  "All apps in a group share one daily time pool. Simultaneous apps count only once.": "Все приложения группы используют общий дневной лимит. Одновременная работа учитывается только один раз.",
+  "Create / Edit Group": "Создать / изменить группу",
+  "Group name (e.g. Games)": "Название группы (например, Игры)",
+  "Save Group": "Сохранить группу",
+  "Individual Apps": "Отдельные приложения",
+  "Group": "Группа",
+  "No shared limit groups configured.": "Группы с общим лимитом не настроены.",
+  "Add tracked apps before creating a group.": "Добавьте отслеживаемые приложения перед созданием группы.",
+  "Enter a group name, daily limit, and select at least one app.": "Введите название, дневной лимит и выберите хотя бы одно приложение.",
+  "Remove shared limit group {group}?": "Удалить группу с общим лимитом {group}?",
+  "Shared Group Usage": "Использование общих групп",
+  "Shared Total": "Общее время группы",
+  "Group totals are a shared pool and are not added to the individual-app total.": "Время группы является общим лимитом и не добавляется к сумме отдельных приложений.",
+  "Historical shared-pool time is shown separately to avoid double-counting app usage.": "История общего времени показывается отдельно, чтобы избежать двойного подсчёта.",
+  "Expected ZIP SHA-256 (required for HTTPS updates)": "Ожидаемый SHA-256 ZIP (обязателен для обновлений HTTPS)",
+  "64-character SHA-256": "SHA-256 из 64 символов",
+  "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "Обновления по URL требуют HTTPS и точного SHA-256. Программа обновления запрашивает права администратора для защиты маркера watchdog.",
+  "Send email when a limit is reached": "Отправлять письмо при достижении лимита",
+  "Send email when an app is closed by enforcement": "Отправлять письмо, когда приложение закрыто системой контроля",
+  "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.": "Оповещения охватывают удаление базы данных или конфигурации, значительные изменения времени, сбой или восстановление watchdog и повторные неудачные входы.",
+  "No update has been recorded yet.": "No update has been recorded yet.",
+  "Last update succeeded": "Last update succeeded",
+  "Last update failed": "Last update failed",
+  "Update is running": "Update is running",
+  "Update is starting": "Update is starting",
+  "Update status unknown": "Update status unknown",
+  "Update status": "Update status",
+  "Show update log": "Show update log",
+  "Started": "Started",
+  "Finished": "Finished",
+  "Could not load update status.": "Could not load update status.",
+  "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.": "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.",
   "PC Time": "Время за ПК",
   "A daily allowance for each Windows account, across all apps.": "Дневной лимит для каждой учётной записи Windows во всех приложениях.",
   "Refresh accounts": "Обновить учётные записи",
@@ -601,7 +599,6 @@
   "(unknown site)": "(неизвестный сайт)",
   "Track time on websites in Chrome, Edge, Firefox and other browsers": "Учитывать время на сайтах в Chrome, Edge, Firefox и других браузерах",
   "Record how long each website is open in the browser you are using. Only the site name is stored, never pages, searches or titles.": "Записывает, как долго каждый сайт открыт в используемом браузере. Сохраняется только название сайта, но не страницы, запросы или заголовки.",
-  "Only the site name (for example youtube.com) is stored, never the page, search text or title. Private windows are counted as one anonymous entry. No browser extension is needed.": "Сохраняется только название сайта (например, youtube.com), но не страница, текст запроса или заголовок. Приватные окна считаются одной анонимной записью. Расширение для браузера не требуется.",
   "Website Limits": "Лимиты сайтов",
   "Block websites or limit the time per day. Chrome, Edge, Brave and Firefox then show a \"blocked by your administrator\" page.": "Блокируйте сайты или ограничивайте время в день. Chrome, Edge, Brave и Firefox покажут страницу «заблокировано администратором».",
   "Block a site completely or give it a daily time allowance. When a site is blocked, Chrome, Edge, Brave and Firefox show a \"blocked by your administrator\" page, also in private windows. Needs the GameHost service. Other browsers are not covered.": "Полностью заблокируйте сайт или задайте ему дневное время. Заблокированные сайты в Chrome, Edge, Brave и Firefox показывают страницу «заблокировано администратором», в том числе в приватных окнах. Требуется служба GameHost. Другие браузеры не охвачены.",
@@ -619,5 +616,7 @@
   "Load this rule into the form below.": "Загрузить это правило в форму ниже.",
   "Delete this website rule. The site is unblocked within a minute.": "Удалить это правило сайта. Сайт разблокируется в течение минуты.",
   "Enter a site name such as youtube.com.": "Введите название сайта, например youtube.com.",
-  "Minutes per day must be between 0 (block) and 1440.": "Минут в день должно быть от 0 (блокировка) до 1440."
+  "Minutes per day must be between 0 (block) and 1440.": "Минут в день должно быть от 0 (блокировка) до 1440.",
+  "Only the site name (for example youtube.com) is stored, never the page, search text or title. Time in private windows counts too, so site limits cannot be avoided that way. No browser extension is needed.": "Сохраняется только название сайта (например, youtube.com), но не страница, текст запроса или заголовок. Время в приватных окнах тоже учитывается, поэтому лимиты сайтов так не обойти. Расширение для браузера не требуется.",
+  "The weekend bedtime must be an evening time after the wake-up time, like the normal bedtime (for example 23:00).": "Отбой в выходные должен быть вечерним временем после времени подъёма, как и обычный отбой (например, 23:00)."
 }

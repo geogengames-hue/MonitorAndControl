@@ -70,7 +70,7 @@ internal sealed class ScreenTimeService : IDisposable
         }
     }
 
-    internal ScreenTimeService(Action<string> log, string protectedDirectory)
+    internal ScreenTimeService(Action<string> log, string protectedDirectory, string monitorPath = "")
     {
         _log = log;
         // The remote PIN hash lives in the SYSTEM/Administrators-only folder, never in the
@@ -82,7 +82,7 @@ internal sealed class ScreenTimeService : IDisposable
         ApplySiteBlocking();
         _usage = ReadUsage();
         _lastTick = _clock.ElapsedMilliseconds;
-        try { _control = new ScreenTimeControlServer(HandleControl, _log); }
+        try { _control = new ScreenTimeControlServer(HandleControl, _log, monitorPath); }
         catch { _log("Screen-time configuration channel unavailable; enforcement continues."); }
         _timer = new System.Threading.Timer(Tick, null, 1000, 1000);
     }
@@ -331,7 +331,7 @@ internal sealed class ScreenTimeService : IDisposable
                 if (request.Command == "limits-seal")
                 {
                     SealedLimits? content;
-                    try { content = System.Text.Json.JsonSerializer.Deserialize<SealedLimits>(request.LimitsJson ?? ""); }
+                    try { content = System.Text.Json.JsonSerializer.Deserialize<SealedLimits>(request.LimitsJson ?? "")?.Normalized(); }
                     catch { content = null; }
                     if (content == null || !LimitsSealStore.TrySeal(LimitsSealStore.Read(), content, DateTimeOffset.UtcNow, out var sealedFile))
                         return ScreenTimeReply.Failure("No limits editing window is waiting to be sealed.");

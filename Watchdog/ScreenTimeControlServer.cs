@@ -1,4 +1,7 @@
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using MonitorAndControl.ScreenTime;
@@ -16,9 +19,14 @@ internal sealed class ScreenTimeControlServer : IDisposable
     private ScreenTimeReply? _snapshot;
     private DateTimeOffset _snapshotAt;
 
-    internal ScreenTimeControlServer(Func<ScreenTimeRequest, ScreenTimeReply> handle, Action<string> log)
+    private readonly string _monitorPath;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint processId);
+
+    internal ScreenTimeControlServer(Func<ScreenTimeRequest, ScreenTimeReply> handle, Action<string> log, string monitorPath)
     {
-        _handle = handle; _log = log;
+        _handle = handle; _log = log; _monitorPath = monitorPath;
         _listener = CreatePipe();
         _loop = Task.Run(ListenAsync);
     }
@@ -46,7 +54,7 @@ internal sealed class ScreenTimeControlServer : IDisposable
                 await pipe.WaitForConnectionAsync(_stop.Token);
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
                 deadline.CancelAfter(TimeSpan.FromSeconds(5));
-                var request = await ScreenTimeProtocol.ReadAsync<ScreenTimeRequest>(pipe, 131072, deadline.Token);
+                var request = await ScreenTimeProtocol.ReadAsync<ScreenTimeRequest>(pipe, 524288, deadline.Token);
                 string callerSid = "";
                 bool elevated = false;
                 pipe.RunAsClient(() => {
@@ -54,7 +62,10 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     callerSid = identity.User?.Value ?? "";
                     elevated = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
                 });
-                var reply = Dispatch(request, callerSid, elevated);
+                var caller = CallerImage(pipe);
+                var fromMonitor = caller != null && !string.IsNullOrEmpty(_monitorPath)
+                    && string.Equals(Path.GetFullPath(caller), Path.GetFullPath(_monitorPath), StringComparison.OrdinalIgnoreCase);
+                var reply = Dispatch(request, callerSid, elevated, fromMonitor, caller);
                 await ScreenTimeProtocol.WriteAsync(pipe, reply, deadline.Token);
             }
             catch (OperationCanceledException) when (_stop.IsCancellationRequested) { break; }
@@ -68,7 +79,20 @@ internal sealed class ScreenTimeControlServer : IDisposable
             }
         }
     }
-    private ScreenTimeReply Dispatch(ScreenTimeRequest request, string callerSid, bool elevated)
+    // The program on the other end of the pipe. A child cannot run a program from the protected install
+    // folder, so this separates DeviceMon's own requests from a script a child wrote.
+    private static string? CallerImage(NamedPipeServerStream pipe)
+    {
+        try
+        {
+            if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out var pid)) return null;
+            using var process = Process.GetProcessById((int)pid);
+            return process.MainModule?.FileName;
+        }
+        catch { return null; }
+    }
+
+    private ScreenTimeReply Dispatch(ScreenTimeRequest request, string callerSid, bool elevated, bool fromMonitor, string? caller)
     {
         if (string.IsNullOrEmpty(callerSid)) return ScreenTimeReply.Failure("Local identity not recognized.");
         var now = DateTimeOffset.UtcNow;
@@ -122,11 +146,15 @@ internal sealed class ScreenTimeControlServer : IDisposable
             case "set-blocked-sites":
             case "limits-seal":
             case "limits-close":
-                // No approval here: the service only accepts them inside a window the parent opened.
-                _snapshot = null;
-                return _handle(request);
             case "dismiss-request":
-                // Only closes a waiting "more time" request, so it needs no approval. The child gains nothing from it.
+                // These need no approval, but they must come from DeviceMon itself (which holds the dashboard),
+                // not from another program the child runs: otherwise an empty block list or a forged seal
+                // would be one pipe message away.
+                if (!fromMonitor)
+                {
+                    _log($"Refused {request.Command} from {(caller ?? "an unknown program")}: only DeviceMon may send it.");
+                    return ScreenTimeReply.Failure("Only DeviceMon can do this.");
+                }
                 _snapshot = null;
                 return _handle(request);
             case "result": return _approvals.Result(request.TicketId, callerSid, now);

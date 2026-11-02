@@ -168,6 +168,16 @@ public static class ScreenTimeEndpoints
                 if (reply.Ok)
                 {
                     var sid = request.UserSid ?? "";
+                    if (request.Operation == "limits-open")
+                    {
+                        Raise($"The app limits were opened for editing for {request.LimitsMinutes} min remotely from {source}.", true);
+                        return Results.Json(reply.Data);
+                    }
+                    if (request.Operation == "limits-clear")
+                    {
+                        Raise($"The protection of the app limits was removed remotely from {source}.", true);
+                        return Results.Json(reply.Data);
+                    }
                     Raise($"PC Time was changed remotely from {source}: account ...{sid[^Math.Min(4, sid.Length)..]}, " +
                         $"{(request.Enabled ? request.DailyMinutes + " min/day" + (request.WeekendMinutes > 0 ? $", {request.WeekendMinutes} at weekends" : "") + (string.IsNullOrEmpty(request.BedtimeStart) ? "" : $", bedtime {request.BedtimeStart}-{request.BedtimeEnd}") : "control off")}{(request.LockMinutes > 0 ? $", locked for {request.LockMinutes} min" : request.LockMinutes < 0 ? ", unlocked" : "")}, bonus {request.BonusMinutes} min.", false);
                     return Results.Json(reply.Data);

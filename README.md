@@ -317,7 +317,7 @@ When tamper alerts are on, you get a normal alert each time the GameHost watchdo
 
 DeviceMon can show how long each website was open in the browser being used. It reads the address bar of the foreground **Chrome, Edge, Brave, Opera, Vivaldi or Firefox** window through Windows UI Automation, so nothing is installed in the browser.
 
-- **Only the site name is stored** (for example `youtube.com`), never the page, search text or title. Time counts only while the browser is in front and the user is active (same idle and lock rules as apps). Private/Incognito/InPrivate windows are counted as one anonymous entry, `(private window)`; anything that cannot be read is `(unknown site)`.
+- **Only the site name is stored** (for example `youtube.com`), never the page, search text or title. Time counts only while the browser is in front and the user is active (same idle and lock rules as apps). Private/Incognito/InPrivate windows are read like any other, so a site's daily limit also counts time spent in them (`(private window)` is only used when the address bar cannot be read); anything else that cannot be read is `(unknown site)`.
 - See it under **History > Top Websites** and in the summary email. Turn it off with **Settings > Track time on websites** (existing data stays until you clear history).
 - **Limits of this approach:** it reports what the address bar shows, so it can miss a site while the user is typing in the address bar, and a browser update that changes its address-bar control can break it (Firefox is best effort). It cannot see sites in apps that embed a browser, or block sites; it only measures time. Local network names without a dot (for example `router`) show as `(unknown site)`.
 

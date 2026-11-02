@@ -52,7 +52,9 @@ public static class ScreenTimeRules
         var any = !string.IsNullOrEmpty(p.BedtimeStart) || !string.IsNullOrEmpty(p.BedtimeEnd) || !string.IsNullOrEmpty(p.WeekendBedtimeStart);
         if (!any) return true;
         if (!TryClock(p.BedtimeStart, out var s) || !TryClock(p.BedtimeEnd, out var e) || s == e) return false;
-        return string.IsNullOrEmpty(p.WeekendBedtimeStart) || (TryClock(p.WeekendBedtimeStart, out var w) && w != e);
+        if (string.IsNullOrEmpty(p.WeekendBedtimeStart)) return true;
+        // An overnight bedtime (after the wake-up time) needs an overnight weekend bedtime too; 00:30 would read as a daytime window.
+        return TryClock(p.WeekendBedtimeStart, out var w) && w != e && (s > e) == (w > e);
     }
 
     // The night that starts on a Friday or Saturday may use the later weekend bedtime.

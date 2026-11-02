@@ -11,6 +11,7 @@ internal sealed class BrowserAddressReader
 {
     private static readonly string[] Chromium = { "chrome", "msedge", "brave", "opera", "vivaldi" };
     private readonly Dictionary<IntPtr, AutomationElement> _cache = new();
+    private readonly object _gate = new();
 
     public static bool IsBrowser(string? processName)
     {
@@ -23,6 +24,12 @@ internal sealed class BrowserAddressReader
 
     /// <summary>Returns the address-bar text, or null when it cannot be read. Never throws.</summary>
     public string? Read(IntPtr window, string processName)
+    {
+        // A read abandoned after the tracker's timeout may still be running when the next one starts.
+        lock (_gate) return ReadLocked(window, processName);
+    }
+
+    private string? ReadLocked(IntPtr window, string processName)
     {
         try
         {

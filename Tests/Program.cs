@@ -14,6 +14,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Remote PIN locks out guessing, with doubling lockouts", TestRemotePinLockout),
     ("Remote PIN rejects weak values", TestRemotePinRules),
     ("Weekend limit applies on Saturday and Sunday only", TestWeekendLimit),
+    ("Review fixes: bedtime kinds, restart dedupe, null-safe seal", TestReviewFixes),
     ("Website limits block outright or after the daily allowance", TestSiteLimitLogic),
     ("Browser block lists keep entries that are not ours", TestBlocklistMerge),
     ("Sealed limits include website rules", TestSealedSites),
@@ -1387,4 +1388,32 @@ static async Task TestSealedSites()
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
     }
+}
+
+static Task TestReviewFixes()
+{
+    var p = new MonitorAndControl.ScreenTime.ScreenTimePolicy
+    {
+        UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "kid", BedtimeStart = "22:00", BedtimeEnd = "07:00", WeekendBedtimeStart = "23:30"
+    };
+    p.Validate();
+    p.WeekendBedtimeStart = "00:30";
+    var refused = false;
+    try { p.Validate(); } catch (InvalidDataException) { refused = true; }
+    AssertTrue(refused, "A weekend bedtime after midnight would read as a daytime window and is refused.");
+    p.BedtimeStart = "13:00"; p.BedtimeEnd = "15:00"; p.WeekendBedtimeStart = "14:00";
+    p.Validate();
+
+    var marker = "2026-11-09T21:00:00.0000000+01:00|Monitor process was missing and watchdog relaunched it.";
+    var when = MonitorAndControl.Services.RepeatedCloseDetector.EventTime(marker, DateTimeOffset.UtcNow);
+    AssertTrue(when == new DateTimeOffset(2026, 11, 9, 20, 0, 0, TimeSpan.Zero), "The restart time comes from the marker.");
+    var history = new List<DateTimeOffset>();
+    AssertTrue(MonitorAndControl.Services.RepeatedCloseDetector.AddEvent(history, when), "The first report of a restart is recorded.");
+    AssertFalse(MonitorAndControl.Services.RepeatedCloseDetector.AddEvent(history, when), "A retried report of the same restart is not recorded again.");
+    AssertTrue(history.Count == 1, "One restart is one entry.");
+
+    var json = "{\"Limits\":null,\"Schedule\":[null],\"Groups\":[{\"Name\":null,\"Members\":null}],\"Sites\":null}";
+    var content = System.Text.Json.JsonSerializer.Deserialize<MonitorAndControl.ScreenTime.SealedLimits>(json)!.Normalized();
+    AssertTrue(content.IsReasonable() && content.Fingerprint().Length == 64, "Content with missing lists is repaired instead of crashing the service.");
+    return Task.CompletedTask;
 }

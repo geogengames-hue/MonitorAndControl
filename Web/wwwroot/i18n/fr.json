@@ -176,7 +176,7 @@
   "Total Time": "Temps total",
   "Daily Avg": "Moyenne quotidienne",
   "Top App": "App principale",
-  "Apps": "Apps",
+  "Apps": "Applications",
   "records": "enregistrements",
   "active days": "jours actifs",
   "No usage": "Aucune utilisation",
@@ -291,42 +291,40 @@
   "Update started. Reopen the dashboard after the app restarts.": "Mise à jour lancée. Rouvrez le tableau de bord après le redémarrage de l’app.",
   "Update failed": "Échec de la mise à jour",
   "Password for the update share": "Mot de passe du partage de mise à jour",
-  "PCNAME\\username or user@example.com": "PCNAME\\utilisateur ou user@example.com"
-, "Shared Limit Groups": "Groupes de limite partagée"
-, "All apps in a group share one daily time pool. Simultaneous apps count only once.": "Toutes les applications d’un groupe partagent un quota quotidien. Les applications simultanées ne comptent qu’une fois."
-, "Create / Edit Group": "Créer / modifier un groupe"
-, "Group name (e.g. Games)": "Nom du groupe (ex. Jeux)"
-, "Save Group": "Enregistrer le groupe"
-, "Individual Apps": "Applications individuelles"
-, "Group": "Groupe"
-, "Apps": "Applications"
-, "No shared limit groups configured.": "Aucun groupe de limite partagée configuré."
-, "Add tracked apps before creating a group.": "Ajoutez des applications suivies avant de créer un groupe."
-, "Enter a group name, daily limit, and select at least one app.": "Saisissez un nom, une limite quotidienne et sélectionnez au moins une application."
-, "Remove shared limit group {group}?": "Supprimer le groupe de limite partagée {group} ?"
-, "Shared Group Usage": "Utilisation des groupes partagés"
-, "Shared Total": "Total partagé"
-, "Group totals are a shared pool and are not added to the individual-app total.": "Les totaux de groupe forment un quota partagé et ne sont pas ajoutés au total des applications."
-, "Historical shared-pool time is shown separately to avoid double-counting app usage.": "Le temps partagé historique est affiché séparément pour éviter le double comptage."
-, "Expected ZIP SHA-256 (required for HTTPS updates)": "SHA-256 ZIP attendu (requis pour les mises à jour HTTPS)"
-, "64-character SHA-256": "SHA-256 de 64 caractères"
-, "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "Les mises à jour par URL exigent HTTPS et un SHA-256 exact. Le programme de mise à jour demande les droits administrateur pour protéger le marqueur du watchdog."
-, "Send email when a limit is reached": "Envoyer un e-mail lorsqu’une limite est atteinte"
-, "Send email when an app is closed by enforcement": "Envoyer un e-mail lorsqu’une application est fermée par le contrôle"
-, "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.": "Les alertes couvrent la suppression de la base ou de la configuration, les changements importants d’heure, la panne ou la récupération du watchdog et les échecs répétés de connexion."
-, "No update has been recorded yet.": "No update has been recorded yet."
-, "Last update succeeded": "Last update succeeded"
-, "Last update failed": "Last update failed"
-, "Update is running": "Update is running"
-, "Update is starting": "Update is starting"
-, "Update status unknown": "Update status unknown"
-, "Update status": "Update status"
-, "Show update log": "Show update log"
-, "Started": "Started"
-, "Finished": "Finished"
-, "Source": "Source"
-, "Could not load update status.": "Could not load update status."
-, "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.": "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.",
+  "PCNAME\\username or user@example.com": "PCNAME\\utilisateur ou user@example.com",
+  "Shared Limit Groups": "Groupes de limite partagée",
+  "All apps in a group share one daily time pool. Simultaneous apps count only once.": "Toutes les applications d’un groupe partagent un quota quotidien. Les applications simultanées ne comptent qu’une fois.",
+  "Create / Edit Group": "Créer / modifier un groupe",
+  "Group name (e.g. Games)": "Nom du groupe (ex. Jeux)",
+  "Save Group": "Enregistrer le groupe",
+  "Individual Apps": "Applications individuelles",
+  "Group": "Groupe",
+  "No shared limit groups configured.": "Aucun groupe de limite partagée configuré.",
+  "Add tracked apps before creating a group.": "Ajoutez des applications suivies avant de créer un groupe.",
+  "Enter a group name, daily limit, and select at least one app.": "Saisissez un nom, une limite quotidienne et sélectionnez au moins une application.",
+  "Remove shared limit group {group}?": "Supprimer le groupe de limite partagée {group} ?",
+  "Shared Group Usage": "Utilisation des groupes partagés",
+  "Shared Total": "Total partagé",
+  "Group totals are a shared pool and are not added to the individual-app total.": "Les totaux de groupe forment un quota partagé et ne sont pas ajoutés au total des applications.",
+  "Historical shared-pool time is shown separately to avoid double-counting app usage.": "Le temps partagé historique est affiché séparément pour éviter le double comptage.",
+  "Expected ZIP SHA-256 (required for HTTPS updates)": "SHA-256 ZIP attendu (requis pour les mises à jour HTTPS)",
+  "64-character SHA-256": "SHA-256 de 64 caractères",
+  "URL updates require HTTPS and an exact SHA-256. The updater requests administrator approval to protect the watchdog update marker.": "Les mises à jour par URL exigent HTTPS et un SHA-256 exact. Le programme de mise à jour demande les droits administrateur pour protéger le marqueur du watchdog.",
+  "Send email when a limit is reached": "Envoyer un e-mail lorsqu’une limite est atteinte",
+  "Send email when an app is closed by enforcement": "Envoyer un e-mail lorsqu’une application est fermée par le contrôle",
+  "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.": "Les alertes couvrent la suppression de la base ou de la configuration, les changements importants d’heure, la panne ou la récupération du watchdog et les échecs répétés de connexion.",
+  "No update has been recorded yet.": "No update has been recorded yet.",
+  "Last update succeeded": "Last update succeeded",
+  "Last update failed": "Last update failed",
+  "Update is running": "Update is running",
+  "Update is starting": "Update is starting",
+  "Update status unknown": "Update status unknown",
+  "Update status": "Update status",
+  "Show update log": "Show update log",
+  "Started": "Started",
+  "Finished": "Finished",
+  "Could not load update status.": "Could not load update status.",
+  "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.": "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.",
   "PC Time": "Temps PC",
   "A daily allowance for each Windows account, across all apps.": "Un quota quotidien pour chaque compte Windows, dans toutes les applications.",
   "Refresh accounts": "Actualiser les comptes",
@@ -601,7 +599,6 @@
   "(unknown site)": "(site inconnu)",
   "Track time on websites in Chrome, Edge, Firefox and other browsers": "Suivre le temps passé sur les sites web dans Chrome, Edge, Firefox et d'autres navigateurs",
   "Record how long each website is open in the browser you are using. Only the site name is stored, never pages, searches or titles.": "Enregistre combien de temps chaque site web reste ouvert dans le navigateur utilisé. Seul le nom du site est conservé, jamais les pages, recherches ou titres.",
-  "Only the site name (for example youtube.com) is stored, never the page, search text or title. Private windows are counted as one anonymous entry. No browser extension is needed.": "Seul le nom du site (par exemple youtube.com) est conservé, jamais la page, le texte recherché ou le titre. Les fenêtres privées comptent comme une entrée anonyme. Aucune extension de navigateur n'est nécessaire.",
   "Website Limits": "Limites de sites web",
   "Block websites or limit the time per day. Chrome, Edge, Brave and Firefox then show a \"blocked by your administrator\" page.": "Bloquez des sites web ou limitez le temps par jour. Chrome, Edge, Brave et Firefox affichent alors une page « bloqué par votre administrateur ».",
   "Block a site completely or give it a daily time allowance. When a site is blocked, Chrome, Edge, Brave and Firefox show a \"blocked by your administrator\" page, also in private windows. Needs the GameHost service. Other browsers are not covered.": "Bloquez entièrement un site ou donnez-lui un temps quotidien. Quand un site est bloqué, Chrome, Edge, Brave et Firefox affichent une page « bloqué par votre administrateur », même en navigation privée. Nécessite le service GameHost. Les autres navigateurs ne sont pas couverts.",
@@ -619,5 +616,7 @@
   "Load this rule into the form below.": "Charger cette règle dans le formulaire ci-dessous.",
   "Delete this website rule. The site is unblocked within a minute.": "Supprimer cette règle de site web. Le site est débloqué en une minute.",
   "Enter a site name such as youtube.com.": "Saisissez un nom de site, comme youtube.com.",
-  "Minutes per day must be between 0 (block) and 1440.": "Les minutes par jour doivent être comprises entre 0 (bloquer) et 1440."
+  "Minutes per day must be between 0 (block) and 1440.": "Les minutes par jour doivent être comprises entre 0 (bloquer) et 1440.",
+  "Only the site name (for example youtube.com) is stored, never the page, search text or title. Time in private windows counts too, so site limits cannot be avoided that way. No browser extension is needed.": "Seul le nom du site (par exemple youtube.com) est conservé, jamais la page, le texte recherché ou le titre. Le temps en navigation privée compte aussi, les limites de sites ne peuvent donc pas être contournées ainsi. Aucune extension de navigateur n'est nécessaire.",
+  "The weekend bedtime must be an evening time after the wake-up time, like the normal bedtime (for example 23:00).": "Le coucher du week-end doit être une heure du soir après l'heure du lever, comme le coucher normal (par exemple 23:00)."
 }

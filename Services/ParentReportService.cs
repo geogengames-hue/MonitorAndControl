@@ -16,6 +16,7 @@ public sealed class ParentReportService : IDisposable
     private DateTime _lastUtc;
     private int _checking;
     private int _guarding;
+    private readonly Dictionary<string, DateTime> _requestAttempts = new();
     private readonly System.Threading.Timer _guardTimer;
 
     public ParentReportService(UsageDatabase db, EmailService email, NotificationService notifications, string configPath)
@@ -124,9 +125,10 @@ public sealed class ParentReportService : IDisposable
     {
         // Every restart is remembered (for the summary email and for spotting repeated closes),
         // even when tamper alerts are off.
-        var now = DateTimeOffset.UtcNow;
+        // The restart's own time stamp identifies it, so retrying the alert never records it twice.
+        var now = RepeatedCloseDetector.EventTime(details, DateTimeOffset.UtcNow);
         var history = RepeatedCloseDetector.Parse(await _db.GetSettingAsync(RestartLogKey, ""));
-        history.Add(now);
+        var isNew = RepeatedCloseDetector.AddEvent(history, now);
         await _db.SetSettingAsync(RestartLogKey, RepeatedCloseDetector.Serialize(history, now));
 
         if ((await _db.GetSettingAsync("TamperAlertsEnabled", "false")) != "true")
@@ -139,7 +141,7 @@ public sealed class ParentReportService : IDisposable
         _ = int.TryParse(await _db.GetSettingAsync("RepeatedCloseWindowMinutes", "30"), out var window);
         if (threshold < 2) threshold = 3;
         if (window < 1) window = 30;
-        if (sent && RepeatedCloseDetector.IsFirstAtThreshold(history, now, TimeSpan.FromMinutes(window), threshold))
+        if (sent && isNew && RepeatedCloseDetector.IsFirstAtThreshold(history, now, TimeSpan.FromMinutes(window), threshold))
             await SendTamperAlertAsync("repeated_close",
                 $"DeviceMon was closed {threshold} times in the last {window} minutes. Someone is probably closing it on purpose.");
         return sent;
@@ -175,6 +177,9 @@ public sealed class ParentReportService : IDisposable
             var seen = (await _db.GetSettingAsync("TimeRequestsSeen", "")).Split(';', StringSplitOptions.RemoveEmptyEntries).ToList();
             foreach (var request in pending.Where(r => !seen.Contains(r.Id)))
             {
+                // Without email or a webhook the alert cannot be delivered; try again only now and then.
+                if (_requestAttempts.TryGetValue(request.Id, out var last) && DateTime.UtcNow - last < TimeSpan.FromMinutes(15)) continue;
+                _requestAttempts[request.Id] = DateTime.UtcNow;
                 var message = $"{request.Name} asked for more PC time on {Environment.MachineName}. " +
                               "Open the dashboard, go to PC Time, choose Add 15/30/60 min and save to approve.";
                 if (!await SendTamperAlertAsync("pc_time_request", message, ignoreSwitch: true)) continue;
@@ -380,6 +385,22 @@ public static class RepeatedCloseDetector
     /// <summary>True only for the restart that reaches the threshold, so one burst sends one alert.</summary>
     public static bool IsFirstAtThreshold(List<DateTimeOffset> history, DateTimeOffset now, TimeSpan window, int threshold) =>
         CountWithin(history, now, window) == threshold;
+
+    /// <summary>The time the watchdog wrote into its restart marker ("time|reason"), or the fallback.</summary>
+    public static DateTimeOffset EventTime(string? details, DateTimeOffset fallback)
+    {
+        var first = (details ?? "").Split('|')[0].Trim();
+        return DateTimeOffset.TryParse(first, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var value) ? value : fallback;
+    }
+
+    /// <summary>Adds the event unless the same moment is already there. Returns whether it was new.</summary>
+    public static bool AddEvent(List<DateTimeOffset> history, DateTimeOffset time)
+    {
+        if (history.Any(h => h == time)) return false;
+        history.Add(time);
+        return true;
+    }
 
     public static int CountSince(List<DateTimeOffset> history, DateTimeOffset since) => history.Count(h => h >= since);
 }
