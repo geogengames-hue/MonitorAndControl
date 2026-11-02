@@ -58,7 +58,8 @@ function screenRenderSelection(populate) {
   screenElement('remaining').textContent = profile?.enabled ? screenDuration(profile.remainingSeconds) : t('Unlimited');
   screenElement('allowance').textContent = profile
     ? t('{n} min/day', { n: profile.dailyMinutes }) + (profile.weekendMinutes ? ' · ' + t('{n} min at weekends', { n: profile.weekendMinutes }) : '') +
-      (profile.bedtimeStart ? ' · ' + t('bedtime {from}-{to}', { from: profile.bedtimeStart, to: profile.bedtimeEnd }) : '') + (profile.bonusMinutes ? ' ' + t('+ {n} min today', { n: profile.bonusMinutes }) : '')
+      (profile.bedtimeStart ? ' · ' + t('bedtime {from}-{to}', { from: profile.bedtimeStart, to: profile.bedtimeEnd }) : '') +
+      (profile.breakAfterMinutes ? ' · ' + t('{n}-min break every {m} min', { n: profile.breakMinutes, m: profile.breakAfterMinutes }) : '') + (profile.bonusMinutes ? ' ' + t('+ {n} min today', { n: profile.bonusMinutes }) : '')
     : t('No rule applied');
   screenElement('state').textContent = profile?.enabled
     ? (profile.remainingSeconds <= 0 ? t('Time is up') : t('Active'))
@@ -70,7 +71,8 @@ function screenRenderSelection(populate) {
   const canLock = !!account?.eligible && !screenData?.error && !screenRemoteBlock();
   screenElement('lock').disabled = !canLock;
   screenElement('unlock').disabled = !canLock;
-  screenElement('unlock').classList.toggle('hidden', !isLocked);
+  const onBreak = !!profile?.breakUntilUtc && new Date(profile.breakUntilUtc) > new Date();
+  screenElement('unlock').classList.toggle('hidden', !isLocked && !onBreak);
   const protection = screenData?.limitsProtection;
   const phase = protection?.phase || 'off';
   const canProtect = !!screenData && !screenData.error && !screenRemoteBlock();
@@ -82,9 +84,12 @@ function screenRenderSelection(populate) {
   screenElement('limits-status').textContent = phase === 'enforce' ? t('Protected.')
     : phase === 'editing' ? t('Editing is open until {time}.', { time: new Date(protection.editOpenUntilUtc).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
     : phase === 'sealnow' ? t('Saving the new limits...') : t('Not protected.');
+  const breakUntil = profile?.breakUntilUtc ? new Date(profile.breakUntilUtc) : null;
   screenElement('lock-status').textContent = isLocked
     ? t('Locked until {time}.', { time: lockedUntil.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
-    : t('Not locked.');
+    : breakUntil && breakUntil > new Date()
+      ? t('On a break until {time}.', { time: breakUntil.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+      : t('Not locked.');
   screenElement('enabled').disabled = !!account && !account.eligible;
   if (populate) {
     screenElement('minutes').value = profile?.dailyMinutes ?? 180;
@@ -93,6 +98,8 @@ function screenRenderSelection(populate) {
     screenElement('wake').value = profile?.bedtimeEnd || '';
     screenElement('weekend-bedtime').value = profile?.weekendBedtimeStart || '';
     screenElement('bonus').value = profile?.bonusMinutes ?? 0;
+    screenElement('break-after').value = profile?.breakAfterMinutes ?? 0;
+    screenElement('break-length').value = profile?.breakMinutes || 10;
     screenElement('enabled').checked = profile?.enabled ?? false;
     if (account && !account.eligible) screenElement('enabled').checked = false;
     screenDirty = false;
@@ -179,6 +186,8 @@ function screenApplyPendingGrant() {
     bedtimeEnd: profile?.bedtimeEnd || '',
     weekendBedtimeStart: profile?.weekendBedtimeStart || '',
     bonusMinutes: (profile?.bonusMinutes ?? 0) + minutes,
+    breakAfterMinutes: profile?.breakAfterMinutes ?? 0,
+    breakMinutes: profile?.breakMinutes ?? 0,
     enabled: true
   };
   screenOpenAuth(t('Add {n} minutes of PC time for {name} today.', { n: minutes, name: account.name }));
@@ -390,6 +399,8 @@ function screenAskLock(minutes) {
     bedtimeEnd: profile?.bedtimeEnd || '',
     weekendBedtimeStart: profile?.weekendBedtimeStart || '',
     bonusMinutes: profile?.bonusMinutes ?? 0,
+    breakAfterMinutes: profile?.breakAfterMinutes ?? 0,
+    breakMinutes: profile?.breakMinutes ?? 0,
     enabled: profile?.enabled ?? false,
     lockMinutes: minutes
   };
@@ -525,6 +536,8 @@ screenElement('form').addEventListener('submit', event => {
     bedtimeEnd: screenElement('bedtime').value ? screenElement('wake').value : '',
     weekendBedtimeStart: screenElement('bedtime').value ? screenElement('weekend-bedtime').value : '',
     bonusMinutes: Number(screenElement('bonus').value),
+    breakAfterMinutes: Number(screenElement('break-after').value) || 0,
+    breakMinutes: Number(screenElement('break-after').value) > 0 ? Number(screenElement('break-length').value) : 0,
     enabled: screenElement('enabled').checked
   };
   screenOpenAuth(screenPending.enabled

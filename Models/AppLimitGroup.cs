@@ -11,6 +11,8 @@ public class AppLimitGroup
     public List<string> AppNames { get; set; } = new();
     /// <summary>Empty = applies to everyone; otherwise only this Windows account (SID).</summary>
     public string UserSid { get; set; } = "";
+    /// <summary>Empty = only the listed apps; otherwise also every other app in this category (see AppCategories).</summary>
+    public string Category { get; set; } = "";
     [JsonIgnore]
     public long TodaySeconds { get; set; }
 }

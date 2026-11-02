@@ -113,7 +113,8 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     var ticket = _approvals.Create(callerSid, new ScreenTimeChange(request.UserSid,
                         request.DailyMinutes, request.BonusMinutes, request.Enabled, request.WeekendMinutes,
                         request.BedtimeStart, request.BedtimeEnd, request.WeekendBedtimeStart, request.LockMinutes,
-                        request.Operation, request.LimitsMinutes, request.TimeZoneId, request.ProgramName), now);
+                        request.Operation, request.LimitsMinutes, request.TimeZoneId, request.ProgramName,
+                        request.BreakAfterMinutes, request.BreakMinutes), now);
                     return ScreenTimeReply.Success(new { ticketId = ticket, canApproveDirectly = elevated });
                 }
                 catch (InvalidOperationException ex) { return ScreenTimeReply.Failure(ex.Message); }
@@ -125,7 +126,8 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     BonusMinutes = change.BonusMinutes, Enabled = change.Enabled, WeekendMinutes = change.WeekendMinutes,
                     BedtimeStart = change.BedtimeStart, BedtimeEnd = change.BedtimeEnd, WeekendBedtimeStart = change.WeekendBedtimeStart,
                     LockMinutes = change.LockMinutes, Operation = change.Operation, LimitsMinutes = change.LimitsMinutes,
-                    TimeZoneId = change.TimeZoneId, ProgramName = change.ProgramName
+                    TimeZoneId = change.TimeZoneId, ProgramName = change.ProgramName,
+                    BreakAfterMinutes = change.BreakAfterMinutes, BreakMinutes = change.BreakMinutes
                 });
                 _approvals.Complete(request.TicketId, saved);
                 if (saved.Ok)
@@ -154,6 +156,7 @@ internal sealed class ScreenTimeControlServer : IDisposable
             case "program-baseline":
             case "program-request":
             case "program-block":
+            case "pc-time-exempt":
                 // These need no approval, but they must come from DeviceMon itself (which holds the dashboard),
                 // not from another program the child runs: otherwise an empty block list or a forged seal
                 // would be one pipe message away.
@@ -162,9 +165,9 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     _log($"Refused {request.Command} from {(caller ?? "an unknown program")}: only DeviceMon may send it.");
                     return ScreenTimeReply.Failure("Only DeviceMon can do this.");
                 }
-                _snapshot = null;
+                if (request.Command != "pc-time-exempt") _snapshot = null;
                 // Rules for "this account" belong to whoever is calling, whatever the message says.
-                if (request.Command is "set-blocked-sites" or "program-baseline" or "program-request") request.UserSid = callerSid;
+                if (request.Command is "set-blocked-sites" or "program-baseline" or "program-request" or "pc-time-exempt") request.UserSid = callerSid;
                 return _handle(request);
             case "result": return _approvals.Result(request.TicketId, callerSid, now);
             case "cancel":

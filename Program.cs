@@ -27,6 +27,7 @@ internal static class Program
     private static NewAppWatcher? _newApps;
     private static ProgramGate? _programGate;
     private static SiteRequestService? _siteRequests;
+    private static AllowedAppTime? _allowedAppTime;
     private static MonitorAndControl.UI.TimeLeftTray? _timeLeftTray;
     private static LimitEnforcer? _enforcer;
     private static SchedulerService? _scheduler;
@@ -549,7 +550,10 @@ internal static class Program
         _ = SendWatchdogRestartAlertAsync();
         _ = _enforcer.RehydrateExceededTodayAsync();
 
-        _usageTracker = new UsageTracker(_db!, _tracker, _enforcer, _scheduler);
+        var categories = new AppCategories();
+        categories.ReloadAsync(_db!).GetAwaiter().GetResult();
+        _enforcer.Categories = categories;
+        _usageTracker = new UsageTracker(_db!, _tracker, _enforcer, _scheduler, categories);
         _usageTracker.Start(config.FlushIntervalSec);
 
         _websiteTracker = new WebsiteTracker(_db!, _tracker);
@@ -561,6 +565,8 @@ internal static class Program
 
         _programGate = new ProgramGate(_db!, _tracker, _enforcer);
         _programGate.Start();
+        _allowedAppTime = new AllowedAppTime(_tracker, _enforcer);
+        _allowedAppTime.Start();
 
         var webTask = Task.Run(() => StartWebServer(config));
     }
@@ -831,6 +837,7 @@ internal static class Program
         _websiteTracker?.Dispose();
         _siteRequests?.Dispose();
         _programGate?.Dispose();
+        _allowedAppTime?.Dispose();
         DashboardServer.LoginLockoutDetected = null;
         ScreenTimeEndpoints.RemoteEvent = null;
         _parentReportService?.Dispose();

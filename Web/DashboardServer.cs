@@ -755,7 +755,8 @@ public class DashboardServer
                 group.Enabled,
                 group.AppNames,
                 group.TodaySeconds,
-                group.UserSid
+                group.UserSid,
+                group.Category
             }), JsonOpts);
         });
 
@@ -768,14 +769,20 @@ public class DashboardServer
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            if (!IsValidAppName(group.Name) || group.DailyMaxMinutes is < 1 or > 1440 || group.AppNames.Count == 0 ||
-                group.AppNames.Any(name => !IsValidAppName(name)))
-                return Results.BadRequest(new { error = "A group requires a valid name, 1-1440 minutes, and at least one valid app." });
+            group.Category ??= "";
+            if (group.Category.Length > 0 && !AppCategories.Names.Contains(group.Category))
+                return Results.BadRequest(new { error = "Unknown app category." });
+            if (!IsValidAppName(group.Name) || group.DailyMaxMinutes is < 1 or > 1440 || (group.AppNames.Count == 0 && group.Category.Length == 0) ||
+                group.AppNames.Count > 100 || group.AppNames.Any(name => !IsValidAppName(name)))
+                return Results.BadRequest(new { error = "A group requires a valid name, 1-1440 minutes, and at least one valid app or a category." });
             group.UserSid ??= "";
             if (group.UserSid.Length > 0 && !AccountIdentity.IsValidSid(group.UserSid))
                 return Results.BadRequest(new { error = "Choose a Windows account." });
 
             var groups = await db.GetLimitGroupsAsync();
+            if (group.Category.Length > 0 && groups.Any(existing => existing.Id != group.Id && existing.Category == group.Category &&
+                    (existing.UserSid.Length == 0 || group.UserSid.Length == 0 || existing.UserSid == group.UserSid)))
+                return Results.BadRequest(new { error = "Another group for the same account already covers this category." });
             if (group.Id > 0 && groups.All(existing => existing.Id != group.Id))
                 return Results.NotFound(new { error = "Limit group not found." });
             if (groups.Any(existing => existing.Id != group.Id && existing.Name.Equals(group.Name, StringComparison.OrdinalIgnoreCase)))
@@ -809,6 +816,59 @@ public class DashboardServer
             await db.DeleteLimitGroupAsync(id);
             await usageTracker.ReloadLimitGroupsAsync();
             foreach (var appName in group.AppNames) enforcer.ClearExceeded(appName);
+            return Results.Ok();
+        });
+
+        // App categories for category groups: the guess for each app, and the parent's own choice.
+        app.MapGet("/api/app-categories", async () =>
+        {
+            var chosen = await db.GetAppCategoriesAsync();
+            var guesses = enforcer.Categories?.Guesses() ?? new Dictionary<string, string>();
+            var known = tracker.KnownApps;
+            var apps = new HashSet<string>(known.Values, StringComparer.OrdinalIgnoreCase);
+            apps.UnionWith(guesses.Keys);
+            apps.UnionWith(chosen.Keys);
+            apps.UnionWith((await usageTracker.GetTodayUsageIncludingPendingAsync()).Select(u => u.AppName));
+            return Results.Json(new
+            {
+                categories = AppCategories.Names,
+                apps = apps.Where(IsValidAppName).OrderBy(a => a, StringComparer.OrdinalIgnoreCase).Take(1000).Select(app => new
+                {
+                    app,
+                    guess = guesses.TryGetValue(app, out var g) ? g
+                        : AppCategories.Guess(app, known.FirstOrDefault(k => k.Value.Equals(app, StringComparison.OrdinalIgnoreCase)).Key, null),
+                    chosen = chosen.TryGetValue(app, out var c) ? c : null
+                })
+            }, JsonOpts);
+        });
+
+        app.MapPost("/api/app-categories", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            if (doc == null) return Results.BadRequest(new { error = "Invalid request." });
+            var root = doc.RootElement;
+            var appName = Clean(root.TryGetProperty("app", out var a) && a.ValueKind == JsonValueKind.String ? a.GetString() : "");
+            var category = root.TryGetProperty("category", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : "";
+            if (!IsValidAppName(appName) || (category != "auto" && !AppCategories.IsValid(category)))
+                return Results.BadRequest(new { error = "Invalid request." });
+            await _homeworkAppsGate.WaitAsync();
+            try
+            {
+                var chosen = await db.GetAppCategoriesAsync();
+                if (category == "auto") chosen.Remove(appName);
+                else
+                {
+                    if (chosen.Count >= AppCategories.MaxOverrides && !chosen.ContainsKey(appName))
+                        return Results.BadRequest(new { error = "Too many category choices." });
+                    chosen[appName] = category;
+                }
+                await db.SetAppCategoriesAsync(chosen);
+                if (enforcer.Categories is { } categories) await categories.ReloadAsync(db);
+            }
+            finally { _homeworkAppsGate.Release(); }
+            enforcer.ClearExceeded(appName);
             return Results.Ok();
         });
 
@@ -1652,7 +1712,13 @@ public class DashboardServer
                 Schedules = await db.GetScheduleRulesAsync(),
                 Settings = settings
                     .Where(kvp => ExportableSettings.Contains(kvp.Key))
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase),
+                UserLimits = await db.GetUserLimitRulesAsync(),
+                SiteLimits = await db.GetSiteLimitsAsync(),
+                UserSiteLimits = await db.GetUserSiteLimitsAsync(),
+                HomeworkApps = await db.GetHomeworkAppsAsync(),
+                AlwaysAllowedApps = await db.GetAlwaysAllowedAppsAsync(),
+                AppCategories = await db.GetAppCategoriesAsync()
             };
 
             return Results.Json(backup, JsonOpts);
@@ -1681,6 +1747,8 @@ public class DashboardServer
             var validationError = ValidateBackup(backup);
             if (validationError != null)
                 return Results.BadRequest(new { error = validationError });
+            // Rules for a Windows account that is not on this PC (a backup from another PC) cannot apply here.
+            var skippedAccountRules = SkipForeignAccounts(backup);
 
             await db.ReplaceAppMappingsAsync(backup.AppMappings);
             await db.ReplaceLimitRulesAsync(backup.Limits);
@@ -1689,6 +1757,16 @@ public class DashboardServer
             await db.ReplaceScheduleRulesAsync(backup.Schedules);
             foreach (var setting in backup.Settings.Where(kvp => ExportableSettings.Contains(kvp.Key)))
                 await db.SetSettingAsync(setting.Key, setting.Value);
+            if (backup.UserLimits != null) await db.ReplaceUserLimitRulesAsync(backup.UserLimits);
+            if (backup.SiteLimits != null) await db.ReplaceSiteLimitsAsync(backup.SiteLimits);
+            if (backup.UserSiteLimits != null) await db.ReplaceUserSiteLimitsAsync(backup.UserSiteLimits);
+            if (backup.HomeworkApps != null) await db.SetHomeworkAppsAsync(backup.HomeworkApps);
+            if (backup.AlwaysAllowedApps != null) await db.SetAlwaysAllowedAppsAsync(backup.AlwaysAllowedApps);
+            if (backup.AppCategories != null)
+            {
+                await db.SetAppCategoriesAsync(backup.AppCategories);
+                if (enforcer.Categories is { } categories) await categories.ReloadAsync(db);
+            }
 
             var importedConfig = Program.GetConfig();
             var importedHotKey = await Program.GetDashboardHotKeySettings(importedConfig);
@@ -1713,7 +1791,7 @@ public class DashboardServer
             if (emailService.IsEnabled) emailService.StartPolling(); else emailService.StopPolling();
             await Program.ReloadParentReportingAsync();
 
-            return Results.Ok(new { status = "imported" });
+            return Results.Ok(new { status = "imported", skippedAccountRules });
         });
 
         app.MapGet("/api/logs", (HttpContext ctx, int count = 200) =>
@@ -1975,7 +2053,7 @@ public class DashboardServer
 
     private static bool IsValidProcessName(string value) => InputValidation.IsValidProcessName(value);
 
-    // Shared by the homework and always-allowed app lists (both are small settings rewritten whole).
+    // Shared by the homework and always-allowed app lists and the category choices (small settings rewritten whole).
     private static readonly SemaphoreSlim _homeworkAppsGate = new(1, 1);
 
     private static async Task<IResult> SendProgramsAsync(ScreenTimeRequest request, HttpContext ctx)
@@ -2106,6 +2184,27 @@ public class DashboardServer
         "en", "de", "es", "ru", "fr"
     };
 
+    /// <summary>Drops rules for Windows accounts that do not exist on this PC; returns how many.</summary>
+    private static int SkipForeignAccounts(ConfigBackup backup)
+    {
+        var known = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        bool Foreign(string? sid)
+        {
+            if (string.IsNullOrEmpty(sid)) return false;
+            if (!known.TryGetValue(sid, out var exists))
+            {
+                try { new System.Security.Principal.SecurityIdentifier(sid).Translate(typeof(System.Security.Principal.NTAccount)); exists = true; }
+                catch { exists = false; }
+                known[sid] = exists;
+            }
+            return !exists;
+        }
+        var skipped = backup.LimitGroups.RemoveAll(g => Foreign(g.UserSid)) + backup.Schedules.RemoveAll(s => Foreign(s.UserSid));
+        if (backup.UserLimits != null) skipped += backup.UserLimits.RemoveAll(l => Foreign(l.UserSid));
+        if (backup.UserSiteLimits != null) skipped += backup.UserSiteLimits.RemoveAll(l => Foreign(l.UserSid));
+        return skipped;
+    }
+
     private static string? ValidateBackup(ConfigBackup backup)
     {
         if (backup.AppMappings.Count > 500 || backup.Limits.Count > 500 || backup.Schedules.Count > 500 || backup.LimitGroups.Count > 100)
@@ -2134,12 +2233,20 @@ public class DashboardServer
         }
 
         var groupedApps = new List<(string Sid, string App)>();
+        var groupedCategories = new List<(string Sid, string Category)>();
         foreach (var group in backup.LimitGroups)
         {
             group.Id = 0;
             group.Name = Clean(group.Name);
-            group.AppNames = group.AppNames.Select(Clean).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            if (!IsValidAppName(group.Name) || group.DailyMaxMinutes is < 1 or > 1440 || group.AppNames.Count == 0 ||
+            group.AppNames = (group.AppNames ?? new()).Select(Clean).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            group.Category ??= "";
+            if (group.Category.Length > 0 && !AppCategories.Names.Contains(group.Category))
+                return "Backup contains an invalid limit group.";
+            if (group.Category.Length > 0 && groupedCategories.Any(g => g.Category == group.Category
+                    && (g.Sid.Length == 0 || (group.UserSid ?? "").Length == 0 || g.Sid == group.UserSid)))
+                return "Two limit groups for the same account cover the same category in the backup.";
+            if (group.Category.Length > 0) groupedCategories.Add((group.UserSid ?? "", group.Category));
+            if (!IsValidAppName(group.Name) || group.DailyMaxMinutes is < 1 or > 1440 || (group.AppNames.Count == 0 && group.Category.Length == 0) ||
                 group.AppNames.Count > 100 || group.AppNames.Any(name => !IsValidAppName(name)))
                 return "Backup contains an invalid limit group.";
             group.UserSid ??= "";
@@ -2156,6 +2263,58 @@ public class DashboardServer
         {
             if (!NormalizeScheduleRule(rule))
                 return "Backup contains an invalid schedule rule.";
+        }
+
+        if (backup.UserLimits is { } userLimits)
+        {
+            if (userLimits.Count > 300) return "Backup contains too many records.";
+            foreach (var limit in userLimits)
+            {
+                if (limit == null) return "Backup contains an invalid account limit.";
+                limit.AppName = Clean(limit.AppName);
+                if (!IsValidAppName(limit.AppName) || limit.DailyMaxMinutes is < 1 or > 1440 || !AccountIdentity.IsValidSid(limit.UserSid))
+                    return "Backup contains an invalid account limit.";
+            }
+            backup.UserLimits = userLimits.GroupBy(l => (l.AppName.ToLowerInvariant(), l.UserSid)).Select(g => g.Last()).ToList();
+        }
+
+        foreach (var (sites, forAccount) in new[] { (backup.SiteLimits, false), (backup.UserSiteLimits, true) })
+        {
+            if (sites == null) continue;
+            if (sites.Count > MonitorAndControl.ScreenTime.SiteBlocking.MaxHosts * (forAccount ? 10 : 1)) return "Backup contains too many website rules.";
+            foreach (var site in sites)
+            {
+                if (site == null || !MonitorAndControl.ScreenTime.SiteBlocking.TryNormalizeHost(site.Host, out var host) || site.DailyMaxMinutes is < -1 or > 1440)
+                    return "Backup contains an invalid website rule.";
+                site.Host = host;
+                site.UserSid ??= "";
+                if (forAccount ? !AccountIdentity.IsValidSid(site.UserSid) : site.UserSid.Length > 0)
+                    return "Backup contains an invalid website rule.";
+            }
+        }
+
+        foreach (var list in new[] { backup.HomeworkApps, backup.AlwaysAllowedApps })
+        {
+            if (list == null) continue;
+            if (list.Count > 500) return "Backup contains too many records.";
+            for (var i = 0; i < list.Count; i++)
+            {
+                list[i] = Clean(list[i]);
+                if (!IsValidAppName(list[i])) return "Backup contains an invalid app name.";
+            }
+        }
+
+        if (backup.AppCategories is { } chosenCategories)
+        {
+            if (chosenCategories.Count > AppCategories.MaxOverrides) return "Backup contains too many records.";
+            var clean = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (app, category) in chosenCategories)
+            {
+                var name = Clean(app);
+                if (!IsValidAppName(name) || !AppCategories.IsValid(category)) return "Backup contains an invalid app category.";
+                clean[name] = category;
+            }
+            backup.AppCategories = clean;
         }
 
         var cleanSettings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

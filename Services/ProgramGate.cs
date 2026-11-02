@@ -180,7 +180,7 @@ public sealed class ProgramGate : IDisposable
         catch (Exception ex) { Logger.Instance.Warn("New program check skipped: " + ex.Message); }
     }
 
-    private static string? IdentityOf(string processName, string? path)
+    internal static string? IdentityOf(string processName, string? path)
     {
         string? original = null;
         try { if (!string.IsNullOrEmpty(path) && File.Exists(path)) original = FileVersionInfo.GetVersionInfo(path).OriginalFilename; }
@@ -191,7 +191,7 @@ public sealed class ProgramGate : IDisposable
     private static string? Field(ScreenTimeReply reply, string name) =>
         reply.Data is { } data && data.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String ? value.GetString() : null;
 
-    private static string? ProgramPath(string processName)
+    internal static string? ProgramPath(string processName)
     {
         foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(processName)))
         {

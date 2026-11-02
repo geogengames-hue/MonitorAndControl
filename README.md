@@ -38,7 +38,9 @@ and monitor usage — all from a beautiful web dashboard.
 - **Schedule rules** — define allowed hours per app (e.g. weekdays 15:00–21:00)
 - **New programs need your OK** — optional: a program that was not on the PC when you turned it on stays closed until you allow it from the phone alert or PC Time
 - **Ask to open a site** — when the child lands on a blocked website they can ask you; the alert has Allow and Not now buttons
-- **Always-allowed apps** — school apps, a calculator or a music tutor are never closed by schedules, limits, homework mode or Block now
+- **Always-allowed apps** — school apps, a calculator or a music tutor are never closed by schedules, limits, homework mode or Block now, and time in them does not use up PC time
+- **Break reminders** — after a stretch of use (for example 45 minutes) the PC locks for a short break
+- **App categories** — a group such as "Games 1 h" can cover every game, including ones installed later
 - **Auto‑detection** — scan the system for installed games/apps and add them with one click
 - **Web dashboard** — responsive SPA with live status, usage charts, history, logs, and settings
 - **Multi‑language** — English, German, Spanish, French, Russian (auto‑translates the dashboard UI)
@@ -48,7 +50,7 @@ and monitor usage — all from a beautiful web dashboard.
 - **Admin password** — protect dashboard changes and shutdown
 - **Remote dashboard login** — remote users are redirected to a login page; authenticated sessions use an HTTP-only cookie and can be explicitly logged out
 - **Secure defaults** — the dashboard binds to localhost by default, and remote API access is denied until an administrator authenticates
-- **Config export/import** — backup and restore limits, schedules, app mappings, and tracking policies
+- **Config export/import** — backup and restore limits, schedules, groups, account limits, website rules, homework and always-allowed apps, categories, app mappings, and tracking policies
 - **Hotkey** — `Ctrl+Alt+H` opens the dashboard by default and can be changed in Settings
 
 ---
@@ -120,6 +122,10 @@ When several executables map to the same app name, they share one usage total an
 ### Shared limit groups
 
 The Limits page can combine tracked applications into a named group such as **Games** with one shared daily allowance. Time used by any member consumes the group pool. If multiple members run simultaneously, the group records real elapsed time only once instead of adding every member's duration. An app can belong to at most one group and may still have an individual limit; reaching either limit blocks that app. A group breach shows one countdown for the group, closes running members, and blocks every member for the rest of the day. Shared group totals appear separately in Today and History so they are not added to individual-app totals. Group definitions are included in configuration export/import, and importing definitions preserves existing group history and today's consumed allowance.
+
+### App categories
+
+A group can also cover a whole **category**: in the group form choose **+ all Games** (or Social apps, Video apps, Browsers, School apps). The group then counts every app of that category, including a game first installed after you made the group, so "Games 1 h" cannot be dodged with a new game. DeviceMon guesses each app's category from its name and from where it is installed (Steam, Epic, Riot, Xbox, GOG, Ubisoft, EA, Roblox, Battle.net and Minecraft folders count as games). **Limits > App categories** lists the apps seen and the guesses; change one from its dropdown if it is wrong, or choose **No category**. An app ticked by name in a group belongs only to that group, so one game can still have its own group. Only one group per account can cover a category. Category choices and group categories are part of **Protect limits** and of the configuration backup.
 
 > **Important:** Background mode measures process runtime, not microphone activity. An application left open but unused continues accumulating time, and its daily limit can be reached while it remains in the background.
 
@@ -386,6 +392,8 @@ It uses the same address reading as website time, also when website time is off 
 
 Under **Limits > Always allowed**, list apps that DeviceMon must **never close**: not by the schedule (including "all apps" rules), app limits, shared groups, homework mode, **Block now** or the new-program check. Use it for school apps, a calculator or a music tutor. The list is part of **Protect limits**. Bedtime, PC time running out and **Lock now** are enforced by the SYSTEM service for the whole account (signing it out or locking it), so they still apply. Apps are recognised by their name in your tracked apps.
 
+Time while an always-allowed app is **in front** does not use up the account's **PC Time** allowance. DeviceMon tells the SYSTEM service every few seconds; if DeviceMon is closed, the reports stop and the time is counted again. Only the real program counts: a program renamed to an always-allowed name is recognised by the name built into it (a program without a built-in name could still be renamed). Break reminders still count this time.
+
 ### Alerts that link to the dashboard, and new-program alerts
 
 - **Phone alerts open the right page.** ntfy alerts have an **Open dashboard** button and a tap-to-open link; Telegram alerts end with the link. A time request opens PC Time, a new program opens Limits, tampering opens Logs. The link uses `http://<this PC>:<port>` when the remote dashboard is on; set **Dashboard address for links** (Settings > Phone notifications) to the address your phone really uses, for example `http://192.168.1.20:5000`. Your phone must be able to reach the dashboard, on the home network or over a VPN.
@@ -437,6 +445,7 @@ Besides per-app limits, you can give a standard Windows account a **daily PC-tim
 - **Weekend limit:** each account can have different minutes for Saturday and Sunday. Leave **Weekend minutes** at 0 to use the daily minutes every day.
 - **Bedtime:** set a **Bedtime** and **Wake-up time** and the account is signed out from bedtime until wake-up, whatever allowance is left (and again if it signs in during that time). Warnings appear 10, 5 and 1 minutes before. Optionally set a later **Weekend bedtime**, used on Friday and Saturday nights.
 - **Ask for more time:** at the 5-minute warning the child sees a Yes/No box, "Ask your parent for more time?". Answering Yes sends you an email/webhook alert (even if tamper alerts are off; turn it off with the database setting `TimeRequestAlertsEnabled=false`). Open **PC Time**, press **Add 15 / 30 / 60 min** next to the request, and save as usual (UAC on the PC, PIN from another device); saving closes the request. Phone alerts have **Add** and **Not now** buttons (see "Alerts that link to the dashboard"). Only one request per account can wait at a time, and it expires after 12 hours. Requests extend the daily allowance, not bedtime.
+- **Break reminders:** set **Break after** (15 to 240 minutes of use in a row) and **Break length** (5 to 120 minutes), for example 45 and 10. When the time is up the account is sent to the Windows sign-in screen until the break is over (its programs keep running), with warnings 5 minutes and 1 minute before. Being away from the PC (locked, signed out, asleep) for a whole break length also counts as a break. **PC Time** shows "On a break until ...". Breaks are part of the PC Time rule, so changing them needs the same approval; 0 turns them off.
 - **Lock now (pause this PC):** on **PC Time**, enter minutes and press **Lock now** to send the selected account back to the Windows sign-in screen immediately, for homework or dinner. Its programs keep running, and signing in again gets it locked again within a few seconds until the time is up; time spent locked is not counted against the allowance. **Unlock now** ends it early. Locking uses the same approval as other changes (UAC on the PC, the remote PIN from another device), lasts at most 12 hours, and works even for an account without a daily limit.
 - Requires the GameHost service to be installed and running.
 

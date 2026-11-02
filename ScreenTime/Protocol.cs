@@ -13,6 +13,9 @@ public sealed class ScreenTimeRequest
     public string BedtimeStart { get; set; } = "";
     public string BedtimeEnd { get; set; } = "";
     public string WeekendBedtimeStart { get; set; } = "";
+    /// <summary>Break reminders: lock for BreakMinutes after BreakAfterMinutes of use in a row (0 = off).</summary>
+    public int BreakAfterMinutes { get; set; }
+    public int BreakMinutes { get; set; }
     /// <summary>0 = leave the lock alone, negative = unlock now, positive = lock for that many minutes.</summary>
     public int LockMinutes { get; set; }
     /// <summary>"limits-open", "limits-clear", "homework-stop", "timezone-accept", "programs-off" or "program-allow":

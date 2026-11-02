@@ -940,6 +940,7 @@ async function loadLimits() {
     ]);
     fillAccountSelect(document.getElementById('group-account'), editingGroup?.userSid);
     renderLimitGroups(groups, known, limits);
+    loadAppCategories();
     const table = document.getElementById('limits-table');
     if (!Array.isArray(mappings)) {
       table.innerHTML = `<p style="color:#ff4444;text-align:center">${t('Failed to load app mappings')}</p>`;
@@ -1078,7 +1079,7 @@ function renderLimitGroups(groups, known, limits) {
       const exceeded = group.enabled && group.todaySeconds >= max;
       html += `<tr data-group-id="${group.id}">
         <td><strong>${esc(group.name)}</strong>${group.userSid ? `<br><small>${t('Only {name}', { name: esc(accountLabel(group.userSid)) })}</small>` : ''}</td>
-        <td>${group.appNames.map(esc).join(', ')}</td>
+        <td>${[...group.appNames.map(esc), ...(group.category ? [`<em>${esc(categoryLabel(group.category, true))}</em>`] : [])].join(', ')}</td>
         <td>${group.dailyMaxMinutes} ${t('min')}</td>
         <td data-group-today>${formatDuration(group.todaySeconds)}</td>
         <td data-group-status>${group.enabled ? (exceeded ? `<span style="color:#ff4444">${t('Exceeded')}</span>` : `<span style="color:${pct > 80 ? '#ff8800' : '#44bb44'}">${pct}%</span>`) : `<span style="color:#666">${t('Disabled')}</span>`}</td>
@@ -1100,6 +1101,7 @@ function editLimitGroup(id) {
   document.getElementById('group-name').value = editingGroup.name;
   document.getElementById('group-minutes').value = editingGroup.dailyMaxMinutes;
   document.getElementById('group-enabled').checked = editingGroup.enabled;
+  document.getElementById('group-category').value = editingGroup.category || '';
   fillAccountSelect(document.getElementById('group-account'), editingGroup.userSid || '');
   document.getElementById('group-cancel').classList.remove('hidden');
   renderLimitGroups(currentLimitGroups, Object.fromEntries(currentGroupApps.map((app, i) => [i, app])), []);
@@ -1111,6 +1113,7 @@ function resetLimitGroupForm() {
   document.getElementById('group-minutes').value = 180;
   document.getElementById('group-enabled').checked = true;
   document.getElementById('group-account').value = '';
+  document.getElementById('group-category').value = '';
   document.getElementById('group-cancel').classList.add('hidden');
   renderLimitGroups(currentLimitGroups, Object.fromEntries(currentGroupApps.map((app, i) => [i, app])), []);
 }
@@ -1119,14 +1122,15 @@ document.getElementById('group-save').addEventListener('click', async () => {
   const name = document.getElementById('group-name').value.trim();
   const dailyMaxMinutes = parseInt(document.getElementById('group-minutes').value);
   const appNames = [...document.querySelectorAll('#group-members input:checked')].map(input => input.value);
-  if (!name || !dailyMaxMinutes || !appNames.length) {
-    alert(t('Enter a group name, daily limit, and select at least one app.'));
+  const category = document.getElementById('group-category').value;
+  if (!name || !dailyMaxMinutes || (!appNames.length && !category)) {
+    alert(t('Enter a group name, daily limit, and select at least one app or a category.'));
     return;
   }
   try {
     await api('/api/limit-groups', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: editingGroup?.id || 0, name, dailyMaxMinutes, enabled: document.getElementById('group-enabled').checked, appNames, userSid: document.getElementById('group-account').value })
+      body: JSON.stringify({ id: editingGroup?.id || 0, name, dailyMaxMinutes, enabled: document.getElementById('group-enabled').checked, appNames, userSid: document.getElementById('group-account').value, category })
     });
     resetLimitGroupForm();
     loadLimits();
@@ -1134,6 +1138,34 @@ document.getElementById('group-save').addEventListener('click', async () => {
 });
 
 document.getElementById('group-cancel').addEventListener('click', resetLimitGroupForm);
+
+function categoryLabel(category, all) {
+  const names = { games: 'Games', social: 'Social apps', video: 'Video apps', browsers: 'Browsers', school: 'School apps', none: 'No category' };
+  const label = t(names[category] || category);
+  return all ? t('+ all {category}', { category: label }) : label;
+}
+
+// Each app's category: DeviceMon's guess, or the parent's choice from the dropdown (saved at once).
+async function loadAppCategories() {
+  const box = document.getElementById('app-categories-table');
+  try {
+    const data = await api('/api/app-categories');
+    if (!data.apps.length) { box.innerHTML = `<p style="color:#888;text-align:center;padding:12px">${t('No apps seen yet.')}</p>`; return; }
+    let html = `<table><thead><tr><th>${t('App')}</th><th>${t('Guess')}</th><th>${t('Category')}</th></tr></thead><tbody>`;
+    data.apps.forEach(item => {
+      const options = ['auto', ...data.categories, 'none'].map(value =>
+        `<option value="${value}" ${(item.chosen || 'auto') === value ? 'selected' : ''}>${value === 'auto' ? t('Use the guess') : esc(categoryLabel(value))}</option>`).join('');
+      html += `<tr><td><strong>${esc(item.app)}</strong></td><td>${item.guess ? esc(categoryLabel(item.guess)) : '-'}</td>
+        <td><select class="app-category" data-app="${escAttr(item.app)}" title="${t('The category this app counts in.')}">${options}</select></td></tr>`;
+    });
+    box.innerHTML = html + '</tbody></table>';
+    box.querySelectorAll('.app-category').forEach(select => select.addEventListener('change', async () => {
+      try {
+        await api('/api/app-categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ app: select.dataset.app, category: select.value }) });
+      } catch (e) { log(e); alert(e.message); loadAppCategories(); }
+    }));
+  } catch (e) { log(e); }
+}
 
 async function deleteLimitGroup(id) {
   const group = currentLimitGroups.find(item => item.id === id);
@@ -1787,13 +1819,15 @@ document.getElementById('settings-import-config').addEventListener('click', asyn
   try {
     const text = await file.text();
     JSON.parse(text);
-    await api('/api/config/import', {
+    const result = await api('/api/config/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: text
     });
     el.style.color = '#44bb44';
-    el.textContent = t('Imported');
+    el.textContent = result?.skippedAccountRules
+      ? t('Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.', { n: result.skippedAccountRules })
+      : t('Imported');
     loadSettings();
     loadLimits();
     loadSchedule();

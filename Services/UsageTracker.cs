@@ -9,6 +9,7 @@ public class UsageTracker : IDisposable
     private readonly WindowTracker _windowTracker;
     private readonly LimitEnforcer _limitEnforcer;
     private readonly SchedulerService _scheduler;
+    private readonly AppCategories _categories;
     private readonly System.Threading.Timer _sampleTimer;
     private readonly System.Threading.Timer _flushTimer;
     private readonly SemaphoreSlim _flushLock = new(1, 1);
@@ -22,12 +23,13 @@ public class UsageTracker : IDisposable
     private int _sampling;
     private bool _running;
 
-    public UsageTracker(UsageDatabase db, WindowTracker wt, LimitEnforcer enforcer, SchedulerService scheduler)
+    public UsageTracker(UsageDatabase db, WindowTracker wt, LimitEnforcer enforcer, SchedulerService scheduler, AppCategories categories)
     {
         _db = db;
         _windowTracker = wt;
         _limitEnforcer = enforcer;
         _scheduler = scheduler;
+        _categories = categories;
         _sampleTimer = new System.Threading.Timer(OnSample, null, Timeout.Infinite, Timeout.Infinite);
         _flushTimer = new System.Threading.Timer(OnFlush, null, Timeout.Infinite, Timeout.Infinite);
     }
@@ -35,6 +37,7 @@ public class UsageTracker : IDisposable
     public void Start(int flushIntervalSec = 30)
     {
         _limitGroups = ForThisAccount(_db.GetLimitGroupsAsync().GetAwaiter().GetResult());
+        SetGroupState(_limitGroups);
         _running = true;
         _lastSampleTick = Environment.TickCount64;
         _sampleTimer.Change(1000, 1000);
@@ -50,7 +53,12 @@ public class UsageTracker : IDisposable
         var groups = ForThisAccount(await _db.GetLimitGroupsAsync());
         lock (_usageSync)
             _limitGroups = groups;
+        SetGroupState(groups);
     }
+
+    // Which of this account's groups have used up today's time (for closing an app of a used-up category at once).
+    private void SetGroupState(List<AppLimitGroup> groups) =>
+        _limitEnforcer.SetGroupState(groups, groups.Where(g => g.Enabled && g.TodaySeconds >= g.DailyMaxMinutes * 60L).Select(g => g.Id));
 
     public async Task<List<AppUsageRecord>> GetTodayUsageIncludingPendingAsync()
     {
@@ -203,6 +211,10 @@ public class UsageTracker : IDisposable
                 _windowTracker.CurrentProcessName ?? "unknown",
                 IsForeground: true);
 
+        // Looked up outside the lock: the first time an app is seen, its program file is read.
+        var categories = activeApps.ToDictionary(a => a.Key,
+            a => _categories.CategoryOf(a.Key, a.Value.ProcessName == "unknown" ? null : a.Value.ProcessName), StringComparer.OrdinalIgnoreCase);
+
         lock (_usageSync)
         {
             foreach (var active in activeApps)
@@ -219,11 +231,14 @@ public class UsageTracker : IDisposable
                 };
             }
 
-            foreach (var group in _limitGroups)
+            // Each group counts once, however many of its apps run together.
+            var counted = activeApps.Keys
+                .SelectMany(app => AppCategories.GroupsFor(app, categories[app], _limitGroups))
+                .Select(g => g.Id).ToHashSet();
+            foreach (var groupId in counted)
             {
-                if (!group.AppNames.Any(activeApps.ContainsKey)) continue;
-                _pendingGroupMilliseconds.TryGetValue(group.Id, out var pending);
-                _pendingGroupMilliseconds[group.Id] = pending + elapsedMs;
+                _pendingGroupMilliseconds.TryGetValue(groupId, out var pending);
+                _pendingGroupMilliseconds[groupId] = pending + elapsedMs;
             }
         }
     }
@@ -322,14 +337,23 @@ public class UsageTracker : IDisposable
                 if (usedSecs >= maxSecs && !breached.Any(b => b.AppName.Equals(app, StringComparison.OrdinalIgnoreCase)))
                     breached.Add((app, usedSecs, maxSecs));
 
+            await _categories.ReloadAsync(_db);
             var refreshedGroups = ForThisAccount(await _db.GetLimitGroupsAsync());
+            var seenApps = _categories.SeenApps();
             foreach (var group in refreshedGroups.Where(g => g.Enabled))
             {
                 var maxSecs = group.DailyMaxMinutes * 60L;
                 if (group.TodaySeconds < maxSecs) continue;
+                // A category group also covers the other apps of its category that ran in this session.
+                var categoryApps = group.Category.Length == 0 ? new List<string>() : seenApps
+                    .Where(seen => !group.AppNames.Contains(seen.Key, StringComparer.OrdinalIgnoreCase)
+                        && AppCategories.GroupsFor(seen.Key, _categories.CategoryOf(seen.Key, seen.Value), refreshedGroups).Any(g => g.Id == group.Id)
+                        && _windowTracker.IsProcessRunning(seen.Value))
+                    .Select(seen => seen.Key).ToList();
                 breachedGroups.Add(new GroupLimitBreach(
-                    group.Id, group.Name, group.AppNames, group.TodaySeconds, maxSecs));
+                    group.Id, group.Name, group.AppNames, group.TodaySeconds, maxSecs, categoryApps));
             }
+            _limitEnforcer.SetGroupState(refreshedGroups, breachedGroups.Select(g => g.GroupId));
 
             var knownAppNames = new HashSet<string>(
                 _windowTracker.KnownApps.Values,
@@ -343,7 +367,8 @@ public class UsageTracker : IDisposable
 
             _limitEnforcer.SetAlwaysAllowed(await _db.GetAlwaysAllowedAppsAsync());
             await _limitEnforcer.EnforceAsync(breached, breachedGroups, scheduleViolationApps, homeworkApps);
-            _limitEnforcer.PruneExceeded(breached.Select(b => b.AppName).Concat(breachedGroups.SelectMany(g => g.AppNames)));
+            _limitEnforcer.PruneExceeded(breached.Select(b => b.AppName)
+                .Concat(breachedGroups.SelectMany(g => g.AppNames.Concat(g.CategoryApps ?? Array.Empty<string>()))));
         }
         finally
         {

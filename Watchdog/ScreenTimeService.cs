@@ -31,6 +31,8 @@ internal sealed class ScreenTimeService : IDisposable
     private long _lastZoneCheck;
     private long _lastActiveCheck;
     private IReadOnlyCollection<string> _activeSids = Array.Empty<string>();
+    // Accounts whose DeviceMon reports an always-allowed app in front: that time is not PC time (until the report goes stale).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _exemptUntil = new();
     private readonly string _heartbeatPath;
     private readonly System.Threading.Timer _heartbeatTimer;
     // The check-in connects only to public addresses, also when a name resolves to a home-network one.
@@ -189,7 +191,7 @@ internal sealed class ScreenTimeService : IDisposable
             {
                 var result = JsonSerializer.Deserialize<Dictionary<string, ScreenTimeUsage>>(File.ReadAllText(path))
                     ?? throw new InvalidDataException();
-                if (result.Values.Any(u => !double.IsFinite(u.Seconds) || u.Seconds < 0
+                if (result.Values.Any(u => !double.IsFinite(u.Seconds) || u.Seconds < 0 || !double.IsFinite(u.RunSeconds)
                     || !DateOnly.TryParseExact(u.Day, "yyyy-MM-dd", out _)))
                     throw new InvalidDataException();
                 if (path.EndsWith(".bak")) _log("Screen-time: recovered usage backup.");
@@ -219,18 +221,33 @@ internal sealed class ScreenTimeService : IDisposable
                 if (!_usage.TryGetValue(policy.ProfileId, out var usage))
                     _usage[policy.ProfileId] = usage = new();
                 var userSessions = sessions.Where(s => s.Sid == policy.UserSid).ToList();
-                ScreenTimeRules.Advance(usage, today,
-                    policy.Enabled && !ScreenTimeRules.IsLocked(policy, utcNow) && userSessions.Any(s => s.Unlocked) ? elapsed : 0);
+                var inUse = policy.Enabled && !ScreenTimeRules.IsLocked(policy, utcNow) && !ScreenTimeRules.OnBreak(usage, utcNow)
+                            && userSessions.Any(s => s.Unlocked);
+                var exempt = _exemptUntil.TryGetValue(policy.UserSid, out var exemptUntil) && exemptUntil > utcNow;
+                ScreenTimeRules.Advance(usage, today, inUse && !exempt ? elapsed : 0);
+                // Break reminders count all use in a row, also in always-allowed apps (it is about resting the eyes).
+                var (startBreak, warnMinutes) = ScreenTimeRules.AdvanceBreak(policy, usage, utcNow, inUse ? elapsed : 0);
+                if (startBreak)
+                {
+                    PersistUsage(tick, force: true);
+                    _log($"Screen-time: break for {policy.UserSid} until {usage.BreakUntilUtc:O}.");
+                    foreach (var session in userSessions.Where(s => s.Unlocked))
+                        ScreenTimeWindows.Warn(session.SessionId, $"Time for a {policy.BreakMinutes}-minute break. The PC locks now and can be used again at {ParentClock.ToRuleTime(usage.BreakUntilUtc!.Value):HH:mm}.");
+                }
+                else if (warnMinutes > 0)
+                    foreach (var session in userSessions.Where(s => s.Unlocked))
+                        ScreenTimeWindows.Warn(session.SessionId, $"A {policy.BreakMinutes}-minute break starts in about {warnMinutes} minute(s). Save your work.");
             }
-            // A parent's "lock now": keep the account at the sign-in screen (programs keep running)
+            // A parent's "lock now" or a break: keep the account at the sign-in screen (programs keep running)
             // until the time is up. Signing back in just gets it locked again a few seconds later.
-            foreach (var policy in policies.Where(p => ScreenTimeRules.IsLocked(p, utcNow)))
+            foreach (var policy in policies.Where(p => ScreenTimeRules.IsLocked(p, utcNow)
+                         || p.Enabled && p.BreakAfterMinutes > 0 && _usage.TryGetValue(p.ProfileId, out var u) && ScreenTimeRules.OnBreak(u, utcNow)))
             {
                 foreach (var session in sessions.Where(s => s.Sid == policy.UserSid && s.Unlocked))
                 {
                     if (_locks.TryGetValue(session.SessionId, out var lastLock) && tick - lastLock < 5000) continue;
                     _locks[session.SessionId] = tick;
-                    try { ScreenTimeWindows.Lock(session.SessionId, policy.UserSid); _log("Screen-time: parent lock; disconnected " + policy.UserSid); }
+                    try { ScreenTimeWindows.Lock(session.SessionId, policy.UserSid); _log((ScreenTimeRules.IsLocked(policy, utcNow) ? "Screen-time: parent lock; disconnected " : "Screen-time: break; disconnected ") + policy.UserSid); }
                     catch (Exception ex) { _log("Screen-time: could not lock session: " + ex.Message); }
                 }
             }
@@ -484,6 +501,13 @@ internal sealed class ScreenTimeService : IDisposable
 
     private ScreenTimeReply HandleControl(ScreenTimeRequest request)
     {
+        if (request.Command == "pc-time-exempt")
+        {
+            // DeviceMon (checked by the control server) reports that an always-allowed app is in front of the
+            // calling account; the report lapses on its own if DeviceMon stops sending it.
+            if (request.UserSid.Length > 0) _exemptUntil[request.UserSid] = DateTimeOffset.UtcNow.AddSeconds(8);
+            return ScreenTimeReply.Success(new { exempt = true });
+        }
         List<ScreenTimeWindows.Account> accounts;
         try { accounts = ScreenTimeWindows.Accounts(includeExcluded: true); }
         catch { return ScreenTimeReply.Failure("Could not list local accounts."); }
@@ -669,6 +693,7 @@ internal sealed class ScreenTimeService : IDisposable
                         // Only disabling an old rule is allowed after a promotion/removal.
                     }
                     var policy = existing ?? new ScreenTimePolicy { UserSid = request.UserSid };
+                    var previousBreak = (policy.BreakAfterMinutes, policy.BreakMinutes);
                     policy.DisplayName = account?.Name ?? policy.DisplayName;
                     policy.DailyMinutes = request.DailyMinutes;
                     policy.WeekendMinutes = request.WeekendMinutes;
@@ -676,6 +701,8 @@ internal sealed class ScreenTimeService : IDisposable
                     policy.BedtimeStart = request.BedtimeStart ?? "";
                     policy.BedtimeEnd = request.BedtimeEnd ?? "";
                     policy.WeekendBedtimeStart = request.WeekendBedtimeStart ?? "";
+                    policy.BreakAfterMinutes = request.BreakAfterMinutes;
+                    policy.BreakMinutes = request.BreakAfterMinutes > 0 ? request.BreakMinutes : 0;
                     var todayText = ParentClock.Today.ToString("yyyy-MM-dd");
                     var previousBonus = existing != null && existing.BonusDay == todayText ? existing.BonusMinutes : 0;
                     policy.Enabled = request.Enabled;
@@ -685,13 +712,25 @@ internal sealed class ScreenTimeService : IDisposable
                     if (request.Command == "validate") return ScreenTimeReply.Success(new { valid = true });
                     if (existing == null) policies.Add(policy);
                     ScreenTimeFiles.WriteAtomic(ScreenTimeFiles.PoliciesPath, policies);
+                    // Unlock now, or breaks turned off, ends a break in progress; a shorter break length shortens it.
+                    if (_usage.TryGetValue(policy.ProfileId, out var run))
+                    {
+                        var now = DateTimeOffset.UtcNow;
+                        if (request.LockMinutes < 0 || policy.BreakAfterMinutes == 0) { run.BreakUntilUtc = null; run.RunSeconds = 0; run.RunWarned = 0; }
+                        else if (previousBreak != (policy.BreakAfterMinutes, policy.BreakMinutes))
+                        {
+                            if (run.BreakUntilUtc is { } until && until > now.AddMinutes(policy.BreakMinutes)) run.BreakUntilUtc = now.AddMinutes(policy.BreakMinutes);
+                            run.RunWarned = 0;
+                        }
+                        PersistUsage(_clock.ElapsedMilliseconds, force: true);
+                    }
                     // Adding time (or turning control off) answers any waiting request from this account.
                     if (request.BonusMinutes > previousBonus || !policy.Enabled)
                     {
                         try { TimeRequestStore.Resolve(policy.UserSid); } catch (Exception ex) { _log("Screen-time: could not close request: " + ex.Message); }
                     }
                     File.AppendAllText(Path.Combine(ScreenTimeFiles.DirectoryPath, "admin-audit.log"),
-                        $"{DateTimeOffset.Now:o} {(viaRemote ? "Remote PIN authorized" : "Windows admin authorized")} policy for {policy.UserSid}; minutes={policy.DailyMinutes}; weekend={policy.WeekendMinutes}; bedtime={policy.BedtimeStart}-{policy.BedtimeEnd}/{policy.WeekendBedtimeStart}; lockUntil={policy.LockUntilUtc:o}; enabled={policy.Enabled}; bonus={policy.BonusMinutes}{Environment.NewLine}");
+                        $"{DateTimeOffset.Now:o} {(viaRemote ? "Remote PIN authorized" : "Windows admin authorized")} policy for {policy.UserSid}; minutes={policy.DailyMinutes}; weekend={policy.WeekendMinutes}; bedtime={policy.BedtimeStart}-{policy.BedtimeEnd}/{policy.WeekendBedtimeStart}; break={policy.BreakAfterMinutes}/{policy.BreakMinutes}; lockUntil={policy.LockUntilUtc:o}; enabled={policy.Enabled}; bonus={policy.BonusMinutes}{Environment.NewLine}");
                     return ScreenTimeReply.Success(new { saved = true, userSid = policy.UserSid });
                 }
                 foreach (var policy in policies)
@@ -708,6 +747,8 @@ internal sealed class ScreenTimeService : IDisposable
                             dailyMinutes = p.DailyMinutes, weekendMinutes = p.WeekendMinutes, enabled = p.Enabled,
                             bedtimeStart = p.BedtimeStart, bedtimeEnd = p.BedtimeEnd, weekendBedtimeStart = p.WeekendBedtimeStart,
                             lockedUntilUtc = ScreenTimeRules.IsLocked(p, DateTimeOffset.UtcNow) ? p.LockUntilUtc : null,
+                            breakAfterMinutes = p.BreakAfterMinutes, breakMinutes = p.BreakMinutes,
+                            breakUntilUtc = ScreenTimeRules.OnBreak(usage, DateTimeOffset.UtcNow) ? usage.BreakUntilUtc : null,
                             bonusMinutes = p.BonusDay == today.ToString("yyyy-MM-dd") ? p.BonusMinutes : 0,
                             usedSeconds = (long)Math.Ceiling(usage.Seconds),
                             remainingSeconds = ScreenTimeRules.Remaining(p, usage, today)

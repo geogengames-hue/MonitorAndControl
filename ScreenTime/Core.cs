@@ -20,11 +20,15 @@ public sealed class ScreenTimePolicy
     public bool Enabled { get; set; } = true;
     public string BonusDay { get; set; } = "";
     public int BonusMinutes { get; set; }
+    /// <summary>Break reminders: after this many minutes of use in a row the account is locked for BreakMinutes (0 = off).</summary>
+    public int BreakAfterMinutes { get; set; }
+    public int BreakMinutes { get; set; }
     public void Validate()
     {
         if (!Guid.TryParseExact(ProfileId, "N", out _) || !UserSid.StartsWith("S-1-5-21-", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(DisplayName) || DisplayName.Length > 100
-            || DailyMinutes is < 1 or > 1440 || WeekendMinutes is < 0 or > 1440 || !ScreenTimeRules.ValidBedtime(this) || BonusMinutes is < 0 or > 1440)
+            || DailyMinutes is < 1 or > 1440 || WeekendMinutes is < 0 or > 1440 || !ScreenTimeRules.ValidBedtime(this) || BonusMinutes is < 0 or > 1440
+            || !ScreenTimeRules.ValidBreak(BreakAfterMinutes, BreakMinutes))
             throw new InvalidDataException("Invalid screen-time policy.");
     }
 }
@@ -33,6 +37,11 @@ public sealed class ScreenTimeUsage
 {
     public string Day { get; set; } = "";
     public double Seconds { get; set; }
+    /// <summary>Break reminders: use in a row since the last break, when it was last used, and the break in progress.</summary>
+    public double RunSeconds { get; set; }
+    public DateTimeOffset? LastActiveUtc { get; set; }
+    public DateTimeOffset? BreakUntilUtc { get; set; }
+    public int RunWarned { get; set; }
 }
 
 public static class ScreenTimeRules
@@ -87,6 +96,48 @@ public static class ScreenTimeRules
     }
 
     public const int MaxLockMinutes = 720;
+
+    /// <summary>Off (0 and 0), or a break of 5 to 120 minutes after 15 to 240 minutes of use in a row.</summary>
+    public static bool ValidBreak(int afterMinutes, int breakMinutes) =>
+        afterMinutes == 0 ? breakMinutes == 0 : afterMinutes is >= 15 and <= 240 && breakMinutes is >= 5 and <= 120;
+
+    public static bool OnBreak(ScreenTimeUsage usage, DateTimeOffset now) => usage.BreakUntilUtc is { } until && until > now;
+
+    /// <summary>
+    /// Counts use in a row for break reminders. Not using the account (locked, signed out, asleep) for a whole break
+    /// length counts as a break. Returns whether a break starts now, or the warning to show (5 or 1 minutes left, else 0).
+    /// </summary>
+    public static (bool StartBreak, int WarnMinutes) AdvanceBreak(ScreenTimePolicy policy, ScreenTimeUsage usage, DateTimeOffset now, double activeSeconds)
+    {
+        if (policy.BreakAfterMinutes <= 0) { usage.RunSeconds = 0; usage.RunWarned = 0; usage.BreakUntilUtc = null; return (false, 0); }
+        if (OnBreak(usage, now) || activeSeconds <= 0 || !double.IsFinite(activeSeconds)) return (false, 0);
+        if (usage.LastActiveUtc is { } last && now - last >= TimeSpan.FromMinutes(policy.BreakMinutes))
+        {
+            usage.RunSeconds = 0;
+            usage.RunWarned = 0;
+        }
+        usage.LastActiveUtc = now;
+        usage.RunSeconds = Math.Max(0, usage.RunSeconds) + Math.Clamp(activeSeconds, 0, 5);
+        var left = policy.BreakAfterMinutes * 60.0 - usage.RunSeconds;
+        // The parent shortened the time between breaks below what was already used: warn a minute ahead first.
+        if (left <= 0 && usage.RunWarned != 1)
+        {
+            usage.RunSeconds = policy.BreakAfterMinutes * 60.0 - 60;
+            usage.RunWarned = 1;
+            return (false, 1);
+        }
+        if (left <= 0)
+        {
+            usage.RunSeconds = 0;
+            usage.RunWarned = 0;
+            usage.BreakUntilUtc = now.AddMinutes(policy.BreakMinutes);
+            return (true, 0);
+        }
+        var warn = left <= 60 ? 1 : left <= 300 ? 5 : 0;
+        if (warn == 0 || warn == usage.RunWarned) return (false, 0);
+        usage.RunWarned = warn;
+        return (false, warn);
+    }
 
     public static bool IsLocked(ScreenTimePolicy policy, DateTimeOffset now) => policy.LockUntilUtc is { } until && until > now;
 

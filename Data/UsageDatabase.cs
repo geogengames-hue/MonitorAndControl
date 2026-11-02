@@ -218,6 +218,7 @@ public class UsageDatabase : IDisposable
             "ALTER TABLE UsageRecords ADD COLUMN ForegroundSeconds INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE UsageRecords ADD COLUMN BackgroundSeconds INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE LimitGroups ADD COLUMN UserSid TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE LimitGroups ADD COLUMN Category TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE ScheduleRules ADD COLUMN UserSid TEXT NOT NULL DEFAULT '';"
         })
         {
@@ -1243,6 +1244,23 @@ public class UsageDatabase : IDisposable
     public Task SetAlwaysAllowedAppsAsync(IEnumerable<string> apps) =>
         SetSettingAsync("AlwaysAllowedApps", System.Text.Json.JsonSerializer.Serialize(apps.Distinct(StringComparer.OrdinalIgnoreCase).ToList()));
 
+    /// <summary>The parent's category choices: app name to a category, or "none".</summary>
+    public async Task<Dictionary<string, string>> GetAppCategoriesAsync()
+    {
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(await GetSettingAsync("AppCategories", "{}"))
+                   ?.Where(kv => !string.IsNullOrEmpty(kv.Key) && MonitorAndControl.Services.AppCategories.IsValid(kv.Value))
+                   .GroupBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                   .ToDictionary(g => g.Key, g => g.First().Value, StringComparer.OrdinalIgnoreCase) ?? new(StringComparer.OrdinalIgnoreCase);
+        }
+        catch { return new(StringComparer.OrdinalIgnoreCase); }
+    }
+
+    public Task SetAppCategoriesAsync(IReadOnlyDictionary<string, string> categories) =>
+        SetSettingAsync("AppCategories", System.Text.Json.JsonSerializer.Serialize(
+            categories.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase).ToDictionary(kv => kv.Key, kv => kv.Value)));
+
     public void ResetLimitsBaseline() { _limitsBaseline = null; _limitsDataVersion = -1; }
 
     public async Task<MonitorAndControl.ScreenTime.SealedLimits> ReadLimitsSnapshotAsync()
@@ -1254,6 +1272,7 @@ public class UsageDatabase : IDisposable
             snapshot.Schedule.Add(new() { App = r.AppName, Day = r.DayOfWeek, Start = r.StartTime, End = r.EndTime, Enabled = r.Enabled, User = r.UserSid });
         snapshot.HomeworkApps = await GetHomeworkAppsAsync();
         snapshot.AlwaysAllowed = await GetAlwaysAllowedAppsAsync();
+        snapshot.Categories = await GetAppCategoriesAsync();
         snapshot.AllowOnly = await GetSettingAsync("SiteAllowOnly", "false") == "true";
         snapshot.SafeBrowsing = await GetSettingAsync("SafeBrowsing", "false") == "true";
         foreach (var u in await GetUserLimitRulesAsync())
@@ -1263,7 +1282,7 @@ public class UsageDatabase : IDisposable
         foreach (var w in await GetUserSiteLimitsAsync())
             snapshot.Sites.Add(new() { Host = w.Host, Minutes = w.DailyMaxMinutes, Enabled = w.Enabled, User = w.UserSid });
         foreach (var g in await GetLimitGroupsAsync())
-            snapshot.Groups.Add(new() { Name = g.Name, Minutes = g.DailyMaxMinutes, Enabled = g.Enabled, Members = g.AppNames.ToList(), User = g.UserSid });
+            snapshot.Groups.Add(new() { Name = g.Name, Minutes = g.DailyMaxMinutes, Enabled = g.Enabled, Members = g.AppNames.ToList(), User = g.UserSid, Category = g.Category });
         return snapshot;
     }
 
@@ -1276,6 +1295,7 @@ public class UsageDatabase : IDisposable
         await ReplaceUserLimitRulesAsync(snapshot.UserLimits.Select(u => new AppLimitRule { UserSid = u.User, AppName = u.App, DailyMaxMinutes = u.Minutes, Enabled = u.Enabled }));
         await SetHomeworkAppsAsync(snapshot.HomeworkApps);
         await SetAlwaysAllowedAppsAsync(snapshot.AlwaysAllowed);
+        await SetAppCategoriesAsync(snapshot.Categories);
         await SetSettingAsync("SiteAllowOnly", snapshot.AllowOnly ? "true" : "false");
         await SetSettingAsync("SafeBrowsing", snapshot.SafeBrowsing ? "true" : "false");
         await ReplaceSiteLimitsAsync(snapshot.Sites.Where(w => string.IsNullOrEmpty(w.User)).Select(w => new SiteLimit { Host = w.Host, DailyMaxMinutes = w.Minutes, Enabled = w.Enabled }));
@@ -1284,7 +1304,7 @@ public class UsageDatabase : IDisposable
         foreach (var existing in await GetLimitGroupsAsync())
             if (!keep.Contains(existing.Name)) await DeleteLimitGroupAsync(existing.Id);
         foreach (var g in snapshot.Groups)
-            await SaveLimitGroupAsync(new AppLimitGroup { Name = g.Name, DailyMaxMinutes = g.Minutes, Enabled = g.Enabled, AppNames = g.Members.ToList(), UserSid = g.User });
+            await SaveLimitGroupAsync(new AppLimitGroup { Name = g.Name, DailyMaxMinutes = g.Minutes, Enabled = g.Enabled, AppNames = g.Members.ToList(), UserSid = g.User, Category = g.Category });
     }
 
     public async Task ReplaceLimitRulesAsync(IEnumerable<AppLimitRule> rules)
@@ -1605,7 +1625,7 @@ public class UsageDatabase : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
                 SELECT g.Id, g.Name, g.DailyMaxMinutes, g.Enabled,
-                       COALESCE(u.TotalSeconds, 0), g.UserSid
+                       COALESCE(u.TotalSeconds, 0), g.UserSid, g.Category
                 FROM LimitGroups g
                 LEFT JOIN LimitGroupUsage u ON u.GroupId = g.Id AND u.Date = @date
                 ORDER BY g.Name;
@@ -1620,7 +1640,8 @@ public class UsageDatabase : IDisposable
                     DailyMaxMinutes = reader.GetInt32(2),
                     Enabled = reader.GetBoolean(3),
                     TodaySeconds = reader.GetInt64(4),
-                    UserSid = reader.GetString(5)
+                    UserSid = reader.GetString(5),
+                    Category = reader.GetString(6)
                 });
 
             foreach (var group in groups)
@@ -1647,9 +1668,10 @@ public class UsageDatabase : IDisposable
             {
                 cmd.Transaction = tx;
                 cmd.CommandText = group.Id > 0
-                    ? "UPDATE LimitGroups SET Name=@name, DailyMaxMinutes=@max, Enabled=@enabled, UserSid=@sid WHERE Id=@id"
-                    : "INSERT INTO LimitGroups (Name, DailyMaxMinutes, Enabled, UserSid) VALUES (@name, @max, @enabled, @sid) ON CONFLICT(Name) DO UPDATE SET DailyMaxMinutes=@max, Enabled=@enabled, UserSid=@sid";
+                    ? "UPDATE LimitGroups SET Name=@name, DailyMaxMinutes=@max, Enabled=@enabled, UserSid=@sid, Category=@cat WHERE Id=@id"
+                    : "INSERT INTO LimitGroups (Name, DailyMaxMinutes, Enabled, UserSid, Category) VALUES (@name, @max, @enabled, @sid, @cat) ON CONFLICT(Name) DO UPDATE SET DailyMaxMinutes=@max, Enabled=@enabled, UserSid=@sid, Category=@cat";
                 cmd.Parameters.AddWithValue("@name", group.Name);
+                cmd.Parameters.AddWithValue("@cat", group.Category ?? "");
                 cmd.Parameters.AddWithValue("@sid", group.UserSid ?? "");
                 cmd.Parameters.AddWithValue("@max", group.DailyMaxMinutes);
                 cmd.Parameters.AddWithValue("@enabled", group.Enabled ? 1 : 0);

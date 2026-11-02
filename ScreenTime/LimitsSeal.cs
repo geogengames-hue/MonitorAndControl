@@ -30,6 +30,8 @@ public sealed class SealedGroup
     public List<string> Members { get; set; } = new();
     /// <summary>Empty = everyone; otherwise only this Windows account (SID).</summary>
     public string User { get; set; } = "";
+    /// <summary>Empty = only the members; otherwise also the other apps in this category.</summary>
+    public string Category { get; set; } = "";
 }
 
 public sealed class SealedUserLimit
@@ -60,6 +62,8 @@ public sealed class SealedLimits
     public List<string> HomeworkApps { get; set; } = new();
     /// <summary>Apps that are never closed: not by the schedule, limits, homework mode, Block now or new-program checks.</summary>
     public List<string> AlwaysAllowed { get; set; } = new();
+    /// <summary>The parent's app category choices (app name to category or "none").</summary>
+    public Dictionary<string, string> Categories { get; set; } = new();
 
     /// <summary>Replaces any list that arrived as null, so later code can count and hash the content safely.</summary>
     public SealedLimits Normalized()
@@ -75,11 +79,12 @@ public sealed class SealedLimits
         HomeworkApps.RemoveAll(x => x == null);
         AlwaysAllowed ??= new();
         AlwaysAllowed.RemoveAll(x => x == null);
+        Categories = (Categories ?? new()).Where(kv => kv.Key != null && kv.Value != null).ToDictionary(kv => kv.Key, kv => kv.Value);
         Limits.RemoveAll(x => x == null);
         Schedule.RemoveAll(x => x == null);
         Groups.RemoveAll(x => x == null);
         Sites.RemoveAll(x => x == null);
-        foreach (var g in Groups) { g.Members ??= new(); g.Members.RemoveAll(m => m == null); g.Name ??= ""; g.User ??= ""; }
+        foreach (var g in Groups) { g.Members ??= new(); g.Members.RemoveAll(m => m == null); g.Name ??= ""; g.User ??= ""; g.Category ??= ""; }
         foreach (var x in Limits) x.App ??= "";
         foreach (var x in Schedule) { x.App ??= ""; x.Day ??= ""; x.Start ??= ""; x.End ??= ""; x.User ??= ""; }
         foreach (var x in Sites) { x.Host ??= ""; x.User ??= ""; }
@@ -87,11 +92,12 @@ public sealed class SealedLimits
     }
 
     public bool IsReasonable() =>
-        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxSites && HomeworkApps.Count <= MaxEntries && AlwaysAllowed.Count <= MaxEntries && UserLimits.Count <= MaxEntries
+        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxSites && HomeworkApps.Count <= MaxEntries && AlwaysAllowed.Count <= MaxEntries && UserLimits.Count <= MaxEntries && Categories.Count <= MaxEntries
         && Groups.All(g => g.Members.Count <= MaxEntries);
 
     // An account is added only when set, so copies sealed before per-account rules existed keep their fingerprint.
     private static string For(string? user) => string.IsNullOrEmpty(user) ? "" : "|u:" + user;
+    private static string InCategory(string? category) => string.IsNullOrEmpty(category) ? "" : "|c:" + category;
 
     /// <summary>Order-independent hash of the content, so two copies compare equal exactly when they mean the same.</summary>
     public string Fingerprint()
@@ -102,9 +108,10 @@ public sealed class SealedLimits
             .Concat(UserLimits.Select(u => $"U|{u.User}|{u.App}|{u.Minutes}|{(u.Enabled ? 1 : 0)}"))
             .Concat(HomeworkApps.Select(h => h.ToLowerInvariant()).Distinct().Select(h => $"H|{h}"))
             .Concat(AlwaysAllowed.Select(a => a.ToLowerInvariant()).Distinct().Select(a => $"A|{a}"))
+            .Concat(Categories.GroupBy(c => c.Key.ToLowerInvariant()).Select(c => $"C|{c.Key}|{c.OrderBy(x => x.Value, StringComparer.Ordinal).First().Value}"))
             .Concat(AllowOnly || SafeBrowsing ? new[] { $"P|{(AllowOnly ? 1 : 0)}|{(SafeBrowsing ? 1 : 0)}" } : Array.Empty<string>())
             .Concat(Groups.Select(g => $"G|{g.Name}|{g.Minutes}|{(g.Enabled ? 1 : 0)}|" +
-                string.Join(',', g.Members.OrderBy(m => m, StringComparer.OrdinalIgnoreCase)) + For(g.User)))
+                string.Join(',', g.Members.OrderBy(m => m, StringComparer.OrdinalIgnoreCase)) + For(g.User) + InCategory(g.Category)))
             .OrderBy(x => x, StringComparer.Ordinal);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join(';', lines))));
     }

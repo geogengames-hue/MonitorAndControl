@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using MonitorAndControl.Data;
 using MonitorAndControl.Models;
 using MonitorAndControl.Services;
+using Rules = MonitorAndControl.ScreenTime.ScreenTimeRules;
 
 var tests = new (string Name, Func<Task> Run)[]
 {
@@ -25,6 +26,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("New programs wait for the parent's OK", TestProgramApprovals),
     ("A blocked site can be asked for once and answered", TestSiteRequests),
     ("Always-allowed apps are never closed and are sealed", TestAlwaysAllowed),
+    ("Breaks lock the PC after a stretch of use", TestBreakReminders),
+    ("App categories cover new apps and are sealed", TestAppCategories),
     ("Older databases are upgraded for per-account groups", TestGroupMembersUpgrade),
     ("App limits can belong to one Windows account", TestPerAccountLimits),
     ("Homework mode times, plan and sealed apps", TestHomeworkMode),
@@ -1946,5 +1949,116 @@ static Task TestAlwaysAllowed()
     db.SetAlwaysAllowedAppsAsync(new[] { "Calculator", "calculator", "Music Tutor" }).GetAwaiter().GetResult();
     var snapshot = db.ReadLimitsSnapshotAsync().GetAwaiter().GetResult();
     AssertTrue(snapshot.AlwaysAllowed.Count == 2, "The list is stored once per app and is part of the sealed copy.");
+    return Task.CompletedTask;
+}
+
+static Task TestBreakReminders()
+{
+    var policy = new MonitorAndControl.ScreenTime.ScreenTimePolicy
+    {
+        ProfileId = Guid.NewGuid().ToString("N"), UserSid = "S-1-5-21-1-2-3-1001", DisplayName = "kid", DailyMinutes = 180,
+        BreakAfterMinutes = 15, BreakMinutes = 5
+    };
+    policy.Validate();
+    AssertTrue(Rules.ValidBreak(0, 0) && !Rules.ValidBreak(0, 10) && !Rules.ValidBreak(10, 5)
+        && !Rules.ValidBreak(30, 0) && Rules.ValidBreak(240, 120), "Break settings are off, or 15-240 minutes then 5-120 minutes.");
+    var usage = new MonitorAndControl.ScreenTime.ScreenTimeUsage { Day = "2026-11-02" };
+    var now = new DateTimeOffset(2026, 11, 2, 15, 0, 0, TimeSpan.Zero);
+    var warnings = new List<int>();
+    var started = false;
+    // 15 minutes of use, one second at a time.
+    for (var i = 0; i < 15 * 60 && !started; i++)
+    {
+        now = now.AddSeconds(1);
+        var (start, warn) = Rules.AdvanceBreak(policy, usage, now, 1);
+        if (warn > 0) warnings.Add(warn);
+        started = start;
+    }
+    AssertTrue(started && warnings.SequenceEqual(new[] { 5, 1 }), "A break starts after 15 minutes in a row, warned at 5 and 1 minutes.");
+    AssertTrue(Rules.OnBreak(usage, now.AddMinutes(4)) && !Rules.OnBreak(usage, now.AddMinutes(5)), "The break lasts 5 minutes.");
+    AssertTrue(Rules.AdvanceBreak(policy, usage, now.AddMinutes(1), 1) == (false, 0) && usage.RunSeconds == 0, "Nothing is counted during the break.");
+
+    // Ten minutes of use, then away for a whole break length: the count starts again.
+    var away = new MonitorAndControl.ScreenTime.ScreenTimeUsage { Day = "2026-11-02" };
+    var t = now;
+    for (var i = 0; i < 600; i++) { t = t.AddSeconds(1); Rules.AdvanceBreak(policy, away, t, 1); }
+    t = t.AddMinutes(5);
+    Rules.AdvanceBreak(policy, away, t, 1);
+    AssertTrue(away.RunSeconds <= 1, "Being away for a whole break length counts as a break.");
+    // A shorter pause does not.
+    var shortPause = new MonitorAndControl.ScreenTime.ScreenTimeUsage { Day = "2026-11-02" };
+    t = now;
+    for (var i = 0; i < 600; i++) { t = t.AddSeconds(1); Rules.AdvanceBreak(policy, shortPause, t, 1); }
+    Rules.AdvanceBreak(policy, shortPause, t.AddMinutes(2), 1);
+    AssertTrue(shortPause.RunSeconds > 600, "A pause shorter than the break keeps counting.");
+
+    policy.BreakAfterMinutes = 0; policy.BreakMinutes = 0;
+    policy.Validate();
+    AssertTrue(Rules.AdvanceBreak(policy, shortPause, t, 1) == (false, 0) && shortPause.RunSeconds == 0, "Turning breaks off clears the count.");
+    policy.BreakAfterMinutes = 10; policy.BreakMinutes = 5;
+    var refused = false;
+    try { policy.Validate(); } catch (InvalidDataException) { refused = true; }
+    AssertTrue(refused, "A break after less than 15 minutes is refused.");
+    // The parent shortens the time between breaks below what was already used: a minute's warning comes first.
+    var shortened = new MonitorAndControl.ScreenTime.ScreenTimeUsage { Day = "2026-11-02", RunSeconds = 40 * 60, LastActiveUtc = now };
+    policy.BreakAfterMinutes = 30; policy.BreakMinutes = 10;
+    AssertTrue(Rules.AdvanceBreak(policy, shortened, now.AddSeconds(1), 1) == (false, 1), "A shortened stretch warns a minute ahead.");
+    var lockedAt = now.AddSeconds(1);
+    var startedLater = false;
+    for (var i = 0; i < 61 && !startedLater; i++) { lockedAt = lockedAt.AddSeconds(1); startedLater = Rules.AdvanceBreak(policy, shortened, lockedAt, 1).StartBreak; }
+    AssertTrue(startedLater, "The break follows a minute after that warning.");
+    policy.BreakAfterMinutes = 0; policy.BreakMinutes = 0;
+    Rules.AdvanceBreak(policy, shortened, lockedAt, 0);
+    AssertTrue(!Rules.OnBreak(shortened, lockedAt), "Turning breaks off ends a break in progress.");
+    var request = new MonitorAndControl.ScreenTime.ScreenTimeChange("S-1-5-21-1-2-3-1001", 180, 0, true, BreakAfterMinutes: 45, BreakMinutes: 10);
+    AssertTrue(request.BreakAfterMinutes == 45 && request.BreakMinutes == 10, "Break settings are part of the approved change.");
+    return Task.CompletedTask;
+}
+
+static Task TestAppCategories()
+{
+    AssertTrue(AppCategories.Guess("Minecraft", "javaw.exe", null) == "games", "A known game is guessed by name.");
+    AssertTrue(AppCategories.Guess("SomeNewGame", "SomeNewGame.exe", @"D:\SteamLibrary\steamapps\common\Some New Game\SomeNewGame.exe") == "games",
+        "A game is guessed from the store folder it is installed in.");
+    AssertTrue(AppCategories.Guess("Discord", "Discord.exe", null) == "social" && AppCategories.Guess("vlc", "vlc.exe", null) == "video"
+        && AppCategories.Guess("Chrome", "chrome.exe", null) == "browsers", "Other categories are guessed by name.");
+    AssertTrue(AppCategories.Guess("notepad", "notepad.exe", @"C:\Windows\notepad.exe") == null, "Other apps have no category.");
+    AssertTrue(AppCategories.IsValid("games") && AppCategories.IsValid("none") && !AppCategories.IsValid("auto") && !AppCategories.IsValid("x"),
+        "Only known categories can be chosen.");
+
+    var games = new MonitorAndControl.Models.AppLimitGroup { Id = 1, Name = "Games", Category = "games" };
+    var minecraft = new MonitorAndControl.Models.AppLimitGroup { Id = 2, Name = "Minecraft only", AppNames = { "Minecraft" } };
+    var groups = new[] { games, minecraft };
+    AssertTrue(AppCategories.GroupsFor("Roblox", "games", groups).Single().Id == 1, "A game not listed anywhere counts in the Games group.");
+    AssertTrue(AppCategories.GroupsFor("Minecraft", "games", groups).Single().Id == 2, "An app listed in a group counts only there.");
+    AssertTrue(!AppCategories.GroupsFor("Notepad", null, groups).Any() && !AppCategories.GroupsFor("Notepad", "", groups).Any(),
+        "An app with no category counts in no category group.");
+    minecraft.Enabled = false;
+    AssertTrue(AppCategories.GroupsFor("Minecraft", "games", groups).Any(g => g.Id == 1), "A group that is turned off does not take a game out of Games.");
+
+    var plain = new MonitorAndControl.ScreenTime.SealedLimits { HomeworkApps = { "Minecraft" } };
+    var withCategory = new MonitorAndControl.ScreenTime.SealedLimits { HomeworkApps = { "Minecraft" }, Categories = { ["Roblox"] = "none" } };
+    var categoryGroup = new MonitorAndControl.ScreenTime.SealedLimits { Groups = { new() { Name = "G", Minutes = 60, Enabled = true, Category = "games" } } };
+    var plainGroup = new MonitorAndControl.ScreenTime.SealedLimits { Groups = { new() { Name = "G", Minutes = 60, Enabled = true } } };
+    AssertTrue(plain.Fingerprint() == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("H|minecraft")))
+        && plainGroup.Fingerprint() == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("G|G|60|1|"))),
+        "Limits sealed by an older version still match.");
+    AssertTrue(plain.Fingerprint() != withCategory.Fingerprint() && plainGroup.Fingerprint() != categoryGroup.Fingerprint(),
+        "Changing a category choice or a group's category is noticed while limits are protected.");
+    AssertTrue(new MonitorAndControl.ScreenTime.SealedLimits { Categories = null! }.Normalized().Categories.Count == 0, "A missing list reads as empty.");
+
+    using var db = CreateTempDatabase();
+    db.SaveLimitGroupAsync(new MonitorAndControl.Models.AppLimitGroup { Name = "Games", DailyMaxMinutes = 60, Category = "games" }).GetAwaiter().GetResult();
+    db.SetAppCategoriesAsync(new Dictionary<string, string> { ["Roblox"] = "none" }).GetAwaiter().GetResult();
+    var snapshot = db.ReadLimitsSnapshotAsync().GetAwaiter().GetResult();
+    AssertTrue(snapshot.Groups.Single().Category == "games" && snapshot.Categories["roblox"] == "none", "Group categories and choices are stored and sealed.");
+    db.SetAppCategoriesAsync(new Dictionary<string, string>()).GetAwaiter().GetResult();
+    db.ApplyLimitsSnapshotAsync(snapshot).GetAwaiter().GetResult();
+    AssertTrue(db.ReadLimitsSnapshotAsync().GetAwaiter().GetResult().Fingerprint() == snapshot.Fingerprint(), "The sealed copy brings them back.");
+
+    var categories = new AppCategories();
+    categories.ReloadAsync(db).GetAwaiter().GetResult();
+    AssertTrue(categories.CategoryOf("Roblox", "RobloxPlayerBeta.exe") == null && categories.CategoryOf("Discord", "Discord.exe") == "social",
+        "The parent's choice wins over the guess.");
     return Task.CompletedTask;
 }

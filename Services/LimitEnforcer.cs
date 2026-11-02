@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using MonitorAndControl.Data;
+using MonitorAndControl.Models;
 
 namespace MonitorAndControl.Services;
 
@@ -9,7 +10,8 @@ public sealed record GroupLimitBreach(
     string GroupName,
     IReadOnlyList<string> AppNames,
     long UsedSecs,
-    long MaxSecs);
+    long MaxSecs,
+    IReadOnlyList<string>? CategoryApps = null);
 
 public class LimitEnforcer
 {
@@ -34,6 +36,23 @@ public class LimitEnforcer
         _alwaysAllowed = new HashSet<string>(appNames, StringComparer.OrdinalIgnoreCase);
 
     public bool IsAlwaysAllowed(string appName) => _alwaysAllowed.Contains(appName);
+
+    /// <summary>App categories, so a used-up category group also closes an app of that category opened later.</summary>
+    public AppCategories? Categories { get; set; }
+    private volatile CategoryState _categoryState = new(Array.Empty<AppLimitGroup>(), new HashSet<int>());
+    private sealed record CategoryState(IReadOnlyCollection<AppLimitGroup> Groups, HashSet<int> UsedUp);
+
+    /// <summary>This account's groups, and which of them have used up today's time.</summary>
+    public void SetGroupState(IReadOnlyCollection<AppLimitGroup> groups, IEnumerable<int> usedUp) =>
+        _categoryState = new(groups, usedUp.ToHashSet());
+
+    private bool InUsedUpCategory(string app, string proc)
+    {
+        var state = _categoryState;
+        if (state.UsedUp.Count == 0 || Categories?.CategoryOf(app, proc) is not { } category) return false;
+        return AppCategories.GroupsFor(app, category, state.Groups).Any(g => g.Category == category && state.UsedUp.Contains(g.Id)
+            && !g.AppNames.Contains(app, StringComparer.OrdinalIgnoreCase));
+    }
 
     public LimitEnforcer(UsageDatabase db, WindowTracker tracker)
     {
@@ -96,6 +115,15 @@ public class LimitEnforcer
             OnAppKilled?.Invoke(app);
         }
 
+        // A new app of a category whose group has used up today's time (a game first opened today).
+        if (!IsPaused && !_exceededToday.ContainsKey(app) && InUsedUpCategory(app, proc) && _tracker.IsProcessRunning(proc))
+        {
+            Logger.Instance.Warn($"{app} is in a category whose time is used up today; closing it.");
+            KillAppProcesses(app);
+            OnAppKilled?.Invoke(app);
+            return;
+        }
+
         // Child closed and reopened app during countdown - kill immediately.
         if (!_exceededToday.ContainsKey(app) && _activeCountdowns.ContainsKey(app.ToLowerInvariant()) && _tracker.IsProcessRunning(proc))
         {
@@ -148,9 +176,12 @@ public class LimitEnforcer
         var groupMemberApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var group in breachedGroups)
         {
+            // Apps listed by name must be known apps; apps of the group's category were seen running in this session.
             var members = group.AppNames
-                .Where(appName => !IsAlwaysAllowed(appName) && _tracker.KnownApps.Values.Any(value =>
+                .Where(appName => _tracker.KnownApps.Values.Any(value =>
                     value.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+                .Concat(group.CategoryApps ?? Array.Empty<string>())
+                .Where(appName => !IsAlwaysAllowed(appName))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             foreach (var member in members) groupMemberApps.Add(member);

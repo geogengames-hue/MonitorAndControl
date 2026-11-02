@@ -2,7 +2,8 @@ namespace MonitorAndControl.ScreenTime;
 
 public sealed record ScreenTimeChange(string UserSid, int DailyMinutes, int BonusMinutes, bool Enabled, int WeekendMinutes = 0,
     string BedtimeStart = "", string BedtimeEnd = "", string WeekendBedtimeStart = "", int LockMinutes = 0,
-    string Operation = "", int LimitsMinutes = 0, string TimeZoneId = "", string ProgramName = "");
+    string Operation = "", int LimitsMinutes = 0, string TimeZoneId = "", string ProgramName = "",
+    int BreakAfterMinutes = 0, int BreakMinutes = 0);
 
 public sealed class ScreenTimeApprovals
 {

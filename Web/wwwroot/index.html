@@ -97,6 +97,11 @@
           <input type="time" id="screen-wake" title="The time the account may sign in again in the morning.">
           <label title="Optional later bedtime for Friday and Saturday nights. Leave empty to use the normal bedtime." for="screen-weekend-bedtime">Weekend bedtime (Fri and Sat nights, optional)</label>
           <input type="time" id="screen-weekend-bedtime" title="Optional later bedtime for Friday and Saturday nights. Leave empty to use the normal bedtime.">
+          <label title="After this many minutes of use in a row the PC locks for a break. 0 turns breaks off." for="screen-break-after">Break after (minutes in a row, 0 = off)</label>
+          <input type="number" id="screen-break-after" title="After this many minutes of use in a row the PC locks for a break. 0 turns breaks off." min="0" max="240" value="0">
+          <label title="How long the break lasts. The account is locked until it is over." for="screen-break-length">Break length (minutes)</label>
+          <input type="number" id="screen-break-length" title="How long the break lasts. The account is locked until it is over." min="5" max="120" value="10">
+          <p class="screen-help">For example 45 and 10: a 10-minute break after 45 minutes. A warning comes 5 minutes and 1 minute before. Being away from the PC for a whole break length also counts as a break.</p>
           <label title="Turn the allowance on or off for this account."><input type="checkbox" id="screen-enabled"> Enable control for this account</label>
           <label title="Extra minutes for today only." for="screen-bonus">Bonus for today (total minutes)</label>
           <input type="number" id="screen-bonus" title="Extra minutes for today only." min="0" max="1440" value="0" required>
@@ -257,11 +262,22 @@
         <input type="text" id="group-name" title="A name for the group, for example Games." placeholder="Group name (e.g. Games)">
         <input type="number" id="group-minutes" title="Minutes per day that all apps in the group share." placeholder="Minutes per day" min="1" max="1440" value="180">
         <select id="group-account" title="Everyone shares this group, or it counts only one Windows account's own time."><option value="">Everyone</option></select>
+        <select id="group-category" title="Also count every other app in this category, including ones first opened later. An app ticked in another group stays in that group.">
+          <option value="">Only the apps ticked below</option>
+          <option value="games">+ all Games</option>
+          <option value="social">+ all Social apps</option>
+          <option value="video">+ all Video apps</option>
+          <option value="browsers">+ all Browsers</option>
+          <option value="school">+ all School apps</option>
+        </select>
         <label title="Turn this group&#x27;s limit on or off." class="inline-check"><input type="checkbox" id="group-enabled" checked> Enabled</label>
         <div id="group-members" class="group-members"></div>
         <button id="group-save" title="Save the group and its limit.">Save Group</button>
         <button id="group-cancel" title="Stop editing and discard the changes." class="btn-secondary hidden">Cancel</button>
       </div>
+      <h3 class="individual-limits-title" title="Which category each app is in, for groups such as Games 1 h that cover a whole category.">App categories</h3>
+      <p style="font-size:13px;color:#888">A group set to a category (for example "+ all Games") also counts games that are new on the PC. DeviceMon guesses the category from the app's name and where it is installed (Steam, Epic, Riot and other game folders). Change a guess here if it is wrong.</p>
+      <div class="table-container" id="app-categories-table"></div>
       <h3 class="individual-limits-title">Individual Apps</h3>
       <div class="table-container" id="limits-table"></div>
       <div class="add-form">
