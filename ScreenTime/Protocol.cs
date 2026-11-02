@@ -15,7 +15,8 @@ public sealed class ScreenTimeRequest
     public string WeekendBedtimeStart { get; set; } = "";
     /// <summary>0 = leave the lock alone, negative = unlock now, positive = lock for that many minutes.</summary>
     public int LockMinutes { get; set; }
-    /// <summary>"limits-open", "limits-clear", "homework-stop" or "timezone-accept": approved changes not tied to an account.</summary>
+    /// <summary>"limits-open", "limits-clear", "homework-stop", "timezone-accept", "programs-off" or "program-allow":
+    /// approved changes not tied to an account.</summary>
     public string Operation { get; set; } = "";
     public int LimitsMinutes { get; set; }
     /// <summary>Content for the "limits-seal" command (a SealedLimits document).</summary>
@@ -33,6 +34,13 @@ public sealed class ScreenTimeRequest
     public string RequestId { get; set; } = "";
     /// <summary>For "timezone-accept": the Windows time zone the parent saw and approved.</summary>
     public string TimeZoneId { get; set; } = "";
+    /// <summary>For the "program-..." commands and the "program-allow" operation: the program (process name).</summary>
+    public string ProgramName { get; set; } = "";
+    /// <summary>For "program-request": a friendlier name for the program and the account's name, shown to the parent.</summary>
+    public string ProgramDisplay { get; set; } = "";
+    public string AccountName { get; set; } = "";
+    /// <summary>For "program-baseline": the programs this account already has.</summary>
+    public List<string> ProgramNames { get; set; } = new();
     /// <summary>For "set-heartbeat": the check-in address, or empty to stop.</summary>
     public string HeartbeatUrl { get; set; } = "";
     /// <summary>For "homework-start": how long homework mode lasts.</summary>

@@ -5,12 +5,16 @@ using MonitorAndControl.Data;
 namespace MonitorAndControl.Services;
 
 /// <summary>
-/// Single-use links for answering "Not now" to a request for more PC time straight from a phone alert,
-/// without signing in to the dashboard. A link can only decline that one request, which grants nothing,
-/// so a link that leaks is harmless. Adding time still needs the dashboard login and the remote PIN.
+/// Single-use links for answering "Not now" to a request straight from a phone alert, without signing in to
+/// the dashboard: more PC time, a new program ("program:" + name) or a website ("site:" + id). A link can only
+/// decline that one request, which grants nothing, so a link that leaks is harmless. Granting anything still
+/// needs the dashboard login (and the remote PIN for PC time and programs).
 /// </summary>
 public static class QuickActions
 {
+    public const string ProgramPrefix = "program:";
+    public const string SitePrefix = "site:";
+
     public static string Hash(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 
     public static bool LooksValid(string? token) =>

@@ -23,6 +23,9 @@ public sealed class WebsiteTracker : IDisposable
     private volatile bool _enabled = true;
     private int _sampling;
 
+    /// <summary>The site in front, every few seconds while a browser is in use (a real host name only).</summary>
+    public event Action<string>? SiteSeen;
+
     public WebsiteTracker(UsageDatabase db, WindowTracker tracker)
     {
         _db = db;
@@ -51,10 +54,13 @@ public sealed class WebsiteTracker : IDisposable
                 _enabled = await _db.GetSettingAsync("TrackWebsites", "true") == "true";
                 await FlushAsync();
             }
-            if (!_enabled || elapsed <= 0) return;
+            if (elapsed <= 0) return;
 
+            // Read even with website time off, so a blocked page can still offer to ask the parent; it is then not recorded.
             var site = CurrentSite();
             if (site == null) return;
+            if (site != SiteName.PrivateWindow && site != SiteName.UnknownSite) SiteSeen?.Invoke(site);
+            if (!_enabled) return;
             lock (_sync) _pending[site] = _pending.GetValueOrDefault(site) + elapsed;
         }
         catch (Exception ex) { Logger.Instance.Warn($"Website tracking skipped a sample: {ex.Message}"); }

@@ -302,16 +302,28 @@ public class DashboardServer
             var hash = QuickActions.Hash(token!);
             if (await db.FindQuickActionAsync(hash, DateTimeOffset.UtcNow) is not { } action)
                 return Results.Json(new { error = "This link has expired or was already used." }, statusCode: StatusCodes.Status410Gone);
+            if (action.RequestId.StartsWith(QuickActions.SitePrefix, StringComparison.Ordinal))
+            {
+                var answered = await db.AnswerSiteRequestAsync(action.RequestId[QuickActions.SitePrefix.Length..], allowed: false);
+                await db.MarkQuickActionUsedAsync(hash);
+                Logger.Instance.Info("A website request was declined from a phone alert.");
+                return Results.Json(new { message = answered ? "Declined. The child will be told." : "This request was already answered." });
+            }
             try
             {
                 // Only the request the alert was about; a newer request from the same child stays open.
-                var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest
-                {
-                    Command = "dismiss-request", UserSid = action.UserSid, RequestId = action.RequestId
-                }, ctx.RequestAborted);
+                var reply = await ScreenTimeClient.SendAsync(action.RequestId.StartsWith(QuickActions.ProgramPrefix, StringComparison.Ordinal)
+                    ? new ScreenTimeRequest { Command = "program-block", ProgramName = action.RequestId[QuickActions.ProgramPrefix.Length..] }
+                    : new ScreenTimeRequest { Command = "dismiss-request", UserSid = action.UserSid, RequestId = action.RequestId }, ctx.RequestAborted);
                 if (!reply.Ok) return Results.Json(new { error = reply.Error }, statusCode: StatusCodes.Status400BadRequest);
                 // Used up only once the answer is recorded, so a failed try can be repeated.
                 await db.MarkQuickActionUsedAsync(hash);
+                if (action.RequestId.StartsWith(QuickActions.ProgramPrefix, StringComparison.Ordinal))
+                {
+                    var wasWaiting = reply.Data is { } p && p.TryGetProperty("wasWaiting", out var w) && w.ValueKind == JsonValueKind.True;
+                    Logger.Instance.Info("A new program was kept blocked from a phone alert.");
+                    return Results.Json(new { message = wasWaiting ? "Kept blocked. The child has been told." : "The program is blocked." });
+                }
                 var dismissed = reply.Data is { } data && data.TryGetProperty("dismissed", out var d) && d.TryGetInt32(out var n) ? n : 0;
                 Logger.Instance.Info("A request for more PC time was declined from a phone alert.");
                 return Results.Json(new { message = dismissed > 0 ? "Declined. The child has been told." : "This request was already answered." });
@@ -404,7 +416,8 @@ public class DashboardServer
                 return Results.BadRequest(new { error = "Too many website rules." });
             limit.Host = host;
             await db.SaveUserSiteLimitAsync(limit);
-            return Results.Json(new { host });
+            var stillBlocked = await SiteRequestService.AnswerOpenedAsync(db, host, limit.UserSid);
+            return Results.Json(new { host, stillBlocked });
         });
 
         app.MapDelete("/api/user-site-limits/{host}/{userSid}", async (HttpContext ctx, string host, string userSid) =>
@@ -451,7 +464,8 @@ public class DashboardServer
                 return Results.BadRequest(new { error = "Too many website rules." });
             limit.Host = host;
             await db.SaveSiteLimitAsync(limit);
-            return Results.Json(new { host });
+            var stillBlocked = await SiteRequestService.AnswerOpenedAsync(db, host, null);
+            return Results.Json(new { host, stillBlocked });
         });
 
         app.MapDelete("/api/site-limits/{host}", async (HttpContext ctx, string host) =>
@@ -1161,6 +1175,76 @@ public class DashboardServer
             if (emailService.IsEnabled) emailService.StartPolling(); else emailService.StopPolling();
             await Program.ReloadParentReportingAsync();
             return Results.Ok();
+        });
+
+        // "Ask to open this site": requests waiting for an answer. Allowing one is saving a website rule
+        // (which answers it); declining needs no rule.
+        app.MapGet("/api/site-requests", async () =>
+            Results.Json((await db.GetSiteRequestsAsync()).Select(r => new { r.Id, r.UserSid, r.Account, r.Host, r.CreatedUtc }), JsonOpts));
+
+        app.MapPost("/api/site-requests/{id}/decline", async (HttpContext ctx, string id) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            return await db.AnswerSiteRequestAsync(id, allowed: false) ? Results.Ok() : Results.BadRequest(new { error = "This request was already answered." });
+        });
+
+        // Apps that are never closed (schedule, limits, homework mode, Block now, new-program checks).
+        app.MapGet("/api/always-allowed", async () => Results.Json(new { apps = await db.GetAlwaysAllowedAppsAsync() }, JsonOpts));
+
+        app.MapPost("/api/always-allowed/add", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            var name = doc != null && doc.RootElement.TryGetProperty("app", out var a) && a.ValueKind == JsonValueKind.String ? Clean(a.GetString()) : "";
+            if (!IsValidAppName(name)) return Results.BadRequest(new { error = "The app name is not valid." });
+            await _homeworkAppsGate.WaitAsync();
+            try
+            {
+                var apps = await db.GetAlwaysAllowedAppsAsync();
+                if (apps.Count >= 100) return Results.BadRequest(new { error = "Up to 100 apps." });
+                if (!apps.Any(x => x.Equals(name, StringComparison.OrdinalIgnoreCase))) { apps.Add(name); await db.SetAlwaysAllowedAppsAsync(apps); }
+                enforcer.SetAlwaysAllowed(apps);
+            }
+            finally { _homeworkAppsGate.Release(); }
+            return Results.Ok();
+        });
+
+        app.MapDelete("/api/always-allowed/{name}", async (HttpContext ctx, string name) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            name = Clean(name);
+            await _homeworkAppsGate.WaitAsync();
+            try
+            {
+                var apps = await db.GetAlwaysAllowedAppsAsync();
+                apps.RemoveAll(x => x.Equals(name, StringComparison.OrdinalIgnoreCase));
+                await db.SetAlwaysAllowedAppsAsync(apps);
+                enforcer.SetAlwaysAllowed(apps);
+            }
+            finally { _homeworkAppsGate.Release(); }
+            return Results.Ok();
+        });
+
+        // "New programs need my OK": turning it on and keeping a program blocked only restrict, so they need no
+        // approval. Turning it off and allowing a program go through PC Time's approval (UAC or remote PIN).
+        app.MapPost("/api/programs/on", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            return await SendProgramsAsync(new ScreenTimeRequest { Command = "programs-on" }, ctx);
+        });
+
+        app.MapPost("/api/programs/block", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            var name = doc != null && doc.RootElement.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
+            if (MonitorAndControl.ScreenTime.ProgramApprovals.Key(name) is not { } key) return Results.BadRequest(new { error = "Invalid program." });
+            return await SendProgramsAsync(new ScreenTimeRequest { Command = "program-block", ProgramName = key }, ctx);
         });
 
         // Homework mode: the apps closed while it is on, and starting it. Ending it early needs the parent's approval (PC Time page).
@@ -1891,7 +1975,18 @@ public class DashboardServer
 
     private static bool IsValidProcessName(string value) => InputValidation.IsValidProcessName(value);
 
+    // Shared by the homework and always-allowed app lists (both are small settings rewritten whole).
     private static readonly SemaphoreSlim _homeworkAppsGate = new(1, 1);
+
+    private static async Task<IResult> SendProgramsAsync(ScreenTimeRequest request, HttpContext ctx)
+    {
+        try
+        {
+            var reply = await ScreenTimeClient.SendAsync(request, ctx.RequestAborted);
+            return reply.Ok ? Results.Ok() : Results.BadRequest(new { error = reply.Error });
+        }
+        catch { return Results.Json(new { error = "The screen-time service is unavailable." }, statusCode: StatusCodes.Status503ServiceUnavailable); }
+    }
 
     private static bool IsHttpUrl(string value) => InputValidation.IsValidHttpUrl(value);
 

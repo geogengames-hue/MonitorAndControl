@@ -170,6 +170,8 @@ public sealed class ParentReportService : IDisposable
         await CheckTamperConditionsAsync();
         await CheckRemotePinLockoutsAsync();
         await CheckTimeRequestsAsync();
+        await CheckProgramRequestsAsync();
+        await CheckSiteRequestsAsync();
         await CheckTimeZoneAsync();
         await SyncHeartbeatAsync();
     }
@@ -209,6 +211,86 @@ public sealed class ParentReportService : IDisposable
                 await _db.SetSettingAsync("TimeZoneAlerted", key);
         }
         catch (Exception ex) { Logger.Instance.Error($"Time zone check failed: {ex.Message}"); }
+    }
+
+    // "New programs need my OK": the service lists programs waiting for an answer. Each is announced once.
+    private async Task CheckProgramRequestsAsync()
+    {
+        try
+        {
+            if ((await _db.GetSettingAsync("TimeRequestAlertsEnabled", "true")) != "true") return;
+            var state = ScreenTime.ProgramApprovals.Read();
+            if (!state.Enabled) return;
+            var waiting = state.Entries.Where(e => e.State == ScreenTime.ProgramApprovals.Waiting).ToList();
+            if (waiting.Count == 0) return;
+            // Only programs still waiting need remembering, so an announced one can never drop off the list.
+            var waitingIds = waiting.Select(e => e.Id).ToHashSet();
+            var seen = (await _db.GetSettingAsync("ProgramRequestsSeen", "")).Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Where(waitingIds.Contains).ToList();
+            var fresh = waiting.Where(e => !seen.Contains(e.Id)).ToList();
+            if (fresh.Count == 0) return;
+            // Every signed-in account runs DeviceMon; only one of them sends the alerts.
+            if (!await _db.TryClaimLeaseAsync("program-alert", TimeSpan.FromMinutes(2))) return;
+            foreach (var entry in fresh)
+            {
+                if (_requestAttempts.TryGetValue(entry.Id, out var last) && DateTime.UtcNow - last < TimeSpan.FromMinutes(15)) continue;
+                _requestAttempts[entry.Id] = DateTime.UtcNow;
+                var name = entry.Display.Length > 0 ? $"{entry.Display} ({entry.Name})" : entry.Name;
+                var who = entry.Account.Length > 0 ? entry.Account : "Someone";
+                var message = $"{who} opened a new program on {Environment.MachineName}: {name}. It stays closed until you allow it " +
+                              "(dashboard > PC Time > New programs).";
+                if (!_declineTokens.TryGetValue(entry.Id, out var block))
+                {
+                    block = await QuickActions.CreateDeclineAsync(_db, entry.UserSid, QuickActions.ProgramPrefix + entry.Name, DateTimeOffset.UtcNow.AddDays(7));
+                    _declineTokens[entry.Id] = block;
+                }
+                var buttons = new List<PushButton>
+                {
+                    new("Allow", $"screen-time&program={entry.Id}"),
+                    new("Keep blocked", DeclineToken: block)
+                };
+                if (!await SendTamperAlertAsync("program_request", message, ignoreSwitch: true, label: "Request", buttons: buttons)) continue;
+                seen.Add(entry.Id);
+                _declineTokens.Remove(entry.Id);
+                await _db.SetSettingAsync("ProgramRequestsSeen", string.Join(';', seen));
+            }
+        }
+        catch (Exception ex) { Logger.Instance.Error($"New program check failed: {ex.Message}"); }
+    }
+
+    // "Ask to open this site": the child asked from a blocked page. Each request is announced once
+    // (claimed in the database, so two accounts' DeviceMon do not both send it).
+    private async Task CheckSiteRequestsAsync()
+    {
+        try
+        {
+            if ((await _db.GetSettingAsync("TimeRequestAlertsEnabled", "true")) != "true") return;
+            foreach (var request in (await _db.GetSiteRequestsAsync()).Where(r => !r.Alerted))
+            {
+                // Without email or a webhook the alert cannot be delivered; try again only now and then.
+                if (_requestAttempts.TryGetValue(request.Id, out var last) && DateTime.UtcNow - last < TimeSpan.FromMinutes(15)) continue;
+                if (!await _db.ClaimSiteRequestAlertAsync(request.Id, claim: true)) continue;
+                _requestAttempts[request.Id] = DateTime.UtcNow;
+                var who = request.Account.Length > 0 ? request.Account : "Someone";
+                var message = $"{who} asked to open {request.Host} on {Environment.MachineName}. " +
+                              "To allow it, open the dashboard, go to Limits and choose Allow next to the request.";
+                if (!_declineTokens.TryGetValue(request.Id, out var decline))
+                {
+                    decline = await QuickActions.CreateDeclineAsync(_db, request.UserSid, QuickActions.SitePrefix + request.Id, request.CreatedUtc + Models.SiteRequest.Lifetime);
+                    _declineTokens[request.Id] = decline;
+                }
+                var buttons = new List<PushButton>
+                {
+                    new("Allow", $"limits&site={request.Id}"),
+                    new("Not now", DeclineToken: decline)
+                };
+                if (await SendTamperAlertAsync("site_request", message, ignoreSwitch: true, label: "Request", buttons: buttons))
+                    _declineTokens.Remove(request.Id);
+                else
+                    await _db.ClaimSiteRequestAlertAsync(request.Id, claim: false); // try again later
+            }
+        }
+        catch (Exception ex) { Logger.Instance.Error($"Website request check failed: {ex.Message}"); }
     }
 
     // The SYSTEM service records a request when the child answers Yes to "ask for more time".

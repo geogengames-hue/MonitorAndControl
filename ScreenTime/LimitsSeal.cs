@@ -58,6 +58,8 @@ public sealed class SealedLimits
     public bool SafeBrowsing { get; set; }
     /// <summary>Apps that are closed while homework mode is on.</summary>
     public List<string> HomeworkApps { get; set; } = new();
+    /// <summary>Apps that are never closed: not by the schedule, limits, homework mode, Block now or new-program checks.</summary>
+    public List<string> AlwaysAllowed { get; set; } = new();
 
     /// <summary>Replaces any list that arrived as null, so later code can count and hash the content safely.</summary>
     public SealedLimits Normalized()
@@ -71,6 +73,8 @@ public sealed class SealedLimits
         UserLimits.RemoveAll(x => x == null);
         foreach (var x in UserLimits) { x.User ??= ""; x.App ??= ""; }
         HomeworkApps.RemoveAll(x => x == null);
+        AlwaysAllowed ??= new();
+        AlwaysAllowed.RemoveAll(x => x == null);
         Limits.RemoveAll(x => x == null);
         Schedule.RemoveAll(x => x == null);
         Groups.RemoveAll(x => x == null);
@@ -83,7 +87,7 @@ public sealed class SealedLimits
     }
 
     public bool IsReasonable() =>
-        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxSites && HomeworkApps.Count <= MaxEntries && UserLimits.Count <= MaxEntries
+        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxSites && HomeworkApps.Count <= MaxEntries && AlwaysAllowed.Count <= MaxEntries && UserLimits.Count <= MaxEntries
         && Groups.All(g => g.Members.Count <= MaxEntries);
 
     // An account is added only when set, so copies sealed before per-account rules existed keep their fingerprint.
@@ -97,6 +101,7 @@ public sealed class SealedLimits
             .Concat(Sites.Select(w => $"W|{w.Host}|{w.Minutes}|{(w.Enabled ? 1 : 0)}{For(w.User)}"))
             .Concat(UserLimits.Select(u => $"U|{u.User}|{u.App}|{u.Minutes}|{(u.Enabled ? 1 : 0)}"))
             .Concat(HomeworkApps.Select(h => h.ToLowerInvariant()).Distinct().Select(h => $"H|{h}"))
+            .Concat(AlwaysAllowed.Select(a => a.ToLowerInvariant()).Distinct().Select(a => $"A|{a}"))
             .Concat(AllowOnly || SafeBrowsing ? new[] { $"P|{(AllowOnly ? 1 : 0)}|{(SafeBrowsing ? 1 : 0)}" } : Array.Empty<string>())
             .Concat(Groups.Select(g => $"G|{g.Name}|{g.Minutes}|{(g.Enabled ? 1 : 0)}|" +
                 string.Join(',', g.Members.OrderBy(m => m, StringComparer.OrdinalIgnoreCase)) + For(g.User)))

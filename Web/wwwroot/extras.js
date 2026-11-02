@@ -130,6 +130,9 @@ window.addEventListener('load', () => {
   const options = Object.fromEntries(params.map(p => p.split('=')).filter(p => p.length === 2));
   if (view === 'screen-time' && /^\d{1,3}$/.test(options.grant || '') && /^[A-Za-z0-9_-]{1,64}$/.test(options.request || ''))
     screenPendingGrant = { minutes: Number(options.grant), request: options.request };
+  // "Allow" in a new-program or website alert: #screen-time&program=<id>, #limits&site=<id>.
+  if (view === 'screen-time' && /^[A-Za-z0-9_-]{1,64}$/.test(options.program || '')) screenPendingProgram = options.program;
+  if (view === 'limits' && /^[A-Za-z0-9_-]{1,64}$/.test(options.site || '')) sitePendingRequest = options.site;
   if (/^[a-z-]{1,20}$/.test(view)) document.querySelector(`.sidebar nav a[data-view="${view}"]`)?.click();
 });
 

@@ -340,6 +340,102 @@ internal sealed class ScreenTimeService : IDisposable
         };
     }
 
+    // "New programs need my OK". Only DeviceMon sends these (checked by the control server), and the
+    // account is the caller's. Allowing a program is an approved operation, never one of these.
+    private ScreenTimeReply HandlePrograms(ScreenTimeRequest request)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var programs = ProgramApprovals.Read();
+        switch (request.Command)
+        {
+            case "programs-on":
+                ProgramApprovals.Enable(programs, now);
+                ProgramApprovals.Write(programs);
+                _log("New programs now need the parent's OK.");
+                return ScreenTimeReply.Success(new { enabled = true });
+            case "program-baseline":
+                if (!IsChildAccount(request.UserSid)) return ScreenTimeReply.Success(new { state = "exempt" });
+                if (ProgramApprovals.Baseline(programs, request.UserSid, request.ProgramNames ?? new(), now))
+                {
+                    ProgramApprovals.Write(programs);
+                    _log($"Programs already on the PC for {request.UserSid} were recorded as allowed.");
+                }
+                return ScreenTimeReply.Success(new { state = "done" });
+            case "program-block":
+            {
+                if (ProgramApprovals.Key(request.ProgramName) is not { } key) return ScreenTimeReply.Failure("Invalid program.");
+                var entry = ProgramApprovals.Find(programs, key);
+                // Blocking only restricts, so it needs no approval (unlike allowing).
+                if (entry == null) return ScreenTimeReply.Failure("This program is not in the list. Reload the page.");
+                var wasWaiting = entry.State == ProgramApprovals.Waiting;
+                ProgramApprovals.Decide(programs, key, allow: false);
+                ProgramApprovals.Write(programs);
+                _log($"The parent kept the program {key} blocked.");
+                if (wasWaiting) TellAccount(entry.UserSid, $"Your parent did not allow {ProgramLabel(entry)}.");
+                return ScreenTimeReply.Success(new { blocked = true, wasWaiting });
+            }
+            default: // program-request
+            {
+                if (ProgramApprovals.Key(request.ProgramName) is not { } key) return ScreenTimeReply.Failure("Invalid program.");
+                // The parent's own (administrator) accounts are never held up.
+                if (!IsChildAccount(request.UserSid)) return ScreenTimeReply.Success(new { state = "exempt" });
+                if (!programs.Enabled) return ScreenTimeReply.Success(new { state = ProgramApprovals.Allowed });
+                if (!programs.Baselined.Contains(request.UserSid)) return ScreenTimeReply.Success(new { state = "baseline" });
+                if (ProgramApprovals.Request(programs, key, request.ProgramDisplay, request.UserSid, request.AccountName, now) is not { } result)
+                    return ScreenTimeReply.Success(new { state = ProgramApprovals.Blocked, isNew = false });
+                if (result.IsNew)
+                {
+                    ProgramApprovals.Write(programs);
+                    _log($"New program {key} opened by {request.UserSid}; waiting for the parent.");
+                }
+                return ScreenTimeReply.Success(new { state = result.Entry.State, id = result.Entry.Id, isNew = result.IsNew });
+            }
+        }
+    }
+
+    // Decided by the account itself (standard, enabled), not by its session: a parent's session runs with a
+    // UAC-filtered token that hides the Administrators group, and a child's session may be briefly disconnected.
+    private sealed record ChildAccounts(DateTime At, HashSet<string> Sids);
+    private ChildAccounts? _childAccounts;
+
+    private bool IsChildAccount(string sid)
+    {
+        if (sid.Length == 0) return false;
+        try
+        {
+            var known = _childAccounts;
+            if (known == null || DateTime.UtcNow - known.At > TimeSpan.FromMinutes(1))
+                _childAccounts = known = new(DateTime.UtcNow, ScreenTimeWindows.Accounts().Where(a => a.Eligible).Select(a => a.Sid).ToHashSet());
+            return known.Sids.Contains(sid);
+        }
+        catch { return false; }
+    }
+
+    private static string ProgramLabel(ProgramEntry entry) => entry.Display.Length > 0 ? entry.Display : entry.Name;
+
+    private void TellAccount(string sid, string text)
+    {
+        try
+        {
+            foreach (var session in ScreenTimeWindows.Sessions().Where(s => s.Sid == sid && s.Unlocked))
+                ScreenTimeWindows.Warn(session.SessionId, text);
+        }
+        catch (Exception ex) { _log("Could not show a message: " + ex.Message); }
+    }
+
+    private static object DescribePrograms()
+    {
+        var programs = ProgramApprovals.Read();
+        return new
+        {
+            enabled = programs.Enabled,
+            list = ProgramApprovals.Visible(programs).Take(100).Select(e => new
+            {
+                id = e.Id, name = e.Name, display = e.Display, state = e.State, userSid = e.UserSid, account = e.Account, seenUtc = e.SeenUtc
+            }).ToList()
+        };
+    }
+
     private void AskForMoreTime(int sessionId, ScreenTimePolicy policy, string text)
     {
         lock (_asking) { if (!_asking.Add(sessionId)) return; }
@@ -453,6 +549,9 @@ internal sealed class ScreenTimeService : IDisposable
                     return ScreenTimeReply.Success(new { blocked = hosts.Count });
                 }
 
+                if (request.Command is "programs-on" or "program-baseline" or "program-request" or "program-block")
+                    return HandlePrograms(request);
+
                 if (request.Command == "set-heartbeat")
                 {
                     var url = (request.HeartbeatUrl ?? "").Trim();
@@ -508,8 +607,11 @@ internal sealed class ScreenTimeService : IDisposable
                     // Sealed app limits: approved like any other change, but not tied to an account.
                     if (request.Operation == "limits-open" && request.LimitsMinutes is < 1 or > LimitsSealStore.MaxWindowMinutes)
                         return ScreenTimeReply.Failure("Choose between 1 and 60 minutes.");
-                    if (request.Operation is not ("limits-open" or "limits-clear" or "homework-stop" or "timezone-accept"))
+                    if (request.Operation is not ("limits-open" or "limits-clear" or "homework-stop" or "timezone-accept" or "programs-off" or "program-allow"))
                         return ScreenTimeReply.Failure("Unknown operation.");
+                    if (request.Operation == "program-allow"
+                        && (ProgramApprovals.Key(request.ProgramName) is not { } allowKey || ProgramApprovals.Find(ProgramApprovals.Read(), allowKey) == null))
+                        return ScreenTimeReply.Failure("This program is not in the list. Reload the page.");
                     // The parent approves the zone they were shown; if Windows was switched again meanwhile,
                     // that newer zone is not pinned by the old approval.
                     if (request.Operation == "timezone-accept")
@@ -527,6 +629,21 @@ internal sealed class ScreenTimeService : IDisposable
                         ScreenTimeFiles.WriteAtomic(ParentClock.Path, ParentClock.Accept(request.TimeZoneId));
                         ParentClock.Invalidate();
                         _log($"The rules now use the time zone {request.TimeZoneId}.");
+                    }
+                    else if (request.Operation == "programs-off")
+                    {
+                        var programs = ProgramApprovals.Read();
+                        programs.Enabled = false;
+                        ProgramApprovals.Write(programs);
+                        _log("New programs no longer need the parent's OK.");
+                    }
+                    else if (request.Operation == "program-allow")
+                    {
+                        var programs = ProgramApprovals.Read();
+                        var entry = ProgramApprovals.Decide(programs, ProgramApprovals.Key(request.ProgramName)!, allow: true)!;
+                        ProgramApprovals.Write(programs);
+                        _log($"The parent allowed the program {entry.Name}.");
+                        TellAccount(entry.UserSid, $"Your parent allowed {ProgramLabel(entry)}. You can open it now.");
                     }
                     else if (request.Operation == "homework-stop")
                     {
@@ -599,6 +716,7 @@ internal sealed class ScreenTimeService : IDisposable
                     remote = RemoteStatus(),
                     limitsProtection = DescribeLimitsProtection(),
                     timeZone = new { pinned = zone?.PinnedId ?? TimeZoneInfo.Local.Id, system = zone?.SystemId ?? TimeZoneInfo.Local.Id, changedUtc = zone?.ChangedUtc },
+                    programs = DescribePrograms(),
                     requests = TimeRequestStore.Pending(DateTimeOffset.UtcNow)
                         .Select(r => new { id = r.Id, userSid = r.UserSid, name = r.Name, createdUtc = r.CreatedUtc }).ToList(),
                     updatedUtc = DateTimeOffset.UtcNow,

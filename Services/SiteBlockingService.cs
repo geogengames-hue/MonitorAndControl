@@ -18,6 +18,9 @@ public sealed class SiteBlockingService : IDisposable
     private bool _serviceWarned;
     private int _running;
 
+    /// <summary>What the browsers were last told (this account's view), so a blocked page can offer to ask the parent.</summary>
+    public PolicyPlan? CurrentPlan { get; private set; }
+
     public SiteBlockingService(UsageDatabase db)
     {
         _db = db;
@@ -31,26 +34,8 @@ public sealed class SiteBlockingService : IDisposable
         if (Interlocked.Exchange(ref _running, 1) != 0) return;
         try
         {
-            var rules = await _db.GetSiteLimitsAsync();
-            var usage = rules.Count == 0
-                ? new List<Models.SiteUsageRecord>()
-                : await _db.GetSiteUsageRangeAsync(MonitorAndControl.ScreenTime.ParentClock.Today, MonitorAndControl.ScreenTime.ParentClock.Today);
-            var status = SiteLimitLogic.Evaluate(rules, usage);
-            var blocked = SiteLimitLogic.BlockedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
-            var allowOnly = await _db.GetSettingAsync("SiteAllowOnly", "false") == "true";
-            var safe = await _db.GetSettingAsync("SafeBrowsing", "false") == "true";
-            var homework = HomeworkState.IsActiveNow();
-            // Always sent (the service only uses it in allow-list or homework mode), so a new session starts with it already there.
-            var allowed = SiteLimitLogic.AllowedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
-
-            // Rules for this Windows account, counted from its own browsing. The service puts them in the
-            // browsers while this account is the one at the screen.
-            var sid = AccountIdentity.CurrentSid;
-            var ownRules = sid.Length == 0 ? new List<Models.SiteLimit>() : await _db.GetUserSiteLimitsAsync(sid);
-            var ownStatus = ownRules.Count == 0 ? new List<SiteLimitStatus>()
-                : SiteLimitLogic.Evaluate(ownRules, await _db.GetUserSiteUsageTodayAsync(sid));
-            var ownBlocked = SiteLimitLogic.BlockedHosts(ownStatus).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
-            var ownAllowed = SiteLimitLogic.AllowedHosts(ownStatus).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+            var (blocked, allowed, ownBlocked, ownAllowed, allowOnly, safe, homework) = await RulesForAsync(_db, AccountIdentity.CurrentSid);
+            CurrentPlan = SiteBlocking.ComputePlan(blocked.Concat(ownBlocked), allowed.Concat(ownAllowed), allowOnly, safe, null, homework);
 
             var key = string.Join('|', blocked) + "#" + string.Join('|', allowed) + $"#{allowOnly}#{safe}#{homework}#" +
                       string.Join('|', ownBlocked) + "#" + string.Join('|', ownAllowed);
@@ -77,6 +62,39 @@ public sealed class SiteBlockingService : IDisposable
             _serviceWarned = true;
         }
         finally { Volatile.Write(ref _running, 0); }
+    }
+
+    // Shared rules and one account's own rules, worked out from today's usage.
+    private static async Task<(List<string> Blocked, List<string> Allowed, List<string> OwnBlocked, List<string> OwnAllowed, bool AllowOnly, bool Safe, bool Homework)>
+        RulesForAsync(UsageDatabase db, string sid)
+    {
+        var rules = await db.GetSiteLimitsAsync();
+        var usage = rules.Count == 0
+            ? new List<Models.SiteUsageRecord>()
+            : await db.GetSiteUsageRangeAsync(MonitorAndControl.ScreenTime.ParentClock.Today, MonitorAndControl.ScreenTime.ParentClock.Today);
+        var status = SiteLimitLogic.Evaluate(rules, usage);
+        var blocked = SiteLimitLogic.BlockedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+        var allowOnly = await db.GetSettingAsync("SiteAllowOnly", "false") == "true";
+        var safe = await db.GetSettingAsync("SafeBrowsing", "false") == "true";
+        var homework = HomeworkState.IsActiveNow();
+        // Always sent (the service only uses it in allow-list or homework mode), so a new session starts with it already there.
+        var allowed = SiteLimitLogic.AllowedHosts(status).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+
+        // Rules for this Windows account, counted from its own browsing. The service puts them in the
+        // browsers while this account is the one at the screen.
+        var ownRules = sid.Length == 0 ? new List<Models.SiteLimit>() : await db.GetUserSiteLimitsAsync(sid);
+        var ownStatus = ownRules.Count == 0 ? new List<SiteLimitStatus>()
+            : SiteLimitLogic.Evaluate(ownRules, await db.GetUserSiteUsageTodayAsync(sid));
+        var ownBlocked = SiteLimitLogic.BlockedHosts(ownStatus).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+        var ownAllowed = SiteLimitLogic.AllowedHosts(ownStatus).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToList();
+        return (blocked, allowed, ownBlocked, ownAllowed, allowOnly, safe, homework);
+    }
+
+    /// <summary>What the browsers allow for one account under the rules saved now.</summary>
+    public static async Task<PolicyPlan> PlanForAsync(UsageDatabase db, string sid)
+    {
+        var (blocked, allowed, ownBlocked, ownAllowed, allowOnly, safe, homework) = await RulesForAsync(db, sid);
+        return SiteBlocking.ComputePlan(blocked.Concat(ownBlocked), allowed.Concat(ownAllowed), allowOnly, safe, null, homework);
     }
 
     public void Dispose() => _timer.Dispose();

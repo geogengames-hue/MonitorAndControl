@@ -178,6 +178,16 @@ public static class ScreenTimeEndpoints
                         Raise($"Homework mode was ended early remotely from {source}.", true);
                         return Results.Json(reply.Data);
                     }
+                    if (request.Operation == "programs-off")
+                    {
+                        Raise($"New programs no longer need your OK (turned off remotely from {source}).", true);
+                        return Results.Json(reply.Data);
+                    }
+                    if (request.Operation == "program-allow")
+                    {
+                        Raise($"The program {request.ProgramName} was allowed remotely from {source}.", true);
+                        return Results.Json(reply.Data);
+                    }
                     if (request.Operation == "timezone-accept")
                     {
                         Raise($"The PC Time rules were switched to the PC's current time zone remotely from {source}.", true);

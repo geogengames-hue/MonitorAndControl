@@ -19,6 +19,8 @@ public class LimitEnforcer
     private readonly ConcurrentDictionary<string, string> _exceededToday = new(StringComparer.OrdinalIgnoreCase);
     private string _todayDate = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
     private DateTimeOffset? _pausedUntil;
+    // Apps the parent marked "always allowed": nothing here closes them.
+    private volatile HashSet<string> _alwaysAllowed = new(StringComparer.OrdinalIgnoreCase);
 
     public event Action<string, int, string>? OnBreachAlert;
     public event Action<string, int>? OnCountdownTick;
@@ -27,6 +29,11 @@ public class LimitEnforcer
 
     public DateTimeOffset? PausedUntil => _pausedUntil;
     public bool IsPaused => _pausedUntil.HasValue && _pausedUntil.Value > DateTimeOffset.Now;
+
+    public void SetAlwaysAllowed(IEnumerable<string> appNames) =>
+        _alwaysAllowed = new HashSet<string>(appNames, StringComparer.OrdinalIgnoreCase);
+
+    public bool IsAlwaysAllowed(string appName) => _alwaysAllowed.Contains(appName);
 
     public LimitEnforcer(UsageDatabase db, WindowTracker tracker)
     {
@@ -73,6 +80,7 @@ public class LimitEnforcer
 
     private void OnAppChanged(string app, string proc)
     {
+        if (IsAlwaysAllowed(app)) return;
         // Auto-clear exceeded set at midnight
         var today = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
         if (_todayDate != today)
@@ -118,6 +126,7 @@ public class LimitEnforcer
             {
                 var appName = _tracker.KnownApps.TryGetValue(procName, out var friendly)
                     ? friendly : procName;
+                if (IsAlwaysAllowed(appName)) continue;
                 var inSchedule = scheduleViolationApps.Contains(appName);
                 var inHomework = homeworkApps?.Contains(appName) == true;
                 if (!inSchedule && !inHomework)
@@ -140,7 +149,7 @@ public class LimitEnforcer
         foreach (var group in breachedGroups)
         {
             var members = group.AppNames
-                .Where(appName => _tracker.KnownApps.Values.Any(value =>
+                .Where(appName => !IsAlwaysAllowed(appName) && _tracker.KnownApps.Values.Any(value =>
                     value.Equals(appName, StringComparison.OrdinalIgnoreCase)))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -165,7 +174,7 @@ public class LimitEnforcer
 
         foreach (var (appName, used, max) in breached)
         {
-            if (groupMemberApps.Contains(appName)) continue;
+            if (groupMemberApps.Contains(appName) || IsAlwaysAllowed(appName)) continue;
             var key = appName.ToLowerInvariant();
             if (!_tracker.KnownApps.Values.Any(v =>
                     v.Equals(appName, StringComparison.OrdinalIgnoreCase)))
@@ -333,6 +342,7 @@ public class LimitEnforcer
             var appName = _tracker.KnownApps.TryGetValue(procName, out var friendly)
                 ? friendly
                 : procName;
+            if (IsAlwaysAllowed(appName)) continue;
             KillProcessByName(procName);
             OnAppTerminatedBySchedule?.Invoke(appName);
             killed++;
@@ -344,6 +354,7 @@ public class LimitEnforcer
 
     private void KillAppProcesses(string appName)
     {
+        if (IsAlwaysAllowed(appName)) return;
         try
         {
             var processNames = _tracker.GetProcessNamesForApp(appName);
@@ -366,7 +377,8 @@ public class LimitEnforcer
             : _tracker.IsProcessRunning(appName);
     }
 
-    private void KillProcessByName(string processName)
+    /// <summary>Closes this account's copies of a program (asks first, then ends it after five seconds).</summary>
+    internal static void KillProcessByName(string processName)
     {
         try
         {

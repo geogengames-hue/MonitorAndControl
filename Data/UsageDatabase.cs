@@ -109,6 +109,17 @@ public class UsageDatabase : IDisposable
                 Enabled INTEGER NOT NULL DEFAULT 1
             );
 
+            CREATE TABLE IF NOT EXISTS SiteRequests (
+                Id TEXT PRIMARY KEY,
+                UserSid TEXT NOT NULL,
+                Account TEXT NOT NULL DEFAULT '',
+                Host TEXT NOT NULL,
+                CreatedUtc TEXT NOT NULL,
+                State TEXT NOT NULL DEFAULT 'waiting',
+                Alerted INTEGER NOT NULL DEFAULT 0,
+                Told INTEGER NOT NULL DEFAULT 1
+            );
+
             CREATE TABLE IF NOT EXISTS QuickActions (
                 Hash TEXT PRIMARY KEY,
                 UserSid TEXT NOT NULL,
@@ -385,6 +396,89 @@ public class UsageDatabase : IDisposable
     }
 
     // ---- Single-use "Not now" links from phone alerts ------------------------------------------
+    // ---- "Ask to open this site" requests --------------------------------------------------
+    public const int MaxWaitingSiteRequests = 50;
+
+    /// <summary>Records a request unless this account already has one waiting for the site. Returns false for a duplicate.</summary>
+    public async Task<bool> AddSiteRequestAsync(SiteRequest request)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                DELETE FROM SiteRequests WHERE CreatedUtc < @old;
+                INSERT INTO SiteRequests (Id, UserSid, Account, Host, CreatedUtc, State, Alerted, Told)
+                SELECT @id, @sid, @account, @host, @now, 'waiting', 0, 1
+                WHERE NOT EXISTS (SELECT 1 FROM SiteRequests WHERE UserSid = @sid AND Host = @host AND State = 'waiting' AND CreatedUtc >= @since)
+                  AND (SELECT COUNT(*) FROM SiteRequests WHERE State = 'waiting' AND CreatedUtc >= @since) < @max;
+                """;
+            cmd.Parameters.AddWithValue("@old", DateTimeOffset.UtcNow.AddDays(-7).ToString("O"));
+            // Requests older than a day have lapsed (the parent no longer sees them), so they do not count.
+            cmd.Parameters.AddWithValue("@since", DateTimeOffset.UtcNow.Add(-SiteRequest.Lifetime).ToString("O"));
+            cmd.Parameters.AddWithValue("@id", request.Id);
+            cmd.Parameters.AddWithValue("@sid", request.UserSid);
+            cmd.Parameters.AddWithValue("@account", request.Account);
+            cmd.Parameters.AddWithValue("@host", request.Host);
+            cmd.Parameters.AddWithValue("@now", request.CreatedUtc.ToUniversalTime().ToString("O"));
+            cmd.Parameters.AddWithValue("@max", MaxWaitingSiteRequests);
+            return await cmd.ExecuteNonQueryAsync() > 0;
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>Requests still waiting (null = every account); requests older than a day lapse.</summary>
+    public async Task<List<SiteRequest>> GetSiteRequestsAsync(string? state = "waiting", string? userSid = null)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT Id, UserSid, Account, Host, CreatedUtc, State, Alerted, Told FROM SiteRequests " +
+                              "WHERE (@state IS NULL OR State = @state) AND (@sid IS NULL OR UserSid = @sid) AND CreatedUtc >= @since ORDER BY CreatedUtc";
+            cmd.Parameters.AddWithValue("@state", (object?)state ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@sid", (object?)userSid ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@since", DateTimeOffset.UtcNow.Add(-SiteRequest.Lifetime).ToString("O"));
+            using var r = await cmd.ExecuteReaderAsync();
+            var list = new List<SiteRequest>();
+            while (await r.ReadAsync())
+                list.Add(new SiteRequest
+                {
+                    Id = r.GetString(0), UserSid = r.GetString(1), Account = r.GetString(2), Host = r.GetString(3),
+                    CreatedUtc = DateTimeOffset.Parse(r.GetString(4), System.Globalization.CultureInfo.InvariantCulture),
+                    State = r.GetString(5), Alerted = r.GetInt64(6) != 0, Told = r.GetInt64(7) != 0
+                });
+            return list;
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>Claims a waiting request for alerting, so two accounts' DeviceMon do not both send it. False if already claimed.</summary>
+    public Task<bool> ClaimSiteRequestAlertAsync(string id, bool claim) =>
+        ExecuteAsync(claim ? "UPDATE SiteRequests SET Alerted = 1 WHERE Id = @id AND Alerted = 0"
+                           : "UPDATE SiteRequests SET Alerted = 0 WHERE Id = @id", ("@id", id));
+
+    /// <summary>Answers one request ("allowed" or "declined"); the child is told by their own DeviceMon.</summary>
+    public Task<bool> AnswerSiteRequestAsync(string id, bool allowed) =>
+        ExecuteAsync("UPDATE SiteRequests SET State = @state, Told = 0 WHERE Id = @id AND State = 'waiting'",
+            ("@id", id), ("@state", allowed ? "allowed" : "declined"));
+
+    public Task<bool> MarkSiteRequestToldAsync(string id) =>
+        ExecuteAsync("UPDATE SiteRequests SET Told = 1 WHERE Id = @id", ("@id", id));
+
+    private async Task<bool> ExecuteAsync(string sql, params (string Name, object Value)[] parameters)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = sql;
+            foreach (var (name, value) in parameters) cmd.Parameters.AddWithValue(name, value);
+            return await cmd.ExecuteNonQueryAsync() > 0;
+        }
+        finally { _lock.Release(); }
+    }
+
     public async Task AddQuickActionAsync(string hash, string userSid, string requestId, DateTimeOffset expiresUtc)
     {
         await _lock.WaitAsync();
@@ -1140,6 +1234,15 @@ public class UsageDatabase : IDisposable
     public Task SetHomeworkAppsAsync(IEnumerable<string> apps) =>
         SetSettingAsync("HomeworkBlockedApps", System.Text.Json.JsonSerializer.Serialize(apps.Distinct(StringComparer.OrdinalIgnoreCase).ToList()));
 
+    public async Task<List<string>> GetAlwaysAllowedAppsAsync()
+    {
+        try { return System.Text.Json.JsonSerializer.Deserialize<List<string>>(await GetSettingAsync("AlwaysAllowedApps", "[]")) ?? new(); }
+        catch { return new(); }
+    }
+
+    public Task SetAlwaysAllowedAppsAsync(IEnumerable<string> apps) =>
+        SetSettingAsync("AlwaysAllowedApps", System.Text.Json.JsonSerializer.Serialize(apps.Distinct(StringComparer.OrdinalIgnoreCase).ToList()));
+
     public void ResetLimitsBaseline() { _limitsBaseline = null; _limitsDataVersion = -1; }
 
     public async Task<MonitorAndControl.ScreenTime.SealedLimits> ReadLimitsSnapshotAsync()
@@ -1150,6 +1253,7 @@ public class UsageDatabase : IDisposable
         foreach (var r in await GetScheduleRulesAsync())
             snapshot.Schedule.Add(new() { App = r.AppName, Day = r.DayOfWeek, Start = r.StartTime, End = r.EndTime, Enabled = r.Enabled, User = r.UserSid });
         snapshot.HomeworkApps = await GetHomeworkAppsAsync();
+        snapshot.AlwaysAllowed = await GetAlwaysAllowedAppsAsync();
         snapshot.AllowOnly = await GetSettingAsync("SiteAllowOnly", "false") == "true";
         snapshot.SafeBrowsing = await GetSettingAsync("SafeBrowsing", "false") == "true";
         foreach (var u in await GetUserLimitRulesAsync())
@@ -1171,6 +1275,7 @@ public class UsageDatabase : IDisposable
             { AppName = s.App, DayOfWeek = s.Day, StartTime = s.Start, EndTime = s.End, Enabled = s.Enabled, UserSid = s.User }));
         await ReplaceUserLimitRulesAsync(snapshot.UserLimits.Select(u => new AppLimitRule { UserSid = u.User, AppName = u.App, DailyMaxMinutes = u.Minutes, Enabled = u.Enabled }));
         await SetHomeworkAppsAsync(snapshot.HomeworkApps);
+        await SetAlwaysAllowedAppsAsync(snapshot.AlwaysAllowed);
         await SetSettingAsync("SiteAllowOnly", snapshot.AllowOnly ? "true" : "false");
         await SetSettingAsync("SafeBrowsing", snapshot.SafeBrowsing ? "true" : "false");
         await ReplaceSiteLimitsAsync(snapshot.Sites.Where(w => string.IsNullOrEmpty(w.User)).Select(w => new SiteLimit { Host = w.Host, DailyMaxMinutes = w.Minutes, Enabled = w.Enabled }));

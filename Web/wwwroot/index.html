@@ -66,6 +66,13 @@
         <span id="screen-timezone-status"></span>
         <button type="button" id="screen-timezone-accept" title="Use the PC's current time zone for bedtime, schedules and daily limits. Needs your approval." class="btn-secondary hidden">Use the new time zone</button>
       </div>
+      <div id="screen-programs-panel" class="screen-notice screen-lock hidden" title="When this is on, a program that was not on the PC when you turned it on is closed until you allow it. You get an alert when one is opened.">
+        <strong>New programs</strong>
+        <span id="screen-programs-status"></span>
+        <button type="button" id="screen-programs-on" title="Programs already on the PC keep working. A new program is closed until you allow it." class="btn-secondary hidden">Ask me before new programs</button>
+        <button type="button" id="screen-programs-off" title="New programs open without asking. Needs your approval." class="btn-secondary hidden">Turn off</button>
+        <div id="screen-programs-list"></div>
+      </div>
       <div id="screen-requests" class="screen-notice hidden" role="status" title="The child asked for more PC time. Approve to fill in the extra minutes, then save."></div>
       <div class="history-stats screen-stats">
         <div class="stat-card"><div class="label">Selected account</div><div class="value" id="screen-account-name">-</div><div class="sub">Administrators are never controlled</div></div>
@@ -283,6 +290,7 @@
         <label title="Force SafeSearch in Google and Bing and YouTube Restricted Mode (strict) in Chrome, Edge and Brave. The child cannot turn it off." class="inline-check"><input type="checkbox" id="site-safe"> Safe browsing: force SafeSearch and YouTube Restricted Mode</label>
         <label title="Only the sites you add below as Always allowed (or with a daily allowance) can be opened. Everything else is blocked. Use with care and test first." class="inline-check"><input type="checkbox" id="site-allow-only"> Allow-list mode: only the sites listed below can open</label>
       </div>
+      <div id="site-requests" class="screen-notice hidden" role="status" title="The child asked to open a blocked site. Allow fills in the form below; save it to answer."></div>
       <div class="table-container" id="site-limits-table"></div>
       <div class="add-form">
         <h3>Add / Edit Website Limit</h3>
@@ -305,6 +313,15 @@
         <datalist id="homework-app-list"></datalist>
         <button id="homework-add" title="Close this app during homework mode.">Add app</button>
         <p id="homework-message" class="screen-error hidden" role="status"></p>
+      </div>
+      <h3 class="individual-limits-title" title="Apps that are never closed by the schedule, limits, homework mode, Block now or the new-program check.">Always allowed</h3>
+      <p style="font-size:13px;color:#888">Apps listed here are never closed by DeviceMon: not by the schedule, app limits, groups, homework mode, Block now or the new-program check. Use it for school apps, a calculator or a music tutor. Bedtime, PC time running out and Lock now still sign the account out or lock it.</p>
+      <div class="table-container" id="always-apps"></div>
+      <div class="add-form">
+        <input type="text" id="always-app" list="always-app-list" title="The name of an app that is never closed, as shown in your tracked apps." placeholder="App name (e.g. Calculator)" autocomplete="off">
+        <datalist id="always-app-list"></datalist>
+        <button id="always-add" title="Never close this app.">Add app</button>
+        <p id="always-message" class="screen-error hidden" role="status"></p>
       </div>
     </div>
     <div id="view-discover" class="view">

@@ -23,6 +23,27 @@ public static class AccountIdentity
         }
     }
 
+    private static bool? _admin;
+
+    /// <summary>
+    /// True for an administrator account (the parent's), also while UAC runs it with a filtered token
+    /// (the Administrators group is then present as deny-only, which still shows up as a claim).
+    /// </summary>
+    public static bool IsAdministrator
+    {
+        get
+        {
+            if (_admin is { } known) return known;
+            try
+            {
+                using var identity = WindowsIdentity.GetCurrent();
+                _admin = identity.Claims.Any(c => c.Value == "S-1-5-32-544");
+            }
+            catch { _admin = false; }
+            return _admin.Value;
+        }
+    }
+
     private static int? _session;
 
     /// <summary>The Windows session this DeviceMon runs in; only programs in this session belong to its account.</summary>

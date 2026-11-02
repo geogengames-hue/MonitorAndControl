@@ -3,6 +3,62 @@
 const siteEl = id => document.getElementById('site-' + id);
 // The rule loaded with Edit; if the site or account is changed before saving, the old rule is replaced.
 let siteEditing = null;
+// Set when the page was opened from a website request alert's "Allow" button.
+let sitePendingRequest = null;
+
+// Fill in the form to allow a requested site for the child who asked (the parent still presses Save).
+function siteFillFromRequest(request) {
+  siteEditing = null;
+  fillAccountSelect(siteEl('account'), request.userSid);
+  siteEl('host').value = request.host;
+  siteEl('mode').value = 'allow';
+  siteModeChanged();
+  siteMessage(t('Check the rule and press Save to allow {host}. You can also give it a daily limit instead.', { host: request.host }));
+  siteEl('host').scrollIntoView({ block: 'center' });
+  siteEl('save').focus();
+}
+
+async function loadSiteRequests() {
+  const box = document.getElementById('site-requests');
+  if (!box) return;
+  try {
+    const requests = await api('/api/site-requests');
+    box.replaceChildren();
+    box.classList.toggle('hidden', !requests.length);
+    requests.forEach(request => {
+      const row = document.createElement('div');
+      row.className = 'screen-request';
+      const label = document.createElement('span');
+      label.textContent = t('{name} asked to open {host}.', { name: request.account || accountLabel(request.userSid), host: request.host }) + ' ';
+      const allow = document.createElement('button');
+      allow.type = 'button';
+      allow.className = 'btn-secondary';
+      allow.textContent = t('Allow');
+      allow.title = t('Fills in the form below for this site and account. Press Save to allow it.');
+      allow.addEventListener('click', () => siteFillFromRequest(request));
+      const decline = document.createElement('button');
+      decline.type = 'button';
+      decline.className = 'btn-secondary';
+      decline.textContent = t('Not now');
+      decline.title = t('Decline this request. The child is told.');
+      decline.addEventListener('click', async () => {
+        decline.disabled = true;
+        try { await api('/api/site-requests/' + encodeURIComponent(request.id) + '/decline', { method: 'POST' }); await loadSiteRequests(); }
+        catch (error) { siteMessage(error.message); decline.disabled = false; }
+      });
+      row.append(label, allow, ' ', decline);
+      box.appendChild(row);
+    });
+    const pending = sitePendingRequest;
+    if (pending) {
+      sitePendingRequest = null;
+      history.replaceState(null, '', location.pathname + '#limits');
+      const request = requests.find(r => r.id === pending);
+      if (request) siteFillFromRequest(request);
+      else siteMessage(t('This request was already answered.'));
+    }
+  } catch { /* shown by the page's other loaders */ }
+}
 
 function siteDeleteUrl(rule) {
   return rule.userSid
@@ -105,7 +161,10 @@ siteEl('save').addEventListener('click', async () => {
     if (original && (original.host !== saved?.host || original.userSid !== userSid))
       await api(siteDeleteUrl(original), { method: 'DELETE' }).catch(() => {});
     siteEl('host').value = '';
-    await loadSiteLimits();
+    siteMessage(saved?.stillBlocked
+      ? t('Saved, but {host} is still blocked for the child who asked (another rule blocks it, or its daily time is used up).', { host: saved.host })
+      : '');
+    await Promise.all([loadSiteLimits(), loadSiteRequests()]);
   } catch (error) {
     let text = error.message;
     try { text = JSON.parse(text).error || text; } catch { /* plain text */ }
@@ -143,87 +202,90 @@ siteEl('allow-only').addEventListener('change', () => {
   saveSiteSettings();
 });
 
-document.querySelectorAll('[data-view="limits"]').forEach(a => a.addEventListener('click', () => { loadSiteLimits(); loadSiteSettings(); }));
+document.querySelectorAll('[data-view="limits"]').forEach(a => a.addEventListener('click', () => { loadSiteLimits(); loadSiteSettings(); loadSiteRequests(); }));
 setInterval(() => {
-  if (document.getElementById('view-limits')?.classList.contains('active')) loadSiteLimits();
+  if (document.getElementById('view-limits')?.classList.contains('active')) { loadSiteLimits(); loadSiteRequests(); }
 }, 15000);
 
-// ---- homework mode: the apps closed while it is on
-const hwEl = id => document.getElementById('homework-' + id);
+// ---- app lists on the Limits page: apps closed during homework mode, and apps that are never closed
+function appListEditor({ prefix, getUrl, addUrl, deleteUrl, empty, removeTitle }) {
+  const el = id => document.getElementById(prefix + '-' + id);
+  const message = text => {
+    const box = el('message');
+    box.textContent = text || '';
+    box.classList.toggle('hidden', !text);
+  };
 
-function hwMessage(text) {
-  const box = hwEl('message');
-  box.textContent = text || '';
-  box.classList.toggle('hidden', !text);
-}
-
-async function saveHomeworkApps(apps) {
-  await api('/api/homework/apps', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apps })
-  });
-}
-
-async function loadHomeworkApps() {
-  const holder = hwEl('apps');
-  if (!holder) return;
-  try {
-    const [hw, known] = await Promise.all([api('/api/homework'), api('/api/apps')]);
-    const list = hwEl('app-list');
-    list.replaceChildren();
-    [...new Set(Object.values(known))].sort().forEach(name => { const o = document.createElement('option'); o.value = name; list.appendChild(o); });
-    holder.replaceChildren();
-    if (!hw.apps.length) {
-      const p = document.createElement('p');
-      p.style.cssText = 'color:#666;text-align:center;padding:20px';
-      p.textContent = t('No apps are set to close during homework mode yet.');
-      holder.appendChild(p);
-      return;
-    }
-    hw.apps.forEach(name => {
-      const row = document.createElement('div');
-      row.className = 'other-pc';
-      const label = document.createElement('span');
-      label.textContent = name;
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'btn-danger';
-      remove.textContent = t('Remove');
-      remove.title = t('Stop closing this app during homework mode.');
-      remove.addEventListener('click', async () => {
-        remove.disabled = true;
-        try {
-          await api('/api/homework/apps/' + encodeURIComponent(name), { method: 'DELETE' });
-          await loadHomeworkApps();
-        }
-        catch (error) { hwMessage(error.message); remove.disabled = false; }
+  async function load() {
+    const holder = el('apps');
+    if (!holder) return;
+    try {
+      const [data, known] = await Promise.all([api(getUrl), api('/api/apps')]);
+      const list = el('app-list');
+      list.replaceChildren();
+      [...new Set(Object.values(known))].sort().forEach(name => { const o = document.createElement('option'); o.value = name; list.appendChild(o); });
+      holder.replaceChildren();
+      if (!data.apps.length) {
+        const p = document.createElement('p');
+        p.style.cssText = 'color:#666;text-align:center;padding:20px';
+        p.textContent = t(empty);
+        holder.appendChild(p);
+        return;
+      }
+      data.apps.forEach(name => {
+        const row = document.createElement('div');
+        row.className = 'other-pc';
+        const label = document.createElement('span');
+        label.textContent = name;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'btn-danger';
+        remove.textContent = t('Remove');
+        remove.title = t(removeTitle);
+        remove.addEventListener('click', async () => {
+          remove.disabled = true;
+          try {
+            await api(deleteUrl + encodeURIComponent(name), { method: 'DELETE' });
+            await load();
+          }
+          catch (error) { message(error.message); remove.disabled = false; }
+        });
+        row.append(label, remove);
+        holder.appendChild(row);
       });
-      row.append(label, remove);
-      holder.appendChild(row);
-    });
-  } catch { /* shown by the page's other loaders */ }
+    } catch { /* shown by the page's other loaders */ }
+  }
+
+  el('add')?.addEventListener('click', async () => {
+    message('');
+    const name = el('app').value.trim();
+    if (!name) { message(t('Enter the name of an app.')); return; }
+    try {
+      await api(addUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app: name })
+      });
+      el('app').value = '';
+      await load();
+    } catch (error) {
+      let text = error.message;
+      try { text = JSON.parse(text).error || text; } catch { /* plain text */ }
+      message(t(text));
+    }
+  });
+  document.querySelectorAll('[data-view="limits"]').forEach(a => a.addEventListener('click', load));
+  return load;
 }
 
-hwEl('add')?.addEventListener('click', async () => {
-  hwMessage('');
-  const name = hwEl('app').value.trim();
-  if (!name) { hwMessage(t('Enter the name of an app.')); return; }
-  try {
-    await api('/api/homework/apps/add', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app: name })
-    });
-    hwEl('app').value = '';
-    await loadHomeworkApps();
-  } catch (error) {
-    let text = error.message;
-    try { text = JSON.parse(text).error || text; } catch { /* plain text */ }
-    hwMessage(t(text));
-  }
+appListEditor({
+  prefix: 'homework', getUrl: '/api/homework', addUrl: '/api/homework/apps/add', deleteUrl: '/api/homework/apps/',
+  empty: 'No apps are set to close during homework mode yet.', removeTitle: 'Stop closing this app during homework mode.'
 });
-document.querySelectorAll('[data-view="limits"]').forEach(a => a.addEventListener('click', loadHomeworkApps));
+appListEditor({
+  prefix: 'always', getUrl: '/api/always-allowed', addUrl: '/api/always-allowed/add', deleteUrl: '/api/always-allowed/',
+  empty: 'No apps are always allowed yet.', removeTitle: 'This app can be closed again by the schedule, limits and homework mode.'
+});
 
 // ---- app limits for one Windows account
 const ulEl = id => document.getElementById('ul-' + id);

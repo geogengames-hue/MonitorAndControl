@@ -25,6 +25,8 @@ internal static class Program
     private static WebsiteTracker? _websiteTracker;
     private static SiteBlockingService? _siteBlocking;
     private static NewAppWatcher? _newApps;
+    private static ProgramGate? _programGate;
+    private static SiteRequestService? _siteRequests;
     private static MonitorAndControl.UI.TimeLeftTray? _timeLeftTray;
     private static LimitEnforcer? _enforcer;
     private static SchedulerService? _scheduler;
@@ -513,6 +515,7 @@ internal static class Program
         _scheduler.InvalidateCache();
 
         _enforcer = new LimitEnforcer(_db!, _tracker);
+        _enforcer.SetAlwaysAllowed(_db.GetAlwaysAllowedAppsAsync().GetAwaiter().GetResult());
         _enforcer.OnBreachAlert += ShowLimitWarningPopup;
         _enforcer.OnBreachAlert += (app, delay, proc) => Logger.Instance.Info($"Limit breach: {app} - closing in {delay}s");
         _enforcer.OnAppKilled += OnAppKilled;
@@ -554,6 +557,10 @@ internal static class Program
 
         _siteBlocking = new SiteBlockingService(_db!);
         _siteBlocking.Start();
+        _siteRequests = new SiteRequestService(_db!, _websiteTracker, _siteBlocking);
+
+        _programGate = new ProgramGate(_db!, _tracker, _enforcer);
+        _programGate.Start();
 
         var webTask = Task.Run(() => StartWebServer(config));
     }
@@ -822,6 +829,8 @@ internal static class Program
         _newApps?.Dispose();
         _siteBlocking?.Dispose();
         _websiteTracker?.Dispose();
+        _siteRequests?.Dispose();
+        _programGate?.Dispose();
         DashboardServer.LoginLockoutDetected = null;
         ScreenTimeEndpoints.RemoteEvent = null;
         _parentReportService?.Dispose();

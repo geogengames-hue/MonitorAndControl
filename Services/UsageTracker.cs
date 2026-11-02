@@ -341,6 +341,7 @@ public class UsageTracker : IDisposable
             if (MonitorAndControl.ScreenTime.HomeworkState.IsActiveNow())
                 homeworkApps = new HashSet<string>(await _db.GetHomeworkAppsAsync(), StringComparer.OrdinalIgnoreCase);
 
+            _limitEnforcer.SetAlwaysAllowed(await _db.GetAlwaysAllowedAppsAsync());
             await _limitEnforcer.EnforceAsync(breached, breachedGroups, scheduleViolationApps, homeworkApps);
             _limitEnforcer.PruneExceeded(breached.Select(b => b.AppName).Concat(breachedGroups.SelectMany(g => g.AppNames)));
         }

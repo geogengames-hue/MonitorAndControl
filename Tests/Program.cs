@@ -22,6 +22,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Alert buttons: deep links, one-tap decline and Telegram keys", TestAlertButtons),
     ("Not now links work once and only before they expire", TestQuickActions),
     ("Groups, schedule and website rules can belong to one account", TestPerAccountRules),
+    ("New programs wait for the parent's OK", TestProgramApprovals),
+    ("A blocked site can be asked for once and answered", TestSiteRequests),
+    ("Always-allowed apps are never closed and are sealed", TestAlwaysAllowed),
     ("Older databases are upgraded for per-account groups", TestGroupMembersUpgrade),
     ("App limits can belong to one Windows account", TestPerAccountLimits),
     ("Homework mode times, plan and sealed apps", TestHomeworkMode),
@@ -1845,4 +1848,103 @@ static async Task TestGroupMembersUpgrade()
     AssertTrue(old.Name == "Games" && old.UserSid == "" && old.AppNames.Single() == "Minecraft", "Existing groups survive the upgrade and apply to everyone.");
     await db.SaveLimitGroupAsync(new AppLimitGroup { Name = "Games (Tom)", DailyMaxMinutes = 30, AppNames = new() { "Minecraft" }, UserSid = "S-1-5-21-1-2-3-1001" });
     AssertTrue((await db.GetLimitGroupsAsync()).Count == 2, "After the upgrade an app can be in a group for one account too.");
+}
+
+static Task TestProgramApprovals()
+{
+    const string tom = "S-1-5-21-1-2-3-1001", ann = "S-1-5-21-1-2-3-1002";
+    var now = DateTimeOffset.UtcNow;
+    var state = new MonitorAndControl.ScreenTime.ProgramsState();
+    AssertTrue(MonitorAndControl.ScreenTime.ProgramApprovals.IsAllowed(state, "minecraft"), "While it is off everything may run.");
+    AssertFalse(MonitorAndControl.ScreenTime.ProgramApprovals.Baseline(state, tom, new[] { "chrome" }, now), "Nothing is recorded while it is off.");
+
+    MonitorAndControl.ScreenTime.ProgramApprovals.Enable(state, now);
+    AssertTrue(state.EnabledUtc == now, "The switch-on time is kept, so newer program files are not recorded as already there.");
+    AssertTrue(MonitorAndControl.ScreenTime.ProgramApprovals.Identity("chrome.exe", "FortniteLauncher.exe") == "fortnitelauncher"
+        && MonitorAndControl.ScreenTime.ProgramApprovals.Identity("Notes.exe", null) == "notes", "A renamed program keeps the name built into its file.");
+    AssertTrue(MonitorAndControl.ScreenTime.ProgramApprovals.Baseline(state, tom, new[] { "Chrome.exe", "Minecraft", "bad/name" }, now), "An account records what it already has.");
+    AssertFalse(MonitorAndControl.ScreenTime.ProgramApprovals.Baseline(state, tom, new[] { "fortnite" }, now), "Only once per switch-on, so a later scan cannot sneak a new program in.");
+    AssertTrue(MonitorAndControl.ScreenTime.ProgramApprovals.IsAllowed(state, "chrome") && MonitorAndControl.ScreenTime.ProgramApprovals.IsAllowed(state, "minecraft"), "Programs already there keep working.");
+    AssertFalse(MonitorAndControl.ScreenTime.ProgramApprovals.IsAllowed(state, "fortnite"), "A program that was not there is not allowed.");
+    AssertTrue(MonitorAndControl.ScreenTime.ProgramApprovals.Key("Minecraft.EXE") == "minecraft" && MonitorAndControl.ScreenTime.ProgramApprovals.Key("..\\x") == null, "Program names are compared plainly and odd names are refused.");
+
+    var first = MonitorAndControl.ScreenTime.ProgramApprovals.Request(state, "fortnite", "Fortnite", ann, "Ann", now);
+    AssertTrue(first is { IsNew: true } && first.Value.Entry.State == "waiting", "The first opening asks the parent.");
+    var again = MonitorAndControl.ScreenTime.ProgramApprovals.Request(state, "fortnite", "Fortnite", tom, "Tom", now);
+    AssertTrue(again is { IsNew: false } && again.Value.Entry.UserSid == ann, "Opening it again does not ask again.");
+    AssertTrue(MonitorAndControl.ScreenTime.ProgramApprovals.Visible(state).Single().Name == "fortnite", "The parent sees what waits, not every program already on the PC.");
+
+    MonitorAndControl.ScreenTime.ProgramApprovals.Decide(state, "fortnite", allow: false);
+    AssertFalse(MonitorAndControl.ScreenTime.ProgramApprovals.IsAllowed(state, "fortnite"), "Keeping it blocked keeps it closed.");
+    MonitorAndControl.ScreenTime.ProgramApprovals.Decide(state, "fortnite", allow: true);
+    AssertTrue(MonitorAndControl.ScreenTime.ProgramApprovals.IsAllowed(state, "fortnite") && MonitorAndControl.ScreenTime.ProgramApprovals.Visible(state).Single().Decided, "Allowing it lets it open, and it stays in the parent's list.");
+
+    state.Enabled = false;
+    MonitorAndControl.ScreenTime.ProgramApprovals.Enable(state, now);
+    AssertTrue(state.Baselined.Count == 0, "Switching it on again records each account's programs again.");
+
+    var file = Path.Combine(Path.GetTempPath(), "programs-" + Guid.NewGuid().ToString("N") + ".json");
+    try
+    {
+        MonitorAndControl.ScreenTime.ProgramApprovals.Write(state, file);
+        AssertTrue(MonitorAndControl.ScreenTime.ProgramApprovals.Read(file).Entries.Count == state.Entries.Count, "The list survives a restart.");
+        File.WriteAllText(file, "{ broken");
+        AssertFalse(MonitorAndControl.ScreenTime.ProgramApprovals.Read(file).Enabled, "A damaged file reads as off rather than crashing.");
+    }
+    finally { File.Delete(file); if (File.Exists(file + ".bak")) File.Delete(file + ".bak"); }
+    AssertTrue(PushSender.PageFor("program_request") == "screen-time" && PushSender.PageFor("site_request") == "limits", "Request alerts open the page where they are answered.");
+    AssertTrue(PushSender.BuildLink("http://pc:5000", "screen-time&program=0123abcd") == "http://pc:5000/index.html#screen-time&program=0123abcd", "Allow opens the program in PC Time.");
+    return Task.CompletedTask;
+}
+
+static async Task TestSiteRequests()
+{
+    const string tom = "S-1-5-21-1-2-3-1001", ann = "S-1-5-21-1-2-3-1002";
+    var plan = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(new[] { "youtube.com" }, Array.Empty<string>(), false, false, null);
+    AssertTrue(MonitorAndControl.ScreenTime.SiteBlocking.IsBlocked(plan, "m.youtube.com") && !MonitorAndControl.ScreenTime.SiteBlocking.IsBlocked(plan, "wikipedia.org"), "A blocked site and its subdomains are recognised.");
+    var allowList = MonitorAndControl.ScreenTime.SiteBlocking.ComputePlan(Array.Empty<string>(), new[] { "school.org" }, true, false, null);
+    AssertTrue(MonitorAndControl.ScreenTime.SiteBlocking.IsBlocked(allowList, "games.com") && !MonitorAndControl.ScreenTime.SiteBlocking.IsBlocked(allowList, "www.school.org"), "In allow-list mode everything not listed is blocked.");
+
+    using var db = CreateTempDatabase();
+    AssertTrue(await db.AddSiteRequestAsync(new SiteRequest { UserSid = tom, Account = "Tom", Host = "youtube.com" }), "The first request is recorded.");
+    AssertFalse(await db.AddSiteRequestAsync(new SiteRequest { UserSid = tom, Account = "Tom", Host = "youtube.com" }), "Asking again while one waits adds nothing.");
+    AssertTrue(await db.AddSiteRequestAsync(new SiteRequest { UserSid = ann, Account = "Ann", Host = "youtube.com" }), "Another account has its own request.");
+    var waiting = await db.GetSiteRequestsAsync();
+    AssertTrue(waiting.Count == 2, "Both requests wait.");
+    AssertTrue(await db.ClaimSiteRequestAlertAsync(waiting[0].Id, true) && !await db.ClaimSiteRequestAlertAsync(waiting[0].Id, true), "Only one DeviceMon sends the alert.");
+
+    AssertTrue(await SiteRequestService.AnswerOpenedAsync(db, "youtube.com", tom) == 0, "With no rule blocking it, Tom's request is answered.");
+    AssertTrue((await db.GetSiteRequestsAsync(null, ann)).Single().State == "waiting", "A rule for Tom does not answer Ann's request.");
+    var toms = await db.GetSiteRequestsAsync(null, tom);
+    AssertTrue(toms.Single().State == "allowed" && !toms.Single().Told, "Tom will be told it was allowed.");
+    await db.MarkSiteRequestToldAsync(toms.Single().Id);
+    AssertTrue((await db.GetSiteRequestsAsync(null, tom)).Single().Told, "He is told once.");
+    await db.SaveSiteLimitAsync(new SiteLimit { Host = "youtube.com", DailyMaxMinutes = 0 });
+    await db.SaveUserSiteLimitAsync(new SiteLimit { Host = "youtube.com", DailyMaxMinutes = -1, UserSid = ann });
+    AssertTrue(await SiteRequestService.AnswerOpenedAsync(db, "youtube.com", ann) == 1
+        && (await db.GetSiteRequestsAsync(null, ann)).Single().State == "waiting", "Allowing it for Ann while a block for everyone remains does not tell her it is allowed.");
+    var anns = (await db.GetSiteRequestsAsync(null, ann)).Single();
+    AssertTrue(await db.AnswerSiteRequestAsync(anns.Id, false) && !await db.AnswerSiteRequestAsync(anns.Id, true), "Not now answers a request once; it cannot be turned into a yes later.");
+    AssertTrue((await db.GetSiteRequestsAsync()).Count == 0, "Nothing is left waiting.");
+}
+
+static Task TestAlwaysAllowed()
+{
+    var plain = new MonitorAndControl.ScreenTime.SealedLimits { HomeworkApps = { "Minecraft" } };
+    var withAlways = new MonitorAndControl.ScreenTime.SealedLimits { HomeworkApps = { "Minecraft" }, AlwaysAllowed = { "Calculator" } };
+    AssertTrue(plain.Fingerprint() == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("H|minecraft"))),
+        "Limits sealed by an older version still match.");
+    AssertTrue(plain.Fingerprint() != withAlways.Fingerprint(), "Changing the always-allowed list is noticed while limits are protected.");
+    AssertTrue(new MonitorAndControl.ScreenTime.SealedLimits { AlwaysAllowed = null! }.Normalized().AlwaysAllowed.Count == 0, "A missing list reads as empty.");
+
+    using var db = CreateTempDatabase();
+    var tracker = new WindowTracker();
+    tracker.AddKnownApp("calc.exe", "Calculator");
+    var enforcer = new LimitEnforcer(db, tracker);
+    enforcer.SetAlwaysAllowed(new[] { "calculator" });
+    AssertTrue(enforcer.IsAlwaysAllowed("Calculator") && !enforcer.IsAlwaysAllowed("Minecraft"), "Always-allowed apps are matched by name, ignoring case.");
+    db.SetAlwaysAllowedAppsAsync(new[] { "Calculator", "calculator", "Music Tutor" }).GetAwaiter().GetResult();
+    var snapshot = db.ReadLimitsSnapshotAsync().GetAwaiter().GetResult();
+    AssertTrue(snapshot.AlwaysAllowed.Count == 2, "The list is stored once per app and is part of the sealed copy.");
+    return Task.CompletedTask;
 }

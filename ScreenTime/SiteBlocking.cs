@@ -66,6 +66,10 @@ public static class SiteBlocking
         return new PolicyPlan(blocked, allowed, allowOnly, safe);
     }
 
+    /// <summary>Would the browsers refuse this site under the plan?</summary>
+    public static bool IsBlocked(PolicyPlan plan, string host) =>
+        plan.BlockHosts.Any(rule => Covers(rule, host)) || (plan.AllowOnly && !plan.AllowHosts.Any(rule => Covers(rule, host)));
+
     /// <summary>Chrome-family browsers: "youtube.com" blocks that site and all its subdomains.</summary>
     public static List<string> ChromiumEntries(IEnumerable<string> hosts) => hosts.ToList();
 

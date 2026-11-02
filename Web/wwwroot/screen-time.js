@@ -17,6 +17,8 @@ let screenPending = null;
 let screenBusy = false;
 // Set when the page was opened from a phone alert's "Add N min" button; used once the requests are loaded.
 let screenPendingGrant = null;
+// Set when the page was opened from a new-program alert's "Allow" button.
+let screenPendingProgram = null;
 const screenElement = id => document.getElementById('screen-' + id);
 
 // On the child PC itself a change is approved with a Windows (UAC) prompt. From any other
@@ -182,6 +184,100 @@ function screenApplyPendingGrant() {
   screenOpenAuth(t('Add {n} minutes of PC time for {name} today.', { n: minutes, name: account.name }));
 }
 
+// "New programs need my OK": the list is kept by the service. Allowing a program and turning the check off
+// need the same approval as other PC Time changes; keeping one blocked does not.
+function screenProgramLabel(entry) {
+  return entry.display && entry.display.toLowerCase() !== entry.name ? `${entry.display} (${entry.name})` : entry.name;
+}
+
+function screenAllowProgram(entry) {
+  screenAskLimits('program-allow', 0, t('Allow {name} on this PC.', { name: screenProgramLabel(entry) }), { programName: entry.name });
+}
+
+function screenRenderPrograms() {
+  const programs = screenData?.programs;
+  const panel = screenElement('programs-panel');
+  if (!programs) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const blocked = !!screenData.error || !!screenRemoteBlock();
+  const waiting = programs.list.filter(e => e.state === 'waiting').length;
+  screenElement('programs-status').textContent = !programs.enabled
+    ? t('Off: new programs open without asking.')
+    : waiting ? t('On. {n} program(s) waiting for your answer.', { n: waiting })
+    : t('On: a new program is closed until you allow it.');
+  screenElement('programs-on').classList.toggle('hidden', programs.enabled);
+  screenElement('programs-off').classList.toggle('hidden', !programs.enabled);
+  screenElement('programs-off').disabled = blocked;
+  const list = screenElement('programs-list');
+  list.replaceChildren();
+  programs.list.forEach(entry => {
+    const row = document.createElement('div');
+    row.className = 'screen-request';
+    const label = document.createElement('span');
+    const who = entry.account ? ' - ' + entry.account : '';
+    const state = entry.state === 'waiting' ? t('waiting') : entry.state === 'blocked' ? t('blocked') : t('allowed');
+    label.textContent = `${screenProgramLabel(entry)}${who}: ${state} `;
+    row.appendChild(label);
+    if (entry.state !== 'allowed') {
+      const allow = document.createElement('button');
+      allow.type = 'button';
+      allow.className = 'btn-secondary';
+      allow.textContent = t('Allow');
+      allow.title = t('Let this program open on this PC. Needs your approval.');
+      allow.disabled = blocked;
+      allow.addEventListener('click', () => screenAllowProgram(entry));
+      row.appendChild(allow);
+    }
+    if (entry.state !== 'blocked') {
+      const keep = document.createElement('button');
+      keep.type = 'button';
+      keep.className = 'btn-secondary';
+      keep.textContent = t('Keep blocked');
+      keep.title = t('The program stays closed. The child is told.');
+      keep.addEventListener('click', async () => {
+        keep.disabled = true;
+        try {
+          await screenApi('/api/programs/block', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: entry.name })
+          });
+          await loadScreenTime(true);
+        } catch (error) {
+          screenElement('message').textContent = error.message;
+          screenElement('message').classList.add('screen-error');
+          keep.disabled = false;
+        }
+      });
+      row.appendChild(keep);
+    }
+    list.appendChild(row);
+  });
+  // Opened from a new-program alert's "Allow" button: ask for approval straight away.
+  const pending = screenPendingProgram;
+  if (pending) {
+    screenPendingProgram = null;
+    history.replaceState(null, '', location.pathname + '#screen-time');
+    const entry = programs.list.find(e => e.id === pending);
+    if (!entry || entry.state === 'allowed') screenElement('message').textContent = t('This request was already answered.');
+    else if (!blocked) screenAllowProgram(entry);
+  }
+}
+
+screenElement('programs-on').addEventListener('click', async () => {
+  if (!confirm(t('Programs already on this PC keep working. A program installed or copied later is closed until you allow it, and you get an alert. Turn it on?'))) return;
+  screenElement('programs-on').disabled = true;
+  try {
+    await screenApi('/api/programs/on', { method: 'POST' });
+    await loadScreenTime(true);
+  } catch (error) {
+    screenElement('message').textContent = error.message;
+    screenElement('message').classList.add('screen-error');
+  } finally { screenElement('programs-on').disabled = false; }
+});
+screenElement('programs-off').addEventListener('click', () =>
+  screenAskLimits('programs-off', 0, t('New programs open without asking you first.')));
+
 // The rules use the time zone the service pinned; a change in Windows waits for the parent.
 function screenRenderTimeZone() {
   const zone = screenData?.timeZone;
@@ -262,6 +358,7 @@ async function loadScreenTime(force = false) {
     screenRenderSelection(force || !screenDirty || select.value !== previousSid);
     screenRenderRequests();
     screenRenderTimeZone();
+    screenRenderPrograms();
     screenApplyPendingGrant();
     screenLoadHomework();
     screenRenderTable();

@@ -36,6 +36,9 @@ and monitor usage — all from a beautiful web dashboard.
 - **Graceful countdown** — full‑screen warning popup with countdown before an app is killed
 - **Bonus time** — grant extra minutes from the dashboard without changing limits
 - **Schedule rules** — define allowed hours per app (e.g. weekdays 15:00–21:00)
+- **New programs need your OK** — optional: a program that was not on the PC when you turned it on stays closed until you allow it from the phone alert or PC Time
+- **Ask to open a site** — when the child lands on a blocked website they can ask you; the alert has Allow and Not now buttons
+- **Always-allowed apps** — school apps, a calculator or a music tutor are never closed by schedules, limits, homework mode or Block now
 - **Auto‑detection** — scan the system for installed games/apps and add them with one click
 - **Web dashboard** — responsive SPA with live status, usage charts, history, logs, and settings
 - **Multi‑language** — English, German, Spanish, French, Russian (auto‑translates the dashboard UI)
@@ -359,6 +362,30 @@ One tap for focused time. Under **PC Time > Homework mode** press **Start 60 min
 
 The child sees a message when it starts. It ends by itself, and **ending it early needs your approval** (Windows prompt on the PC, remote PIN from another device), because that grants freedom. Starting needs none. The end time is kept by the SYSTEM service, so closing DeviceMon or editing its database does not cancel it. The list of homework apps is part of **Protect limits**. **Limits of this:** the end time uses the PC clock, so it relies on Windows letting only administrators change the system time (the default); and apps are closed on DeviceMon's next check (a few seconds), not instantly.
 
+### New programs need your OK
+
+Under **PC Time > New programs** press **Ask me before new programs**. The programs already on the PC (installed, or seen in each account) are recorded as allowed and keep working. A program installed, downloaded or copied later is **closed when it opens**, the child is told that you have been asked, and you get an alert with **Allow** and **Keep blocked**:
+
+- **Allow** opens PC Time and asks for your approval (Windows prompt on the PC, remote PIN from another device), because it grants something. The child is told and can open it again.
+- **Keep blocked** answers at once with a single-use link (it cannot allow anything). The child is told.
+- The list in PC Time shows what is waiting, what you blocked and what you allowed; you can change your answer there. **Turn off** needs your approval.
+
+The list is kept by the SYSTEM service, so the child cannot approve a program by editing DeviceMon's files. Your own administrator accounts are never held up, and neither is Windows itself or DeviceMon. Windows' own apps (Notepad, Calculator, Photos and the like) are never held up either. **Limits of this:** a program is recognised by the original file name built into it, so renaming a game to `chrome.exe` does not get it past, but a program without that information can still be renamed to an allowed name; it is checked when a program comes to the front, so a program without a window is not closed; and programs that were already on the PC when you turned it on count as allowed (including games that were installed but not yet tracked; a program file created after you turned it on never counts as already there). A program that was already there but whose built-in name differs from its file name may be asked about once. Turn it on first, then check the list after a day.
+
+### Ask to open a blocked site
+
+When the child is on a website that is blocked (blocked outright, its daily allowance used up, allow-list mode or homework mode), DeviceMon asks: **"youtube.com is blocked on this PC. Ask your parent to allow it?"** If they answer Yes you get an alert with **Allow** and **Not now**, and the request appears on the **Limits** page above the website rules.
+
+- **Allow** opens Limits with the website form filled in (the site, the child's account, **Always allow**). Check it, or give it a daily limit instead, and press **Save**. Saving a rule that lets the site open answers the request. If limits are protected, open editing first as usual.
+- **Not now** declines it (from the alert without signing in, or on the Limits page).
+- The child is told the answer within about 30 seconds. They are asked again for the same site at most every 30 minutes, and one request per site waits at a time; requests lapse after a day.
+
+It uses the same address reading as website time, also when website time is off (the address is then only checked, not recorded), and it is never offered in your administrator accounts. If another rule still blocks the site after you save (a block for everyone, a used-up allowance), the page says so and the request stays open.
+
+### Always-allowed apps
+
+Under **Limits > Always allowed**, list apps that DeviceMon must **never close**: not by the schedule (including "all apps" rules), app limits, shared groups, homework mode, **Block now** or the new-program check. Use it for school apps, a calculator or a music tutor. The list is part of **Protect limits**. Bedtime, PC time running out and **Lock now** are enforced by the SYSTEM service for the whole account (signing it out or locking it), so they still apply. Apps are recognised by their name in your tracked apps.
+
 ### Alerts that link to the dashboard, and new-program alerts
 
 - **Phone alerts open the right page.** ntfy alerts have an **Open dashboard** button and a tap-to-open link; Telegram alerts end with the link. A time request opens PC Time, a new program opens Limits, tampering opens Logs. The link uses `http://<this PC>:<port>` when the remote dashboard is on; set **Dashboard address for links** (Settings > Phone notifications) to the address your phone really uses, for example `http://192.168.1.20:5000`. Your phone must be able to reach the dashboard, on the home network or over a VPN.
@@ -392,7 +419,7 @@ Two layers keep the child from lifting limits by editing `monitor.db`:
 - **Protect limits (sealed copy):** under **PC Time > Protect limits**, press **Protect limits** and approve it (Windows prompt on the PC, remote PIN from another device). The SYSTEM service then keeps a copy of your app limits, schedule and shared groups that the child cannot change. From then on DeviceMon puts them back if the database ever differs from the copy, **even after being closed and restarted**, and alerts you (even when general tamper alerts are off).
   - To change limits on purpose: press **Edit limits (10 min)**, approve it, make your changes on the Limits, Schedule and groups pages, then press **Finish editing** (or wait; DeviceMon seals the new limits when the window ends). If nobody finishes, the old copy is restored.
   - While protected, the Limits and Schedule pages show a notice. Importing a config also needs an editing window. **Remove protection** turns it off (needs approval).
-  - Limits of this: the copy covers app limits, schedule and groups (PC Time rules are already service-protected). A child who is already an administrator can still remove it.
+  - Limits of this: the copy covers app limits, schedule, groups, website rules, homework apps and always-allowed apps (PC Time rules and the new-program list are already service-protected). A child who is already an administrator can still remove it.
 
 ### PC Time (per-account screen time)
 

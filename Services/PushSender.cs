@@ -57,7 +57,8 @@ public sealed class PushSender
     public static string PageFor(string eventType) => eventType switch
     {
         var e when e.StartsWith("pc_time", StringComparison.Ordinal) || e == "limits_changed" => "screen-time",
-        "new_app" => "limits",
+        "new_app" or "site_request" => "limits",
+        "program_request" => "screen-time",
         "watchdog_restart" or "repeated_close" or "database_missing" or "config_missing" or "clock_changed" or "watchdog_unavailable" => "logs",
         "timezone_changed" => "screen-time",
         "login_lockout" => "settings",
