@@ -94,6 +94,8 @@ public static class TimeLeftReport
         var apps = new List<(string App, long Used, long Max)>();
         try
         {
+            await AccountExemption.RefreshAsync(db);
+            if (AccountExemption.IsExempt) return Build(pcRemaining, untilBed, inBed, lockedUntil, null, apps, now);
             var bonus = (await db.GetTodayBonusTimeAsync()).ToDictionary(b => b.AppName, b => b.BonusMinutes, StringComparer.OrdinalIgnoreCase);
             var shared = await db.GetTodayUsageAsync();
             foreach (var l in (await db.GetLimitRulesAsync()).Where(l => l.Enabled))

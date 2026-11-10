@@ -1244,6 +1244,16 @@ public class UsageDatabase : IDisposable
     public Task SetAlwaysAllowedAppsAsync(IEnumerable<string> apps) =>
         SetSettingAsync("AlwaysAllowedApps", System.Text.Json.JsonSerializer.Serialize(apps.Distinct(StringComparer.OrdinalIgnoreCase).ToList()));
 
+    /// <summary>Windows accounts (SIDs) that the app limits, groups, schedule and homework app closing do not apply to.</summary>
+    public async Task<List<string>> GetExemptAccountsAsync()
+    {
+        try { return System.Text.Json.JsonSerializer.Deserialize<List<string>>(await GetSettingAsync("LimitExemptAccounts", "[]")) ?? new(); }
+        catch { return new(); }
+    }
+
+    public Task SetExemptAccountsAsync(IEnumerable<string> sids) =>
+        SetSettingAsync("LimitExemptAccounts", System.Text.Json.JsonSerializer.Serialize(sids.Distinct(StringComparer.OrdinalIgnoreCase).ToList()));
+
     /// <summary>The parent's category choices: app name to a category, or "none".</summary>
     public async Task<Dictionary<string, string>> GetAppCategoriesAsync()
     {
@@ -1272,6 +1282,7 @@ public class UsageDatabase : IDisposable
             snapshot.Schedule.Add(new() { App = r.AppName, Day = r.DayOfWeek, Start = r.StartTime, End = r.EndTime, Enabled = r.Enabled, User = r.UserSid });
         snapshot.HomeworkApps = await GetHomeworkAppsAsync();
         snapshot.AlwaysAllowed = await GetAlwaysAllowedAppsAsync();
+        snapshot.ExemptAccounts = await GetExemptAccountsAsync();
         snapshot.Categories = await GetAppCategoriesAsync();
         snapshot.AllowOnly = await GetSettingAsync("SiteAllowOnly", "false") == "true";
         snapshot.SafeBrowsing = await GetSettingAsync("SafeBrowsing", "false") == "true";
@@ -1295,6 +1306,7 @@ public class UsageDatabase : IDisposable
         await ReplaceUserLimitRulesAsync(snapshot.UserLimits.Select(u => new AppLimitRule { UserSid = u.User, AppName = u.App, DailyMaxMinutes = u.Minutes, Enabled = u.Enabled }));
         await SetHomeworkAppsAsync(snapshot.HomeworkApps);
         await SetAlwaysAllowedAppsAsync(snapshot.AlwaysAllowed);
+        await SetExemptAccountsAsync(snapshot.ExemptAccounts);
         await SetAppCategoriesAsync(snapshot.Categories);
         await SetSettingAsync("SiteAllowOnly", snapshot.AllowOnly ? "true" : "false");
         await SetSettingAsync("SafeBrowsing", snapshot.SafeBrowsing ? "true" : "false");

@@ -366,6 +366,7 @@ public class UsageTracker : IDisposable
                 homeworkApps = new HashSet<string>(await _db.GetHomeworkAppsAsync(), StringComparer.OrdinalIgnoreCase);
 
             _limitEnforcer.SetAlwaysAllowed(await _db.GetAlwaysAllowedAppsAsync());
+            await AccountExemption.RefreshAsync(_db);
             await _limitEnforcer.EnforceAsync(breached, breachedGroups, scheduleViolationApps, homeworkApps);
             _limitEnforcer.PruneExceeded(breached.Select(b => b.AppName)
                 .Concat(breachedGroups.SelectMany(g => g.AppNames.Concat(g.CategoryApps ?? Array.Empty<string>()))));

@@ -548,6 +548,7 @@ internal static class Program
         _enforcer.OnAppTerminatedBySchedule += (app) => _ = _emailService.SendKillAlertAsync($"Schedule Block: {app}", $"{app} was closed by schedule rule.");
         _tracker.OnActiveWindowChanged += (app, proc) => _ = _emailService.NotifyTrackedAppStartedAsync(app, proc);
         _ = SendWatchdogRestartAlertAsync();
+        AccountExemption.RefreshAsync(_db).GetAwaiter().GetResult();
         _ = _enforcer.RehydrateExceededTodayAsync();
 
         var categories = new AppCategories();
