@@ -729,13 +729,12 @@ internal static class Program
     {
         try
         {
-            var limits = await _db!.GetLimitRulesAsync();
-            var limit = limits.FirstOrDefault(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
-            if (limit == null)
+            var allowances = await AccountAllowances.ForAccountAsync(_db!, AccountIdentity.CurrentSid);
+            var allowance = allowances.FirstOrDefault(a => a.App.Equals(appName, StringComparison.OrdinalIgnoreCase));
+            if (allowance.App == null)
                 return Localization.Text("CanUseAgainAfterMidnight", language);
 
-            var bonus = await _db.GetTodayBonusMinutesAsync(appName);
-            var total = limit.DailyMaxMinutes + bonus;
+            var total = allowance.Max / 60;
             var reset = MonitorAndControl.ScreenTime.ParentClock.Today.AddDays(1);
             return Localization.Text("AllowanceResetsAt", language, total, reset);
         }

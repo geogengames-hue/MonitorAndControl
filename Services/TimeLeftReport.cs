@@ -94,14 +94,6 @@ public static class TimeLeftReport
         var apps = new List<(string App, long Used, long Max)>();
         try
         {
-            var bonus = (await db.GetTodayBonusTimeAsync()).ToDictionary(b => b.AppName, b => b.BonusMinutes, StringComparer.OrdinalIgnoreCase);
-            var shared = await db.GetTodayUsageAsync();
-            foreach (var l in (await db.GetLimitRulesAsync()).Where(l => l.Enabled))
-            {
-                bonus.TryGetValue(l.AppName, out var extra);
-                var used = shared.FirstOrDefault(u => u.AppName.Equals(l.AppName, StringComparison.OrdinalIgnoreCase))?.TotalSeconds ?? 0;
-                apps.Add((l.AppName, used, (l.DailyMaxMinutes + extra) * 60L));
-            }
             apps.AddRange(await AccountAllowances.ForAccountAsync(db, sid));
         }
         catch { /* the database may be busy; the next refresh will fill it in */ }

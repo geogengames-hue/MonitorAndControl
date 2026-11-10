@@ -23,6 +23,10 @@
       <a href="#" title="Notifications, security, updates and other options." data-view="settings">Settings</a>
     </nav>
     <div id="other-pcs" class="other-pcs hidden"></div>
+    <div class="view-account">
+      <small>Viewing account</small>
+      <select id="view-account" title="Whose time the Live, Today and Limits pages show, and who receives extra time you give. All accounts shows the busiest account for each app."><option value="">All accounts</option></select>
+    </div>
     <div class="sidebar-foot">
       <span class="sidebar-pulse"></span>
       <div><strong>Control panel</strong><small>Local device</small></div>
@@ -289,7 +293,7 @@
         <button id="limit-cancel" title="Stop editing and discard the changes." class="btn-secondary hidden">Cancel</button>
       </div>
       <h3 class="individual-limits-title" title="App limits that count only one Windows account's own time, so each child can have their own allowance.">Limits for one account</h3>
-      <p style="font-size:13px;color:#888">The limits above add up everyone's time on this PC. A limit here counts only one Windows account's own time, so two children can each have their own allowance. It applies on top of the shared limits. Groups, schedule rules and website rules can also be set for one account (choose it in their forms). Homework mode applies to everyone.</p>
+      <p style="font-size:13px;color:#888">The limits above give every Windows account its own allowance, counted from that account's own time. A limit set here for one account replaces the shared limit for that app. Groups, schedule rules and website rules can also be set for one account (choose it in their forms). Homework mode applies to everyone.</p>
       <div class="table-container" id="user-limits-table"></div>
       <div class="add-form">
         <h3>Add / Edit Account Limit</h3>

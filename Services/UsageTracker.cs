@@ -60,9 +60,31 @@ public class UsageTracker : IDisposable
     private void SetGroupState(List<AppLimitGroup> groups) =>
         _limitEnforcer.SetGroupState(groups, groups.Where(g => g.Enabled && g.TodaySeconds >= g.DailyMaxMinutes * 60L).Select(g => g.Id));
 
-    public async Task<List<AppUsageRecord>> GetTodayUsageIncludingPendingAsync()
+    /// <summary>
+    /// Today's usage per app: everyone's added up, or (with <paramref name="userSid"/>) one Windows account's own time.
+    /// For the combined view each record also says how much the busiest single account used, which is what a limit counts.
+    /// </summary>
+    public async Task<List<AppUsageRecord>> GetTodayUsageIncludingPendingAsync(string? userSid = null)
     {
-        var usage = await _db.GetTodayUsageAsync();
+        var today = MonitorAndControl.ScreenTime.ParentClock.Today;
+        var perAccount = await _db.GetAllUserAppUsageTodayAsync();
+        List<AppUsageRecord> usage;
+        if (string.IsNullOrEmpty(userSid))
+            usage = await _db.GetTodayUsageAsync();
+        else
+        {
+            var processNames = (await _db.GetTodayUsageAsync()).ToDictionary(r => r.AppName, r => r.ProcessName, StringComparer.OrdinalIgnoreCase);
+            usage = perAccount.Where(u => u.UserSid == userSid).Select(u => new AppUsageRecord
+            {
+                AppName = u.AppName,
+                ProcessName = processNames.GetValueOrDefault(u.AppName) ?? "",
+                Date = today,
+                TotalSeconds = u.Total,
+                ForegroundSeconds = u.Foreground,
+                BackgroundSeconds = u.Background
+            }).ToList();
+        }
+
         List<(string AppName, string ProcessName, int ForegroundSeconds, int BackgroundSeconds)> pending;
         lock (_usageSync)
         {
@@ -75,6 +97,23 @@ public class UsageTracker : IDisposable
                 .Where(item => item.ForegroundSeconds > 0 || item.BackgroundSeconds > 0)
                 .ToList();
         }
+        // Time not saved yet belongs to the account this DeviceMon runs for.
+        if (!string.IsNullOrEmpty(userSid) && userSid != AccountIdentity.CurrentSid)
+            pending.Clear();
+
+        // The busiest single account per app: a limit counts each account's own time, not the combined total.
+        var perApp = new Dictionary<(string App, string Sid), long>();
+        foreach (var u in perAccount)
+        {
+            var key = (u.AppName.ToLowerInvariant(), u.UserSid);
+            perApp[key] = perApp.GetValueOrDefault(key) + u.Total;
+        }
+        foreach (var p in pending)
+        {
+            var key = (p.AppName.ToLowerInvariant(), AccountIdentity.CurrentSid);
+            perApp[key] = perApp.GetValueOrDefault(key) + p.ForegroundSeconds + p.BackgroundSeconds;
+        }
+        var highest = perApp.GroupBy(kv => kv.Key.App).ToDictionary(g => g.Key, g => g.Max(kv => kv.Value));
 
         foreach (var item in pending)
         {
@@ -96,6 +135,11 @@ public class UsageTracker : IDisposable
             existing.BackgroundSeconds += item.BackgroundSeconds;
             existing.TotalSeconds += item.ForegroundSeconds + item.BackgroundSeconds;
         }
+
+        if (string.IsNullOrEmpty(userSid))
+            foreach (var record in usage)
+                if (highest.TryGetValue(record.AppName.ToLowerInvariant(), out var seconds))
+                    record.HighestAccountSeconds = seconds;
 
         return usage.OrderByDescending(record => record.TotalSeconds).ToList();
     }
@@ -314,28 +358,12 @@ public class UsageTracker : IDisposable
                 throw;
             }
 
-            var limits = await _db.GetLimitRulesAsync();
-            var todayUsage = await _db.GetTodayUsageAsync();
-            var bonusByApp = (await _db.GetTodayBonusTimeAsync())
-                .ToDictionary(b => b.AppName, b => b.BonusMinutes, StringComparer.OrdinalIgnoreCase);
-            var breached = new List<(string AppName, long UsedSecs, long MaxSecs)>();
+            // Every limit, shared or for this account alone, is counted from this Windows account's own usage.
+            var breached = (await AccountAllowances.ForAccountAsync(_db, AccountIdentity.CurrentSid))
+                .Where(a => a.Used >= a.Max)
+                .Select(a => (AppName: a.App, UsedSecs: a.Used, MaxSecs: a.Max))
+                .ToList();
             var breachedGroups = new List<GroupLimitBreach>();
-
-            foreach (var limit in limits.Where(l => l.Enabled))
-            {
-                var usage = todayUsage.FirstOrDefault(u =>
-                    u.AppName.Equals(limit.AppName, StringComparison.OrdinalIgnoreCase));
-                var usedSecs = usage?.TotalSeconds ?? 0;
-                bonusByApp.TryGetValue(limit.AppName, out var bonusMinutes);
-                var maxSecs = (limit.DailyMaxMinutes + bonusMinutes) * 60L;
-                if (usedSecs >= maxSecs)
-                    breached.Add((limit.AppName, usedSecs, maxSecs));
-            }
-
-            // Limits for this Windows account only: counted from its own usage, not the shared total.
-            foreach (var (app, usedSecs, maxSecs) in await AccountAllowances.ForAccountAsync(_db, AccountIdentity.CurrentSid))
-                if (usedSecs >= maxSecs && !breached.Any(b => b.AppName.Equals(app, StringComparison.OrdinalIgnoreCase)))
-                    breached.Add((app, usedSecs, maxSecs));
 
             await _categories.ReloadAsync(_db);
             var refreshedGroups = ForThisAccount(await _db.GetLimitGroupsAsync());

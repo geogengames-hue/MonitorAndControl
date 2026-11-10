@@ -8,6 +8,8 @@ public class AppUsageRecord
     public long TotalSeconds { get; set; }
     public long ForegroundSeconds { get; set; }
     public long BackgroundSeconds { get; set; }
+    /// <summary>In the combined view: the most any single Windows account used, which is what a limit counts. Null otherwise.</summary>
+    public long? HighestAccountSeconds { get; set; }
     public long UnclassifiedSeconds => Math.Max(0, TotalSeconds - ForegroundSeconds - BackgroundSeconds);
     public string DurationFormatted
     {

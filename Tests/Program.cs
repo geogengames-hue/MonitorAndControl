@@ -30,6 +30,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("App categories cover new apps and are sealed", TestAppCategories),
     ("Older databases are upgraded for per-account groups", TestGroupMembersUpgrade),
     ("App limits can belong to one Windows account", TestPerAccountLimits),
+    ("Shared limits and extra time are counted per Windows account", TestSharedLimitsPerAccount),
     ("Homework mode times, plan and sealed apps", TestHomeworkMode),
     ("New programs are found once and described briefly", TestNewApps),
     ("Alerts link to the right dashboard page", TestPushLinks),
@@ -296,7 +297,7 @@ static async Task TestLimitEnforcerRehydratesExceededApps()
         DailyMaxMinutes = 1,
         Enabled = true
     });
-    await db.RecordUsageAsync("Chess", "chess.exe", 60);
+    await db.RecordUsageBatchAsync(new[] { ("Chess", "chess.exe", 60, 0) }, Array.Empty<(int GroupId, int Seconds)>(), MonitorAndControl.Services.AccountIdentity.CurrentSid);
 
     await enforcer.RehydrateExceededTodayAsync();
 
@@ -1702,6 +1703,42 @@ static async Task TestAccountUsageCase()
         await db.SaveUserLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "minecraft", UserSid = anna, DailyMaxMinutes = 45, Enabled = true });
         AssertTrue((await db.GetUserLimitRulesAsync(anna)).Single().DailyMaxMinutes == 45, "A rule is one per app and account whatever the capitals.");
         AssertTrue((await db.GetUserLimitRulesAsync("S-1-5-21-9-9-9-9")).Count == 0, "Asking for one account returns only its rules.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static async Task TestSharedLimitsPerAccount()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-SharedPerAccount-Test-" + Guid.NewGuid().ToString("N"));
+    const string anna = "S-1-5-21-1-2-3-1001";
+    const string ben = "S-1-5-21-1-2-3-1002";
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        var none = Array.Empty<(int GroupId, int Seconds)>();
+        await db.SaveLimitRuleAsync(new AppLimitRule { AppName = "Minecraft", DailyMaxMinutes = 30, Enabled = true });
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 25 * 60, 0) }, none, anna);
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 10 * 60, 0) }, none, ben);
+
+        var annaView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, anna)).Single();
+        var benView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, ben)).Single();
+        AssertTrue(annaView.Used == 25 * 60 && benView.Used == 10 * 60 && annaView.Max == 30 * 60 && benView.Max == 30 * 60,
+            "A shared limit gives each account its own allowance, counted from its own time.");
+
+        await db.AddUserBonusMinutesAsync(anna, "Minecraft", 15);
+        annaView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, anna)).Single();
+        benView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, ben)).Single();
+        AssertTrue(annaView.Max == 45 * 60 && benView.Max == 30 * 60, "Extra time granted to one account does not reach the others.");
+
+        await db.AddTodayBonusMinutesAsync("Minecraft", 5);
+        benView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, ben)).Single();
+        AssertTrue(benView.Max == 35 * 60, "Extra time granted to everyone reaches every account.");
+
+        AssertTrue(await db.GetAppTodaySecondsAsync("Minecraft") == 25 * 60, "The app total used for one-off checks is the busiest account's time.");
     }
     finally
     {

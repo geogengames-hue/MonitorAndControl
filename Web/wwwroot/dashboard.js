@@ -287,10 +287,49 @@ async function startApp() {
   if (!todayTimer) todayTimer = setInterval(loadLiveToday, 5000);
   if (!activeViewTimer) activeViewTimer = setInterval(refreshActiveView, 10000);
   if (!limitsUsageTimer) limitsUsageTimer = setInterval(refreshVisibleLimitUsage, 2000);
+  initViewAccount();
   loadLive();
   loadLiveToday();
   connectSSE();
   loadToday();
+}
+
+// ---- Which Windows account the usage and extra time on this dashboard refer to ('' = all accounts)
+let viewSid = localStorage.getItem('viewAccount') || '';
+
+function viewQuery() {
+  return viewSid ? `?sid=${encodeURIComponent(viewSid)}` : '';
+}
+
+// With no account chosen, the busiest account's time is what a shared limit is compared with.
+function usedSeconds(u) {
+  return u.highestAccountSeconds ?? u.totalSeconds;
+}
+
+async function initViewAccount() {
+  const select = document.getElementById('view-account');
+  if (!select) return;
+  await loadAccountChoices();
+  select.replaceChildren();
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = t('All accounts');
+  select.appendChild(all);
+  accountChoices.forEach(a => {
+    const o = document.createElement('option');
+    o.value = a.sid;
+    o.textContent = a.name;
+    select.appendChild(o);
+  });
+  if (!accountChoices.some(a => a.sid === viewSid)) viewSid = '';
+  select.value = viewSid;
+  select.addEventListener('change', () => {
+    viewSid = select.value;
+    localStorage.setItem('viewAccount', viewSid);
+    loadLiveToday();
+    loadToday();
+    refreshActiveView();
+  });
 }
 
 function getActiveViewName() {
@@ -430,7 +469,7 @@ async function quickExtendUntilBedtime() {
     await api('/api/bonus/until-bedtime', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appName })
+      body: JSON.stringify({ appName, userSid: viewSid })
     });
     loadLimits();
     loadLiveToday();
@@ -443,9 +482,9 @@ async function quickExtendUntilBedtime() {
 
 async function loadLiveToday() {
   try {
-    const usage = await api('/api/usage/today');
+    const usage = await api('/api/usage/today' + viewQuery());
     const limits = await api('/api/limits');
-    const bonuses = await api('/api/bonus/today');
+    const bonuses = await api('/api/bonus/today' + viewQuery());
     const list = document.getElementById('live-today-list');
     list.innerHTML = '';
     if (usage.length === 0) {
@@ -458,7 +497,7 @@ async function loadLiveToday() {
       const limit = limits.find(l => l.appName === u.appName);
       const bonus = bonuses.find(b => b.appName === u.appName)?.bonusMinutes || 0;
       const maxSecs = limit ? (limit.dailyMaxMinutes + bonus) * 60 : 0;
-      const remaining = maxSecs > 0 ? maxSecs - u.totalSeconds : 0;
+      const remaining = maxSecs > 0 ? maxSecs - usedSeconds(u) : 0;
       const cls = remaining <= 0 && maxSecs > 0 ? 'exceeded' :
                   remaining < 300 && maxSecs > 0 ? 'warning' : '';
       const item = document.createElement('div');
@@ -491,7 +530,7 @@ function syncQuickExtendApps(limits, usage) {
 async function loadToday() {
   try {
     const [usage, groupUsage] = await Promise.all([
-      api('/api/usage/today'),
+      api('/api/usage/today' + viewQuery()),
       api('/api/usage/groups/today')
     ]);
     renderTodayChart(usage);
@@ -932,9 +971,9 @@ async function loadLimits() {
     const [limits, known, today, mappings, bonuses, groups] = await Promise.all([
       api('/api/limits'),
       api('/api/apps'),
-      api('/api/usage/today'),
+      api('/api/usage/today' + viewQuery()),
       api('/api/mappings'),
-      api('/api/bonus/today'),
+      api('/api/bonus/today' + viewQuery()),
       api('/api/limit-groups'),
       loadAccountChoices()
     ]);
@@ -967,7 +1006,7 @@ async function loadLimits() {
       const limit = limits.find(l => l.appName === app);
       const usage = today.find(u => u.appName === app);
       const bonus = bonuses.find(b => b.appName === app)?.bonusMinutes || 0;
-      const used = usage ? usage.totalSeconds : 0;
+      const used = usage ? usedSeconds(usage) : 0;
       const max = limit ? (limit.dailyMaxMinutes + bonus) * 60 : 0;
       const pct = max > 0 ? Math.round((used / max) * 100) : 0;
       const exceeded = max > 0 && used >= max;
@@ -1005,8 +1044,8 @@ async function refreshVisibleLimitUsage() {
   try {
     const [limits, today, bonuses, groups] = await Promise.all([
       api('/api/limits'),
-      api('/api/usage/today'),
-      api('/api/bonus/today'),
+      api('/api/usage/today' + viewQuery()),
+      api('/api/bonus/today' + viewQuery()),
       api('/api/limit-groups')
     ]);
     const limitsByApp = new Map(limits.map(limit => [limit.appName.toLowerCase(), limit]));
@@ -1019,7 +1058,7 @@ async function refreshVisibleLimitUsage() {
       const limit = limitsByApp.get(key);
       const usage = usageByApp.get(key);
       const bonus = bonusByApp.get(key) || 0;
-      const used = usage ? usage.totalSeconds : 0;
+      const used = usage ? usedSeconds(usage) : 0;
       const max = limit ? (limit.dailyMaxMinutes + bonus) * 60 : 0;
       const pct = max > 0 ? Math.round((used / max) * 100) : 0;
       const exceeded = max > 0 && used >= max;
@@ -1209,7 +1248,7 @@ async function grantBonus(appName, minutes) {
     await api('/api/bonus', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appName, minutes })
+      body: JSON.stringify({ appName, minutes, userSid: viewSid })
     });
     loadLimits();
     loadLiveToday();
