@@ -518,6 +518,7 @@ internal static class Program
         _enforcer = new LimitEnforcer(_db!, _tracker);
         _enforcer.SetAlwaysAllowed(_db.GetAlwaysAllowedAppsAsync().GetAwaiter().GetResult());
         _enforcer.OnBreachAlert += ShowLimitWarningPopup;
+        _enforcer.OnAppBlocked += ShowLimitBlockedPopup;
         _enforcer.OnBreachAlert += (app, delay, proc) => Logger.Instance.Info($"Limit breach: {app} - closing in {delay}s");
         _enforcer.OnAppKilled += OnAppKilled;
         _enforcer.OnAppKilled += (app) => Logger.Instance.Warn($"App killed: {app}");
@@ -656,6 +657,37 @@ internal static class Program
         catch (Exception ex)
         {
             Logger.Instance.Error($"Failed to show limit warning popup for {appName}: {ex.Message}");
+        }
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _blockedNoticeAt = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The app was already over its limit and was closed again right after opening: say why (at most once per app per 30s).</summary>
+    private static async void ShowLimitBlockedPopup(string appName)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            if (_blockedNoticeAt.TryGetValue(appName, out var last) && now - last < TimeSpan.FromSeconds(30)) return;
+            _blockedNoticeAt[appName] = now;
+            var showWarning = await _db!.GetShowWarningAsync();
+            if (!showWarning) return;
+            var language = await _db.GetSettingAsync("UiLanguage", "en");
+            var warningMsg = await _db.GetWarningMessageAsync();
+            var detail = await GetLimitResetDetailAsync(appName, language);
+            // Empty process name: the app is already closed, so the popup must stay up instead of dismissing itself.
+            ShowWarningPopup(
+                appName,
+                0,
+                "",
+                Localization.Text("DailyLimitReached", language),
+                string.IsNullOrWhiteSpace(warningMsg) ? Localization.Text("LimitReachedMessage", language, appName) : warningMsg,
+                detail,
+                language);
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error($"Failed to show limit-blocked popup for {appName}: {ex.Message}");
         }
     }
 
