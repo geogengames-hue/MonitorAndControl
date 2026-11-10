@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Builds, verifies and (optionally) uploads a DeviceMon release in one step.
 
@@ -11,9 +11,10 @@
          DeviceMon.zip                    (stable name used by the remote auto-update URL)
          MonitorAndControl-v<version>.zip (versioned copy)
        and re-verifies each pair. A mismatched zip/.sha256 is rejected by the SYSTEM
-       updater, so this check is the point of the script.
-    5. With -Upload: creates the GitHub release for the pushed commit, uploads the four
-       files, then downloads them back and confirms the hashes match.
+       updater, so this check is the point of the script. The single-file installer
+       MonitorAndControlSetup.exe (first-time installs) is copied next to them.
+    5. With -Upload: creates the GitHub release for the pushed commit, uploads the
+       files, then downloads the zip back and confirms the hashes match.
 
     Nothing is uploaded unless you pass -Upload, and -Upload asks for confirmation.
 
@@ -38,7 +39,7 @@ function Fail($text) { throw "Release stopped: $text" }
 
 # --- 1. Version -------------------------------------------------------------
 Step 'Reading version'
-$projects = @('MonitorAndControl.csproj', 'Watchdog\SystemHelperWatchdog.csproj', 'PopupHost\PopupHost.csproj', 'UpdateAgent\UpdateAgent.csproj')
+$projects = @('MonitorAndControl.csproj', 'Watchdog\SystemHelperWatchdog.csproj', 'PopupHost\PopupHost.csproj', 'UpdateAgent\UpdateAgent.csproj', 'Installer\Installer.csproj')
 $versions = foreach ($p in $projects) {
     $m = [regex]::Match((Get-Content -LiteralPath $p -Raw), '<Version>\s*([0-9]+\.[0-9]+\.[0-9]+)\s*</Version>')
     if (-not $m.Success) { Fail "no <Version> found in $p" }
@@ -111,6 +112,10 @@ foreach ($exe in 'DeviceMon.exe', 'GameHost.exe', 'PopupHost.exe', 'UpdateAgent.
     $fileVersion = (Get-Item -LiteralPath (Join-Path $publishDir $exe)).VersionInfo.FileVersion
     if ($fileVersion -ne "$version.0") { Fail "$exe is version $fileVersion, expected $version.0 (stale build?)" }
 }
+$setupExe = Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\win-x64\installer\MonitorAndControlSetup.exe'
+if (-not (Test-Path -LiteralPath $setupExe)) { Fail 'published output is missing the single-file installer (MonitorAndControlSetup.exe)' }
+$setupVersion = (Get-Item -LiteralPath $setupExe).VersionInfo.FileVersion
+if ($setupVersion -ne "$version.0") { Fail "MonitorAndControlSetup.exe is version $setupVersion, expected $version.0 (update Installer\Installer.csproj)" }
 try { $cfg = Get-Content -LiteralPath (Join-Path $publishDir 'appsettings.json') -Raw | ConvertFrom-Json }
 catch { Fail "published appsettings.json is not valid JSON: $($_.Exception.Message)" }
 Write-Host "All four executables are $version.0; appsettings.json valid (remote dashboard: $($cfg.EnableRemoteDashboard), bind $($cfg.DashboardBindAddress))."
@@ -150,8 +155,13 @@ foreach ($name in $stable, $versioned) {
 }
 $releaseHash = (Get-FileHash -LiteralPath (Join-Path $dist $stable) -Algorithm SHA256).Hash
 
+# The single-file installer for first-time installs (it embeds the same files as the zip).
+$installer = 'MonitorAndControlSetup.exe'
+Copy-Item -LiteralPath $setupExe -Destination (Join-Path $dist $installer)
+Write-Host ("OK  {0,-34} {1}" -f $installer, (Get-FileHash -LiteralPath (Join-Path $dist $installer) -Algorithm SHA256).Hash)
+
 # --- 7. Upload (opt-in) -----------------------------------------------------
-$files = @($stable, "$stable.sha256", $versioned, "$versioned.sha256") | ForEach-Object { Join-Path $dist $_ }
+$files = @($stable, "$stable.sha256", $versioned, "$versioned.sha256", $installer) | ForEach-Object { Join-Path $dist $_ }
 
 if (-not $Upload) {
     Step 'Done (nothing uploaded)'

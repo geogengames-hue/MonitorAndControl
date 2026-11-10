@@ -23,10 +23,12 @@
     <Compile Remove="Watchdog\**\*.cs" />
     <Compile Remove="PopupHost\**\*.cs" />
     <Compile Remove="UpdateAgent\**\*.cs" />
+    <Compile Remove="Installer\**\*.cs" />
     <Compile Remove="Tests\**\*.cs" />
     <None Remove="Watchdog\**\*" />
     <None Remove="PopupHost\**\*" />
     <None Remove="UpdateAgent\**\*" />
+    <None Remove="Installer\**\*" />
     <None Remove="Tests\**\*" />
   </ItemGroup>
 
