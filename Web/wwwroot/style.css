@@ -186,6 +186,10 @@ a { color: var(--primary); }
 .active-hero .live-status { display: inline-flex; align-items: center; gap: 7px; margin-top: 20px; padding: 6px 9px; border: 1px solid rgba(88,189,131,.25); border-radius: 99px; background: rgba(88,189,131,.07); }
 .active-hero .live-status:empty { display: none; }
 .active-hero .live-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+.active-hero .live-account { margin-top: 7px; color: var(--text-soft); font-size: 13px; font-weight: 600; }
+.active-hero .live-account:empty, .active-hero .live-sessions:empty { display: none; }
+.active-hero .live-sessions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; color: var(--muted); font-size: 12px; }
+.active-hero .live-session { padding: 3px 9px; border: 1px solid var(--border); border-radius: 99px; color: var(--text-soft); }
 .hero-visual { position: absolute; right: 7%; top: 50%; width: 160px; height: 160px; transform: translateY(-50%); display: grid; place-items: center; }
 .hero-visual i { position: absolute; inset: 0; border: 1px solid rgba(240,164,93,.12); border-radius: 50%; }
 .hero-visual i:nth-child(2) { inset: 20px; border-style: dashed; animation: orbit 20s linear infinite; }

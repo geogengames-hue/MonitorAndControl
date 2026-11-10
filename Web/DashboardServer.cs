@@ -620,11 +620,15 @@ public class DashboardServer
             return Results.Ok(new { status = "blocked", killed });
         });
 
-        app.MapGet("/api/live", () =>
+        app.MapGet("/api/live", async () =>
         {
             var trackingSuspended = tracker.IsUsageTrackingSuspended(out var trackingState);
+            var sessions = await db.GetLiveSessionsAsync(LiveSessionPublisher.MaxAge);
             return Results.Json(new
             {
+                account = Environment.UserName,
+                accountSid = AccountIdentity.CurrentSid,
+                sessions = sessions.Select(s => new { sid = s.UserSid, account = s.Account, app = s.App, process = s.Process, state = s.State }),
                 currentApp = tracker.CurrentAppName ?? "None",
                 currentProcess = tracker.CurrentProcessName ?? "None",
                 isTracking = tracker.CurrentAppName != null,

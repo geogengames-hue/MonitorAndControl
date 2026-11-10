@@ -16,6 +16,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Remote PIN rejects weak values", TestRemotePinRules),
     ("Weekend limit applies on Saturday and Sunday only", TestWeekendLimit),
     ("Account usage ignores capitals in the app name", TestAccountUsageCase),
+    ("Each signed-in account reports its live session", TestLiveSessions),
     ("A claimed job runs in one account at a time", TestLeaseClaim),
     ("The time-left view reads clearly", TestTimeLeftView),
     ("The time zone is pinned until a parent accepts a change", TestPinnedTimeZone),
@@ -1702,6 +1703,31 @@ static async Task TestAccountUsageCase()
         await db.SaveUserLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "minecraft", UserSid = anna, DailyMaxMinutes = 45, Enabled = true });
         AssertTrue((await db.GetUserLimitRulesAsync(anna)).Single().DailyMaxMinutes == 45, "A rule is one per app and account whatever the capitals.");
         AssertTrue((await db.GetUserLimitRulesAsync("S-1-5-21-9-9-9-9")).Count == 0, "Asking for one account returns only its rules.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static async Task TestLiveSessions()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Live-Test-" + Guid.NewGuid().ToString("N"));
+    const string anna = "S-1-5-21-1-2-3-1001";
+    const string ben = "S-1-5-21-1-2-3-1002";
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        await db.PublishLiveSessionAsync(anna, "anna", "Minecraft", "minecraft.exe", "active");
+        await db.PublishLiveSessionAsync(ben, "ben", "", "", "locked");
+        await db.PublishLiveSessionAsync(anna, "anna", "Roblox", "roblox.exe", "active");
+        var sessions = await db.GetLiveSessionsAsync(TimeSpan.FromSeconds(30));
+        AssertTrue(sessions.Count == 2, "Each account has one live session.");
+        AssertTrue(sessions.Single(s => s.UserSid == anna).App == "Roblox" && sessions.Single(s => s.UserSid == ben).State == "locked",
+            "Reporting again replaces what the account was doing, and each account keeps its own state.");
+        await Task.Delay(50);
+        AssertTrue((await db.GetLiveSessionsAsync(TimeSpan.FromMilliseconds(1))).Count == 0, "An account that stops reporting drops out.");
     }
     finally
     {
