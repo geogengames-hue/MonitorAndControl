@@ -90,7 +90,7 @@ public sealed class PushSender
     {
         var custom = (await _db.GetSettingAsync("PublicDashboardUrl", "")).Trim();
         if (custom.Length > 0) return BuildBase(custom);
-        var config = Program.GetConfig();
+        var config = AppConfigProvider.GetConfig();
         return config.EnableRemoteDashboard ? BuildBase($"http://{Environment.MachineName}:{config.DashboardPort}") : null;
     }
 

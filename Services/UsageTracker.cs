@@ -369,6 +369,19 @@ public class UsageTracker : IDisposable
             await _limitEnforcer.EnforceAsync(breached, breachedGroups, scheduleViolationApps, homeworkApps);
             _limitEnforcer.PruneExceeded(breached.Select(b => b.AppName)
                 .Concat(breachedGroups.SelectMany(g => g.AppNames.Concat(g.CategoryApps ?? Array.Empty<string>()))));
+
+            try
+            {
+                await _db.PublishLiveSessionAsync(
+                    AccountIdentity.SessionId,
+                    AccountIdentity.CurrentSid,
+                    Environment.UserName,
+                    _windowTracker.CurrentAppName,
+                    _windowTracker.CurrentProcessName,
+                    _windowTracker.CurrentAppName != null,
+                    (long)_windowTracker.GetIdleDuration().TotalSeconds);
+            }
+            catch { }
         }
         finally
         {

@@ -38,7 +38,7 @@ public static class DiagnosticsService
                 // i.e. the child cannot modify or delete the app files.
                 protectedFromChild = protectedInstall
             },
-            config = new { source = Program.ConfigSource },
+            config = new { source = AppConfigProvider.ConfigSource },
             hotkey = new
             {
                 registered = HotKeyService.Registered,

@@ -34,6 +34,7 @@ public class DashboardServer
     private static readonly TimeSpan AuthLockoutDuration = TimeSpan.FromMinutes(5);
     private const string AdminCookieName = "DeviceMonAdminToken";
     public static Action<string>? LoginLockoutDetected { get; set; }
+    public static Func<Task>? OnSettingsChanged { get; set; }
 
     private static string ResolveDashboardBindAddress(AppConfig config)
     {
@@ -198,7 +199,7 @@ public class DashboardServer
                 status = "ok",
                 machine = Environment.MachineName,
                 timestamp = DateTimeOffset.Now,
-                runtime = Program.GetRuntimeHealth(Program.GetConfig(), db, emailService)
+                runtime = AppConfigProvider.GetRuntimeHealth(AppConfigProvider.GetConfig(), db, emailService)
             }));
 
         app.MapPost("/api/auth/password", async (HttpContext ctx) =>
@@ -620,19 +621,29 @@ public class DashboardServer
             return Results.Ok(new { status = "blocked", killed });
         });
 
-        app.MapGet("/api/live", () =>
+        app.MapGet("/api/live", async () =>
         {
             var trackingSuspended = tracker.IsUsageTrackingSuspended(out var trackingState);
+            var liveState = await db.GetLatestLiveSessionAsync();
+            var isLiveActive = liveState != null && (DateTime.UtcNow - liveState.LastSeenUtc).TotalSeconds < 15;
+
+            var currentApp = tracker.CurrentAppName ?? (isLiveActive ? liveState!.AppName : null) ?? "None";
+            var currentProcess = tracker.CurrentProcessName ?? (isLiveActive ? liveState!.ProcessName : null) ?? "None";
+            var isTracking = tracker.CurrentAppName != null || (isLiveActive && liveState!.IsTracking);
+            var idleSeconds = tracker.CurrentAppName != null
+                ? (long)tracker.GetIdleDuration().TotalSeconds
+                : (isLiveActive ? liveState!.IdleSeconds : 0);
+
             return Results.Json(new
             {
-                currentApp = tracker.CurrentAppName ?? "None",
-                currentProcess = tracker.CurrentProcessName ?? "None",
-                isTracking = tracker.CurrentAppName != null,
+                currentApp,
+                currentProcess,
+                isTracking,
                 enforcementPaused = enforcer.IsPaused,
                 pausedUntil = enforcer.PausedUntil,
-                trackingSuspended,
-                trackingState,
-                idleSeconds = (long)tracker.GetIdleDuration().TotalSeconds,
+                trackingSuspended = isTracking ? trackingSuspended : false,
+                trackingState = isTracking ? trackingState : (isLiveActive ? "" : "No active user session"),
+                idleSeconds,
                 pauseWhenIdle = tracker.PauseWhenIdle,
                 idleThresholdMinutes = tracker.IdleThresholdMinutes,
                 diagnostics = tracker.GetTrackingDiagnostics()
@@ -675,7 +686,7 @@ public class DashboardServer
                 ? name : Path.GetFileNameWithoutExtension(processName);
             await db.DeleteAppMappingAsync(processName);
             // Rebuild tracker mappings from config + remaining dynamic
-            var config = Program.GetConfig();
+            var config = AppConfigProvider.GetConfig();
             tracker.LoadKnownApps(config.KnownApps);
             var mappings = await db.GetAppMappingsAsync();
             foreach (var m in mappings)
@@ -1037,8 +1048,8 @@ public class DashboardServer
             var summaryMonthlyDay = await db.GetSettingAsync("SummaryMonthlyDay", "1");
             var tamperAlertsEnabled = await db.GetSettingAsync("TamperAlertsEnabled", "false");
             var trackWebsites = await db.GetSettingAsync("TrackWebsites", "true");
-            var config = Program.GetConfig();
-            var (hotKeyModifiers, hotKeyKey) = await Program.GetDashboardHotKeySettings(config);
+            var config = AppConfigProvider.GetConfig();
+            var (hotKeyModifiers, hotKeyKey) = await AppConfigProvider.GetDashboardHotKeySettings(db, config);
             var hostname = Environment.MachineName;
             var localIps = System.Net.Dns.GetHostEntry(hostname).AddressList
                 .Where(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
@@ -1054,7 +1065,7 @@ public class DashboardServer
                 emailAllowedSender,
                 hostname,
                 localIps,
-                autoStart = Program.GetAutoStart(),
+                autoStart = AppConfigProvider.GetAutoStart(),
                 emailNotifyEnabled = emailNotifyEnabled == "true",
                 emailBreachNotifyEnabled = emailBreachNotifyEnabled == "true",
                 emailKillNotifyEnabled = emailKillNotifyEnabled == "true",
@@ -1210,8 +1221,8 @@ public class DashboardServer
                 await db.SetSettingAsync("TamperAlertsEnabled", tamperEnabled.GetBoolean() ? "true" : "false");
             if (root.TryGetProperty("hotKeyModifiers", out var hkm) || root.TryGetProperty("hotKeyKey", out var hkk))
             {
-                var config = Program.GetConfig();
-                var currentHotKey = await Program.GetDashboardHotKeySettings(config);
+                var config = AppConfigProvider.GetConfig();
+                var currentHotKey = await AppConfigProvider.GetDashboardHotKeySettings(db, config);
                 var modifiers = root.TryGetProperty("hotKeyModifiers", out hkm)
                     ? Clean(hkm.GetString())
                     : currentHotKey.Modifiers;
@@ -1222,18 +1233,18 @@ public class DashboardServer
                 if (!HotKeyService.TryParseHotKey(modifiers, key, out _, out _, out var normalizedModifiers, out var normalizedKey, out var hotKeyError))
                     return Results.BadRequest(new { error = hotKeyError });
 
-                if (!await Program.UpdateDashboardHotKeyAsync(normalizedModifiers, normalizedKey))
+                if (!await AppConfigProvider.UpdateDashboardHotKeyAsync(db, normalizedModifiers, normalizedKey))
                     return Results.BadRequest(new { error = "Could not register that hotkey. It may already be used by Windows or another app." });
 
                 await db.SetSettingAsync("HotKeyModifiers", normalizedModifiers);
                 await db.SetSettingAsync("HotKeyKey", normalizedKey);
             }
             if (root.TryGetProperty("autoStart", out var asv))
-                Program.SetAutoStart(asv.GetBoolean());
+                AppConfigProvider.SetAutoStart(asv.GetBoolean());
             // Always reload email config after save
             await emailService.LoadSettingsAsync();
             if (emailService.IsEnabled) emailService.StartPolling(); else emailService.StopPolling();
-            await Program.ReloadParentReportingAsync();
+            if (OnSettingsChanged != null) await OnSettingsChanged.Invoke();
             return Results.Ok();
         });
 
@@ -1637,7 +1648,7 @@ public class DashboardServer
             var tempUpdaterPath = Path.Combine(tempDir, "UpdateAgent.exe");
             File.Copy(updaterPath, tempUpdaterPath, overwrite: true);
 
-            var monitorPath = Program.CurrentExecutablePath;
+            var monitorPath = AppConfigProvider.CurrentExecutablePath;
             var targetDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var pid = Environment.ProcessId;
             var requestPath = Path.Combine(tempDir, "update-request.json");
@@ -1693,7 +1704,7 @@ public class DashboardServer
             }
 
             Logger.Instance.Warn($"Dashboard update started from source: {source}");
-            Program.ShutdownSoon(1000);
+            AppConfigProvider.Shutdown(1000);
             return Results.Ok(new { status = "update_started" });
         });
 
@@ -1768,10 +1779,10 @@ public class DashboardServer
                 if (enforcer.Categories is { } categories) await categories.ReloadAsync(db);
             }
 
-            var importedConfig = Program.GetConfig();
-            var importedHotKey = await Program.GetDashboardHotKeySettings(importedConfig);
+            var importedConfig = AppConfigProvider.GetConfig();
+            var importedHotKey = await AppConfigProvider.GetDashboardHotKeySettings(db, importedConfig);
             if (HotKeyService.TryParseHotKey(importedHotKey.Modifiers, importedHotKey.Key, out _, out _, out var normalizedModifiers, out var normalizedKey, out _) &&
-                await Program.UpdateDashboardHotKeyAsync(normalizedModifiers, normalizedKey))
+                await AppConfigProvider.UpdateDashboardHotKeyAsync(db, normalizedModifiers, normalizedKey))
             {
                 await db.SetSettingAsync("HotKeyModifiers", normalizedModifiers);
                 await db.SetSettingAsync("HotKeyKey", normalizedKey);
@@ -1779,7 +1790,7 @@ public class DashboardServer
 
             enforcer.ClearExceeded();
             scheduler.InvalidateCache();
-            tracker.LoadKnownApps(Program.GetConfig().KnownApps);
+            tracker.LoadKnownApps(AppConfigProvider.GetConfig().KnownApps);
             foreach (var mapping in await db.GetAppMappingsAsync())
                 tracker.AddKnownApp(mapping.ProcessName, mapping.AppName, mapping.CountInBackground, mapping.IgnoreOverlayFocus);
             var importedPauseWhenIdle = await db.GetSettingAsync("PauseTrackingWhenIdle", "false");
@@ -1789,7 +1800,7 @@ public class DashboardServer
                 int.TryParse(importedIdleThreshold, out var importedIdleMinutes) ? importedIdleMinutes : 10);
             await emailService.LoadSettingsAsync();
             if (emailService.IsEnabled) emailService.StartPolling(); else emailService.StopPolling();
-            await Program.ReloadParentReportingAsync();
+            if (OnSettingsChanged != null) await OnSettingsChanged.Invoke();
 
             return Results.Ok(new { status = "imported", skippedAccountRules });
         });
@@ -1813,7 +1824,7 @@ public class DashboardServer
             _ = Task.Run(async () =>
             {
                 await Task.Delay(500);
-                Program.Shutdown();
+                AppConfigProvider.Shutdown();
             });
             return Results.Ok(new { status = "shutting_down" });
         });

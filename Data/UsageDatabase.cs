@@ -192,6 +192,17 @@ public class UsageDatabase : IDisposable
                 MessageKey TEXT PRIMARY KEY,
                 ProcessedAt TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS LiveSessions (
+                SessionId INTEGER PRIMARY KEY,
+                UserSid TEXT,
+                UserName TEXT,
+                AppName TEXT,
+                ProcessName TEXT,
+                IsTracking INTEGER NOT NULL DEFAULT 0,
+                IdleSeconds INTEGER NOT NULL DEFAULT 0,
+                LastSeenUtc TEXT NOT NULL
+            );
             """;
         cmd.ExecuteNonQuery();
 
@@ -1142,6 +1153,62 @@ public class UsageDatabase : IDisposable
             while (await r.ReadAsync())
                 settings[r.GetString(0)] = r.GetString(1);
             return settings;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task PublishLiveSessionAsync(int sessionId, string? userSid, string? userName,
+        string? appName, string? processName, bool isTracking, long idleSeconds)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT OR REPLACE INTO LiveSessions (SessionId, UserSid, UserName, AppName, ProcessName, IsTracking, IdleSeconds, LastSeenUtc)
+                VALUES (@session, @sid, @user, @app, @proc, @tracking, @idle, @seen);
+                """;
+            cmd.Parameters.AddWithValue("@session", sessionId);
+            cmd.Parameters.AddWithValue("@sid", (object?)userSid ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@user", (object?)userName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@app", (object?)appName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@proc", (object?)processName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@tracking", isTracking ? 1 : 0);
+            cmd.Parameters.AddWithValue("@idle", idleSeconds);
+            cmd.Parameters.AddWithValue("@seen", DateTime.UtcNow.ToString("O"));
+            await cmd.ExecuteNonQueryAsync();
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<LiveSessionRecord?> GetLatestLiveSessionAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT SessionId, UserSid, UserName, AppName, ProcessName, IsTracking, IdleSeconds, LastSeenUtc
+                FROM LiveSessions
+                ORDER BY LastSeenUtc DESC
+                LIMIT 1;
+                """;
+            using var r = await cmd.ExecuteReaderAsync();
+            if (await r.ReadAsync())
+            {
+                var seenText = r.GetString(7);
+                var seenUtc = DateTime.TryParse(seenText, out var parsed) ? parsed.ToUniversalTime() : DateTime.MinValue;
+                return new LiveSessionRecord(
+                    r.GetInt32(0),
+                    r.IsDBNull(1) ? null : r.GetString(1),
+                    r.IsDBNull(2) ? null : r.GetString(2),
+                    r.IsDBNull(3) ? null : r.GetString(3),
+                    r.IsDBNull(4) ? null : r.GetString(4),
+                    r.GetInt32(5) != 0,
+                    r.GetInt64(6),
+                    seenUtc);
+            }
+            return null;
         }
         finally { _lock.Release(); }
     }

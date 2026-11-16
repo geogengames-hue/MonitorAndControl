@@ -60,35 +60,24 @@ public class WarningPopup : Form
         StartPosition = FormStartPosition.CenterScreen;
         TopMost = true;
         ShowInTaskbar = false;
-        Width = 420;
-        Height = 170;
+        Width = 480;
+        Height = 200;
         BackColor = Color.FromArgb(30, 30, 46);
         Opacity = 0.95;
 
         var panel = new Panel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(20)
+            Padding = new Padding(20, 16, 20, 16)
         };
 
         _messageLabel = new Label
         {
             Text = string.IsNullOrWhiteSpace(reason) ? message : reason,
             ForeColor = Color.FromArgb(255, 200, 100),
-            Font = new Font("Segoe UI", 16, FontStyle.Bold),
+            Font = new Font("Segoe UI", 15, FontStyle.Bold),
             Dock = DockStyle.Top,
-            Height = 45,
-            TextAlign = ContentAlignment.MiddleCenter
-        };
-
-        _countdownLabel = new Label
-        {
-            Text = totalSeconds > 0
-                ? FormatCountdown(totalSeconds)
-                : FormatTemplate(closedTemplate, 0),
-            ForeColor = Color.White,
-            Font = new Font("Segoe UI", 20, FontStyle.Bold),
-            Dock = DockStyle.Fill,
+            Height = 46,
             TextAlign = ContentAlignment.MiddleCenter
         };
 
@@ -98,12 +87,23 @@ public class WarningPopup : Form
             ForeColor = Color.FromArgb(190, 190, 205),
             Font = new Font("Segoe UI", 10, FontStyle.Regular),
             Dock = DockStyle.Bottom,
-            Height = 36,
+            Height = 40,
             TextAlign = ContentAlignment.MiddleCenter
         };
 
-        panel.Controls.Add(_detailLabel);
+        _countdownLabel = new Label
+        {
+            Text = totalSeconds > 0
+                ? FormatCountdown(totalSeconds)
+                : FormatTemplate(closedTemplate, 0),
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 18, FontStyle.Bold),
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+
         panel.Controls.Add(_countdownLabel);
+        panel.Controls.Add(_detailLabel);
         panel.Controls.Add(_messageLabel);
         Controls.Add(panel);
 
