@@ -70,6 +70,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Installer finds new appsettings options and merges them without losing values", InstallerTests.NewOptionsAreFoundAndMergedWithoutLosingValues),
     ("Installer backs up appsettings, and does not ask when nothing is new", InstallerTests.AppSettingsActionsBackUpAndNeverAskWhenNothingIsNew),
     ("Installer carries over the settings of an older install", InstallerTests.SettingsOfAnOlderInstallAreCarriedOver),
+    ("Installer detects and normalizes languages", InstallerTests.InstallerDetectsAndNormalizesLanguages),
+    ("Installer messages are populated for all supported languages", InstallerTests.InstallerMessagesArePopulatedForAllSupportedLanguages),
     ("Usage database accumulates daily app usage", TestUsageDatabaseAccumulatesUsage),
     ("Usage database separates foreground and background time", TestUsageDatabaseTracksUsageSources),
     ("Usage database preserves legacy unclassified totals", TestUsageDatabasePreservesLegacyTotals),

@@ -118,4 +118,99 @@ internal static class InstallerTests
         }
         return Task.CompletedTask;
     }
+
+    public static Task InstallerDetectsAndNormalizesLanguages()
+    {
+        // Normalization
+        Check(InstallerLocalization.NormalizeLanguage("es") == "es", "es must normalize to es");
+        Check(InstallerLocalization.NormalizeLanguage("es-ES") == "es", "es-ES must normalize to es");
+        Check(InstallerLocalization.NormalizeLanguage("es-MX") == "es", "es-MX must normalize to es");
+        Check(InstallerLocalization.NormalizeLanguage("de") == "de", "de must normalize to de");
+        Check(InstallerLocalization.NormalizeLanguage("de-DE") == "de", "de-DE must normalize to de");
+        Check(InstallerLocalization.NormalizeLanguage("fr") == "fr", "fr must normalize to fr");
+        Check(InstallerLocalization.NormalizeLanguage("fr-FR") == "fr", "fr-FR must normalize to fr");
+        Check(InstallerLocalization.NormalizeLanguage("ru") == "ru", "ru must normalize to ru");
+        Check(InstallerLocalization.NormalizeLanguage("ru-RU") == "ru", "ru-RU must normalize to ru");
+        Check(InstallerLocalization.NormalizeLanguage("en") == "en", "en must normalize to en");
+        Check(InstallerLocalization.NormalizeLanguage("en-US") == "en", "en-US must normalize to en");
+        Check(InstallerLocalization.NormalizeLanguage("ja-JP") == "en", "Unsupported language ja-JP must fallback to en");
+        Check(InstallerLocalization.NormalizeLanguage("zh-CN") == "en", "Unsupported language zh-CN must fallback to en");
+        Check(InstallerLocalization.NormalizeLanguage("it") == "en", "Unsupported language it must fallback to en");
+        Check(InstallerLocalization.NormalizeLanguage("") == "en", "Empty must fallback to en");
+        Check(InstallerLocalization.NormalizeLanguage(null) == "en", "Null must fallback to en");
+
+        // Win32 LANGID mapping
+        Check(InstallerLocalization.LanguageFromLangId(0x0c0a) == "es", "0x0c0a (Spanish) maps to es");
+        Check(InstallerLocalization.LanguageFromLangId(0x040a) == "es", "0x040a (Spanish) maps to es");
+        Check(InstallerLocalization.LanguageFromLangId(0x0407) == "de", "0x0407 (German) maps to de");
+        Check(InstallerLocalization.LanguageFromLangId(0x040c) == "fr", "0x040c (French) maps to fr");
+        Check(InstallerLocalization.LanguageFromLangId(0x0419) == "ru", "0x0419 (Russian) maps to ru");
+        Check(InstallerLocalization.LanguageFromLangId(0x0409) == "en", "0x0409 (English US) maps to en");
+        Check(InstallerLocalization.LanguageFromLangId(0x0411) == "en", "0x0411 (Japanese) fallbacks to en");
+
+        // Detection returns a supported language
+        string detected = InstallerLocalization.DetectLanguage();
+        Check(new[] { "en", "es", "de", "fr", "ru" }.Contains(detected), "DetectLanguage must return a supported language");
+
+        return Task.CompletedTask;
+    }
+
+    public static Task InstallerMessagesArePopulatedForAllSupportedLanguages()
+    {
+        string[] supported = { "en", "es", "de", "fr", "ru" };
+        foreach (var lang in supported)
+        {
+            InstallerLocalization.Language = lang;
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.ButtonClose), $"ButtonClose for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.ButtonContinue), $"ButtonContinue for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.ElevationRequiredMessage), $"ElevationRequiredMessage for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.Starting), $"Starting for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.ExtractingFiles), $"ExtractingFiles for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.InstallingMonitorAndControl), $"InstallingMonitorAndControl for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.InstalledSuccess("1.0")), $"InstalledSuccess for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.SetupFailed), $"SetupFailed for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.VerifyingRuntime(".NET")), $"VerifyingRuntime for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.InstallingRuntimeProgress(".NET", "0:05")), $"InstallingRuntimeProgress for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.DownloadingRuntime(".NET")), $"DownloadingRuntime for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.DownloadingRuntimeProgress(".NET", 10.0, 50.0)), $"DownloadingRuntimeProgress for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RunningAsAdmin("Admin")), $"RunningAsAdmin for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RuntimeNotInstalled(".NET")), $"RuntimeNotInstalled for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.InstallingRuntimePrompt(".NET")), $"InstallingRuntimePrompt for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RuntimeInstalled(".NET")), $"RuntimeInstalled for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.VersionToInstall("1.0")), $"VersionToInstall for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.VersionOnDiskNone), $"VersionOnDiskNone for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.VersionOnDiskFound("1.0", "C:\\Dir")), $"VersionOnDiskFound for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.SameVersionReinstall), $"SameVersionReinstall for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.UpgradingVersion("1.0", "2.0")), $"UpgradingVersion for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.DowngradingVersion("2.0", "1.0")), $"DowngradingVersion for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.PreviousInstallReplaced("C:\\Old")), $"PreviousInstallReplaced for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.InstalledVersionLog("1.0")), $"InstalledVersionLog for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.SetupFinished), $"SetupFinished for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.InvalidAppSettings("Bad")), $"InvalidAppSettings for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.InstallScriptFailed(1)), $"InstallScriptFailed for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.DownloadNotSigned), $"DownloadNotSigned for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.CouldNotStartRuntimeInstaller), $"CouldNotStartRuntimeInstaller for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RuntimeInstallerTimeout), $"RuntimeInstallerTimeout for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RuntimeInstallerExitCode(1)), $"RuntimeInstallerExitCode for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RuntimeInstallFailed(".NET", "err", "C:\\log.txt")), $"RuntimeInstallFailed for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.NoPayload), $"NoPayload for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.InstallScriptMissing), $"InstallScriptMissing for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.CouldNotStartPowerShell), $"CouldNotStartPowerShell for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.SettingsDialogTitle), $"SettingsDialogTitle for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.SettingsIntro), $"SettingsIntro for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.SettingsAsk), $"SettingsAsk for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.SettingsMergeOption), $"SettingsMergeOption for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.SettingsKeepOption), $"SettingsKeepOption for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.SettingsReplaceOption), $"SettingsReplaceOption for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.NoExistingAppSettings), $"NoExistingAppSettings for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.InvalidExistingJson("err", false)), $"InvalidExistingJson for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.MergedSettingsLog(false, 1, "Opt")), $"MergedSettingsLog for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.ReplacedSettingsBackupLog("20261116")), $"ReplacedSettingsBackupLog for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.ReplacedSettingsImportedLog), $"ReplacedSettingsImportedLog for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.KeptSettingsImportedLog), $"KeptSettingsImportedLog for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.KeptSettingsExistingLog), $"KeptSettingsExistingLog for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.NewOptionsDefaultNotice("Opt")), $"NewOptionsDefaultNotice for {lang}");
+        }
+        return Task.CompletedTask;
+    }
 }

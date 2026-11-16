@@ -24,6 +24,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        ParseLanguage(args);
         if (!IsElevated()) return RelaunchElevated(args);
 
         Application.EnableVisualStyles();
@@ -57,9 +58,25 @@ internal static class Program
         catch (Exception)
         {
             MessageBox.Show(
-                "Monitor & Control Setup needs administrator rights to install the GameHost service.\n\nRun it again and choose Yes at the Windows prompt.",
+                InstallerLocalization.ElevationRequiredMessage,
                 "Monitor & Control Setup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return ExitNotElevated;
+        }
+    }
+
+    private static void ParseLanguage(string[] args)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i].Equals("-Language", StringComparison.OrdinalIgnoreCase) ||
+                args[i].Equals("-Lang", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 < args.Length)
+                {
+                    InstallerLocalization.Language = args[i + 1];
+                }
+                break;
+            }
         }
     }
 }

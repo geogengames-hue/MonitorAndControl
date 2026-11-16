@@ -37,24 +37,31 @@ internal sealed class SetupForm : Form
         _args = args;
         for (int i = 0; i < args.Length; i++)
         {
-            if (!args[i].Equals("-AppSettings", StringComparison.OrdinalIgnoreCase))
+            if (args[i].Equals("-AppSettings", StringComparison.OrdinalIgnoreCase))
             {
-                _scriptArgs.Add(args[i]);
+                string value = i + 1 < args.Length ? args[++i] : "";
+                if (Enum.TryParse(value, ignoreCase: true, out AppSettingsAction action)) _forcedAppSettings = action;
+                else _badAppSettings = value;
                 continue;
             }
-            string value = i + 1 < args.Length ? args[++i] : "";
-            if (Enum.TryParse(value, ignoreCase: true, out AppSettingsAction action)) _forcedAppSettings = action;
-            else _badAppSettings = value;
+            if (args[i].Equals("-Language", StringComparison.OrdinalIgnoreCase) ||
+                args[i].Equals("-Lang", StringComparison.OrdinalIgnoreCase))
+            {
+                string value = i + 1 < args.Length ? args[++i] : "";
+                InstallerLocalization.Language = value;
+                continue;
+            }
+            _scriptArgs.Add(args[i]);
         }
 
-        Text = "Monitor & Control Setup " + SetupVersion;
+        Text = InstallerLocalization.SetupTitle(SetupVersion);
         ClientSize = new Size(640, 380);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
 
-        var title = new Label { Text = "Monitor & Control Setup " + SetupVersion, UseMnemonic = false, Font = new Font(Font.FontFamily, 14f, FontStyle.Bold), Location = new Point(16, 12), AutoSize = true };
-        _status = new Label { Text = "Starting...", UseMnemonic = false, Location = new Point(16, 48), Size = new Size(608, 22) };
+        var title = new Label { Text = InstallerLocalization.SetupTitle(SetupVersion), UseMnemonic = false, Font = new Font(Font.FontFamily, 14f, FontStyle.Bold), Location = new Point(16, 12), AutoSize = true };
+        _status = new Label { Text = InstallerLocalization.Starting, UseMnemonic = false, Location = new Point(16, 48), Size = new Size(608, 22) };
         _progress = new ProgressBar { Location = new Point(16, 74), Size = new Size(608, 22), Style = ProgressBarStyle.Marquee };
         _log = new TextBox
         {
@@ -66,7 +73,7 @@ internal sealed class SetupForm : Form
             Font = new Font("Consolas", 9f),
             BackColor = Color.White,
         };
-        _close = new Button { Text = "Close", Location = new Point(544, 340), Size = new Size(80, 28), Enabled = false };
+        _close = new Button { Text = InstallerLocalization.ButtonClose, Location = new Point(544, 340), Size = new Size(80, 28), Enabled = false };
         _close.Click += (_, _) => Close();
         Controls.AddRange(new Control[] { title, _status, _progress, _log, _close });
 
@@ -80,10 +87,10 @@ internal sealed class SetupForm : Form
         try
         {
             if (_badAppSettings != null)
-                throw new InvalidOperationException($"Invalid -AppSettings value '{_badAppSettings}'. Use Merge, Keep or Replace.");
+                throw new InvalidOperationException(InstallerLocalization.InvalidAppSettings(_badAppSettings));
 
-            AppendLog($"Monitor & Control Setup {SetupVersion}");
-            AppendLog($"Running as {Environment.UserDomainName}\\{Environment.UserName} with administrator rights.");
+            AppendLog(InstallerLocalization.SetupTitle(SetupVersion));
+            AppendLog(InstallerLocalization.RunningAsAdmin($"{Environment.UserDomainName}\\{Environment.UserName}"));
             workDir = Path.Combine(Path.GetTempPath(), "MonitorAndControlSetup-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(workDir);
 
@@ -92,26 +99,26 @@ internal sealed class SetupForm : Form
                 if (!HasRuntime(framework)) await InstallRuntimeAsync(name, url, workDir);
             }
 
-            SetStatus("Extracting files...");
+            SetStatus(InstallerLocalization.ExtractingFiles);
             await Task.Run(() => Extract(workDir));
 
             PrepareInstall(workDir);
 
-            SetStatus("Installing Monitor & Control...");
+            SetStatus(InstallerLocalization.InstallingMonitorAndControl);
             int code = await RunInstallScriptAsync(workDir);
-            if (code != 0) throw new InvalidOperationException($"install.ps1 failed (exit code {code}).");
+            if (code != 0) throw new InvalidOperationException(InstallerLocalization.InstallScriptFailed(code));
 
             ExitCode = 0;
             string installed = Pretty(FileVersion(ResolveInstallDir()));
             Determinate(100);
-            SetStatus($"Monitor & Control {installed} is installed.");
-            AppendLog($"Installed version: {installed}.");
-            AppendLog("Setup finished.");
+            SetStatus(InstallerLocalization.InstalledSuccess(installed));
+            AppendLog(InstallerLocalization.InstalledVersionLog(installed));
+            AppendLog(InstallerLocalization.SetupFinished);
         }
         catch (Exception ex)
         {
             Determinate(0);
-            SetStatus("Setup failed.");
+            SetStatus(InstallerLocalization.SetupFailed);
             AppendLog(ex.Message);
         }
         finally
@@ -136,23 +143,23 @@ internal sealed class SetupForm : Form
         string installDir = ResolveInstallDir();
         string? previousDir = FindServiceDirectory();
         string? newVersion = FileVersion(workDir);
-        AppendLog($"Version to install: {Pretty(newVersion)}");
+        AppendLog(InstallerLocalization.VersionToInstall(Pretty(newVersion)));
 
         string? foundDir = FileVersion(installDir) != null ? installDir : previousDir;
         if (foundDir == null)
         {
-            AppendLog("Version on disk: none (no previous installation found).");
+            AppendLog(InstallerLocalization.VersionOnDiskNone);
         }
         else
         {
             string? foundVersion = FileVersion(foundDir);
-            AppendLog($"Version on disk: {Pretty(foundVersion)} (in {foundDir}).");
+            AppendLog(InstallerLocalization.VersionOnDiskFound(Pretty(foundVersion), foundDir));
             if (Version.TryParse(foundVersion, out Version? found) && Version.TryParse(newVersion, out Version? bundled))
             {
                 int order = found.CompareTo(bundled);
-                AppendLog(order == 0 ? "Same version: the files will be reinstalled."
-                    : order < 0 ? $"Upgrading from {Pretty(foundVersion)} to {Pretty(newVersion)}."
-                    : $"The version on disk is newer: it will be replaced by the older {Pretty(newVersion)} (downgrade).");
+                AppendLog(order == 0 ? InstallerLocalization.SameVersionReinstall
+                    : order < 0 ? InstallerLocalization.UpgradingVersion(Pretty(foundVersion), Pretty(newVersion))
+                    : InstallerLocalization.DowngradingVersion(Pretty(foundVersion), Pretty(newVersion)));
             }
         }
 
@@ -169,7 +176,7 @@ internal sealed class SetupForm : Form
         AppSettingsMigration.Prepare(installDir, previousDir, Path.Combine(workDir, "appsettings.json"), Choose, AppendLog);
 
         if (previousDir != null && !string.Equals(Path.GetFullPath(previousDir).TrimEnd('\\'), Path.GetFullPath(installDir).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
-            AppendLog($"The previous installation in {previousDir} is replaced by the new one. Its files were left in place; you can delete that folder once everything works.");
+            AppendLog(InstallerLocalization.PreviousInstallReplaced(previousDir));
     }
 
     private string ResolveInstallDir()
@@ -235,46 +242,45 @@ internal sealed class SetupForm : Form
         string logFile = Path.Combine(Path.GetTempPath(), "MonitorAndControlSetup-runtime.log");
         try
         {
-            AppendLog($"{name} is not installed.");
+            AppendLog(InstallerLocalization.RuntimeNotInstalled(name));
             await DownloadAsync(name, url, file);
 
             // Only run the download if Windows confirms it is validly signed by Microsoft.
-            SetStatus($"Verifying {name}...");
+            SetStatus(InstallerLocalization.VerifyingRuntime(name));
             Indeterminate();
             int signature = await Task.Run(() => RunPowerShell(
                 "$s = Get-AuthenticodeSignature -LiteralPath $env:DM_FILE; " +
                 "if ($s.Status -eq 'Valid' -and $s.SignerCertificate.Subject -match 'O=Microsoft Corporation') { exit 0 } else { exit 1 }", file));
-            if (signature != 0) throw new InvalidOperationException("the download is not signed by Microsoft");
+            if (signature != 0) throw new InvalidOperationException(InstallerLocalization.DownloadNotSigned);
 
             // /passive shows Microsoft's own progress window, so a slow install is visible.
-            AppendLog($"Installing {name} (Microsoft's installer shows its own progress window)...");
+            AppendLog(InstallerLocalization.InstallingRuntimePrompt(name));
             var psi = new ProcessStartInfo(file) { UseShellExecute = false };
             psi.ArgumentList.Add("/install");
             psi.ArgumentList.Add("/passive");
             psi.ArgumentList.Add("/norestart");
             psi.ArgumentList.Add("/log");
             psi.ArgumentList.Add(logFile);
-            using Process p = Process.Start(psi) ?? throw new InvalidOperationException("could not start the runtime installer");
+            using Process p = Process.Start(psi) ?? throw new InvalidOperationException(InstallerLocalization.CouldNotStartRuntimeInstaller);
             var clock = Stopwatch.StartNew();
             while (!p.HasExited)
             {
                 if (clock.Elapsed > RuntimeInstallTimeout)
                 {
                     try { p.Kill(entireProcessTree: true); } catch { /* already gone */ }
-                    throw new InvalidOperationException("the runtime installer did not finish in 20 minutes");
+                    throw new InvalidOperationException(InstallerLocalization.RuntimeInstallerTimeout);
                 }
-                SetStatus($"Installing {name}... {clock.Elapsed:m\\:ss} elapsed");
+                SetStatus(InstallerLocalization.InstallingRuntimeProgress(name, $"{clock.Elapsed:m\\:ss}"));
                 await Task.Delay(500);
             }
             // 3010 = installed, restart pending; 1638 = a newer version is already present.
-            if (p.ExitCode is not (0 or 3010 or 1638)) throw new InvalidOperationException($"the runtime installer returned exit code {p.ExitCode}");
-            AppendLog($"{name} installed.");
+            if (p.ExitCode is not (0 or 3010 or 1638)) throw new InvalidOperationException(InstallerLocalization.RuntimeInstallerExitCode(p.ExitCode));
+            AppendLog(InstallerLocalization.RuntimeInstalled(name));
         }
         catch (Exception ex)
         {
             throw new InvalidOperationException(
-                $"Could not install the {name} ({ex.Message}). Install it from https://dotnet.microsoft.com/download/dotnet/8.0 and run setup again. " +
-                $"Runtime installer log: {logFile}");
+                InstallerLocalization.RuntimeInstallFailed(name, ex.Message, logFile));
         }
     }
 
@@ -287,7 +293,7 @@ internal sealed class SetupForm : Form
         await using var source = await response.Content.ReadAsStreamAsync();
         await using var target = File.Create(file);
 
-        if (total <= 0) { Indeterminate(); SetStatus($"Downloading {name}..."); }
+        if (total <= 0) { Indeterminate(); SetStatus(InstallerLocalization.DownloadingRuntime(name)); }
         var buffer = new byte[81920];
         long done = 0;
         int lastPercent = -1, read;
@@ -300,14 +306,14 @@ internal sealed class SetupForm : Form
             if (percent == lastPercent) continue;
             lastPercent = percent;
             Determinate(percent);
-            SetStatus($"Downloading {name}... {done / 1048576.0:0.0} of {total / 1048576.0:0.0} MB");
+            SetStatus(InstallerLocalization.DownloadingRuntimeProgress(name, done / 1048576.0, total / 1048576.0));
         }
     }
 
     private static void Extract(string workDir)
     {
         using Stream payload = typeof(SetupForm).Assembly.GetManifestResourceStream("payload.zip")
-            ?? throw new InvalidOperationException("This setup file contains no payload. Build it with publish.ps1.");
+            ?? throw new InvalidOperationException(InstallerLocalization.NoPayload);
         using var zip = new ZipArchive(payload, ZipArchiveMode.Read);
         zip.ExtractToDirectory(workDir);
     }
@@ -315,7 +321,7 @@ internal sealed class SetupForm : Form
     private async Task<int> RunInstallScriptAsync(string workDir)
     {
         string script = Path.Combine(workDir, "install.ps1");
-        if (!File.Exists(script)) throw new FileNotFoundException("install.ps1 is missing from the setup payload.", script);
+        if (!File.Exists(script)) throw new FileNotFoundException(InstallerLocalization.InstallScriptMissing, script);
 
         Indeterminate();
         var psi = new ProcessStartInfo
@@ -351,7 +357,7 @@ internal sealed class SetupForm : Form
         psi.ArgumentList.Add("-Command");
         psi.ArgumentList.Add(command);
         psi.Environment["DM_FILE"] = file;
-        using Process p = Process.Start(psi) ?? throw new InvalidOperationException("Could not start PowerShell.");
+        using Process p = Process.Start(psi) ?? throw new InvalidOperationException(InstallerLocalization.CouldNotStartPowerShell);
         p.WaitForExit();
         return p.ExitCode;
     }

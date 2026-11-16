@@ -90,7 +90,7 @@ internal static class AppSettingsMigration
 
         if (source == null || !File.Exists(bundledPath))
         {
-            log("No existing appsettings.json: the default settings will be installed.");
+            log(InstallerLocalization.NoExistingAppSettings);
             return;
         }
 
@@ -102,8 +102,7 @@ internal static class AppSettingsMigration
         }
         catch (Exception ex) when (ex is JsonException or FormatException)
         {
-            log($"The existing appsettings.json is not valid JSON ({ex.Message}); it was left untouched" +
-                (imported ? " and not carried over." : "."));
+            log(InstallerLocalization.InvalidExistingJson(ex.Message, imported));
             return;
         }
 
@@ -116,8 +115,7 @@ internal static class AppSettingsMigration
             case AppSettingsAction.Merge:
                 if (!imported) File.Copy(target, target + ".bak-" + stamp);
                 File.WriteAllText(target, Merge(existingJson, File.ReadAllText(bundledPath)));
-                log((imported ? "Carried over your settings from the previous installation" : "Kept your settings") +
-                    $" and added {added.Count} new option(s): {string.Join(", ", added.Select(a => a.Name))}.");
+                log(InstallerLocalization.MergedSettingsLog(imported, added.Count, string.Join(", ", added.Select(a => a.Name))));
                 break;
 
             case AppSettingsAction.Replace:
@@ -125,11 +123,11 @@ internal static class AppSettingsMigration
                 {
                     File.Copy(target, target + ".bak-" + stamp);
                     File.Delete(target);
-                    log($"Replaced appsettings.json with the new default file. Your previous file is saved as appsettings.json.bak-{stamp}.");
+                    log(InstallerLocalization.ReplacedSettingsBackupLog(stamp));
                 }
                 else
                 {
-                    log("The settings of the previous installation were not carried over; the new default file is installed.");
+                    log(InstallerLocalization.ReplacedSettingsImportedLog);
                 }
                 break;
 
@@ -137,14 +135,14 @@ internal static class AppSettingsMigration
                 if (imported)
                 {
                     File.Copy(source, target);
-                    log("Carried over your settings from the previous installation.");
+                    log(InstallerLocalization.KeptSettingsImportedLog);
                 }
                 else
                 {
-                    log("Kept your existing appsettings.json.");
+                    log(InstallerLocalization.KeptSettingsExistingLog);
                 }
                 if (added.Count > 0)
-                    log($"New options not in your file use the built-in defaults: {string.Join(", ", added.Select(a => a.Name))}.");
+                    log(InstallerLocalization.NewOptionsDefaultNotice(string.Join(", ", added.Select(a => a.Name))));
                 break;
         }
     }
