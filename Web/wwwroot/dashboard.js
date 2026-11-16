@@ -163,6 +163,7 @@ document.querySelectorAll('.sidebar nav a').forEach(a => {
     a.classList.add('active');
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.getElementById('view-' + a.dataset.view).classList.add('active');
+    updateAccountBarVisibility();
     if (a.dataset.view === 'today') loadToday();
     if (a.dataset.view === 'history') loadHistory(currentDays);
     if (a.dataset.view === 'limits') loadLimits();
@@ -289,6 +290,7 @@ async function startApp() {
   if (!limitsUsageTimer) limitsUsageTimer = setInterval(refreshVisibleLimitUsage, 2000);
   initViewAccount();
   loadLive();
+  loadLiveTime();
   loadLiveToday();
   connectSSE();
   loadToday();
@@ -306,30 +308,94 @@ function usedSeconds(u) {
   return u.highestAccountSeconds ?? u.totalSeconds;
 }
 
+// The PC is "multi-user" when it has more than one standard (non-administrator) Windows account. Only then does the
+// dashboard show the account bar, per-account overviews and per-account forms; with one account it stays uncluttered.
+const ACCOUNT_VIEWS = ['live', 'today', 'history', 'limits'];
+
+function isMultiUser() {
+  return accountChoices.length > 1;
+}
+
+function accountInitial(name) {
+  return (name || '?').trim().charAt(0).toUpperCase() || '?';
+}
+
+function accountAvatar(name) {
+  const avatar = document.createElement('span');
+  avatar.className = 'account-avatar';
+  avatar.setAttribute('aria-hidden', 'true');
+  avatar.textContent = accountInitial(name);
+  return avatar;
+}
+
+// Called whenever the Windows account list has been (re)loaded.
+function applyMultiUserMode() {
+  document.body.classList.toggle('multi-user', isMultiUser());
+  if (viewSid && !(isMultiUser() && accountChoices.some(a => a.sid === viewSid))) {
+    viewSid = '';
+    localStorage.setItem('viewAccount', '');
+  }
+  renderAccountBar();
+}
+
+function updateAccountBarVisibility() {
+  document.getElementById('account-bar')?.classList.toggle('hidden', !isMultiUser() || !ACCOUNT_VIEWS.includes(getActiveViewName()));
+}
+
+function renderAccountBar() {
+  const box = document.getElementById('account-chips');
+  if (!box) return;
+  box.replaceChildren();
+  const add = (sid, name) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'account-chip';
+    chip.setAttribute('aria-pressed', String(viewSid === sid));
+    if (sid) chip.appendChild(accountAvatar(name));
+    chip.append(name);
+    chip.addEventListener('click', () => setViewAccount(sid));
+    box.appendChild(chip);
+  };
+  add('', t('All accounts'));
+  accountChoices.forEach(a => add(a.sid, a.name));
+  updateAccountBarVisibility();
+  renderScopeNotes();
+}
+
+// One line under each page title saying whose numbers the page shows.
+function renderScopeNotes() {
+  const name = viewSid ? accountLabel(viewSid) : '';
+  const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+  set('today-scope', viewSid
+    ? t('Showing {name} only. Click the account again, or choose All accounts above, to add everyone up.', { name })
+    : t('Showing every account added up. Choose an account above, or click one below, to see only its time.'));
+  set('history-scope', viewSid
+    ? t('Showing {name} only. Websites, shared groups and the hourly timeline still cover every account.', { name })
+    : t('Showing every account added up. Choose an account above to see only its time.'));
+  set('extend-target', viewSid
+    ? t('Extra time goes to {name} only.', { name })
+    : t('Extra time goes to every account. Choose an account above to give it to one account.'));
+  set('limits-scope', viewSid
+    ? t('Usage and extra time below are for {name}. Each shared limit counts that account\'s own time.', { name })
+    : t('Showing the busiest account for each app. Choose an account above to see its own usage and to give it extra time.'));
+}
+
+function setViewAccount(sid) {
+  if (sid === viewSid) return;
+  viewSid = sid;
+  localStorage.setItem('viewAccount', viewSid);
+  renderAccountBar();
+  loadLive();
+  loadLiveToday();
+  loadToday();
+  refreshActiveView();
+  if (typeof loadUserLimits === 'function') loadUserLimits(false);
+  if (typeof loadLiveTime === 'function') loadLiveTime();
+}
+
 async function initViewAccount() {
-  const select = document.getElementById('view-account');
-  if (!select) return;
   await loadAccountChoices();
-  select.replaceChildren();
-  const all = document.createElement('option');
-  all.value = '';
-  all.textContent = t('All accounts');
-  select.appendChild(all);
-  accountChoices.forEach(a => {
-    const o = document.createElement('option');
-    o.value = a.sid;
-    o.textContent = a.name;
-    select.appendChild(o);
-  });
-  if (!accountChoices.some(a => a.sid === viewSid)) viewSid = '';
-  select.value = viewSid;
-  select.addEventListener('change', () => {
-    viewSid = select.value;
-    localStorage.setItem('viewAccount', viewSid);
-    loadLiveToday();
-    loadToday();
-    refreshActiveView();
-  });
+  setInterval(loadAccountChoices, 60000);
 }
 
 function getActiveViewName() {
@@ -366,10 +432,25 @@ async function refreshActiveView() {
 async function loadLive() {
   try {
     const data = await api('/api/live');
-    document.getElementById('live-account').textContent = data.account ? t('Account: {name}', { name: data.account }) : '';
+    // With one account chosen, the hero shows that account's own session (every signed-in account reports its state).
+    const viewed = viewSid && viewSid !== data.accountSid ? (data.sessions || []).find(s => s.sid === viewSid) : null;
+    const otherAccount = !!viewSid && viewSid !== data.accountSid;
+    const shownName = viewSid ? accountLabel(viewSid) : data.account;
+    const badge = document.getElementById('live-account');
+    badge.replaceChildren();
+    if (shownName) {
+      badge.append(accountAvatar(shownName), shownName);
+      badge.title = t('Account: {name}', { name: shownName });
+    }
     renderLiveSessions(data);
-    document.getElementById('live-app').textContent = data.currentApp || '(idle)';
-    document.getElementById('live-proc').textContent = data.currentProcess || '';
+    const stateText = { locked: t('Locked'), idle: t('Idle') };
+    document.getElementById('live-app').textContent = otherAccount
+      ? (!viewed ? t('Not signed in') : stateText[viewed.state] || viewed.app || '(idle)')
+      : data.currentApp || '(idle)';
+    document.getElementById('live-proc').textContent = otherAccount ? (viewed?.process || '') : data.currentProcess || '';
+    const owner = document.getElementById('tracking-owner');
+    owner.textContent = otherAccount ? t('These details are for {name}, the account that runs this dashboard.', { name: data.account }) : '';
+    owner.classList.toggle('hidden', !otherAccount);
     const status = document.getElementById('enforcement-status');
     if (data.enforcementPaused) {
       const until = data.pausedUntil ? new Date(data.pausedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
@@ -386,7 +467,8 @@ async function loadLive() {
 // What the other signed-in Windows accounts are doing (the hero above shows the account this dashboard runs in)
 function renderLiveSessions(data) {
   const box = document.getElementById('live-sessions');
-  const others = (data.sessions || []).filter(s => s.sid !== data.accountSid);
+  const shownSid = viewSid || data.accountSid;
+  const others = (data.sessions || []).filter(s => s.sid !== shownSid);
   box.replaceChildren();
   if (others.length === 0) return;
   const states = { locked: t('Locked'), idle: t('Idle') };
@@ -394,9 +476,16 @@ function renderLiveSessions(data) {
   head.textContent = t('Also signed in:');
   box.appendChild(head);
   others.forEach(s => {
-    const chip = document.createElement('span');
+    // A chip for an account the dashboard knows opens that account's view.
+    const known = accountChoices.some(a => a.sid === s.sid);
+    const chip = document.createElement(known ? 'button' : 'span');
     chip.className = 'live-session';
     chip.textContent = `${s.account}: ${states[s.state] || s.app || t('No tracked app')}`;
+    if (known) {
+      chip.type = 'button';
+      chip.title = t('Show this account');
+      chip.addEventListener('click', () => setViewAccount(s.sid));
+    }
     box.appendChild(chip);
   });
 }
@@ -547,11 +636,42 @@ function syncQuickExtendApps(limits, usage) {
 }
 
 // Today
+// Who used how much today: one card per Windows account (multi-user PCs only). Clicking a card shows just that account.
+async function loadTodayAccounts() {
+  const box = document.getElementById('today-accounts');
+  if (!box || !isMultiUser()) return;
+  try {
+    const summaries = await api('/api/usage/accounts/today');
+    box.replaceChildren();
+    accountChoices.forEach(account => {
+      const s = summaries.find(x => x.userSid === account.sid);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'account-card';
+      card.setAttribute('aria-pressed', String(viewSid === account.sid));
+      card.title = t('Show only this account');
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.append(accountAvatar(account.name), account.name);
+      const total = document.createElement('div');
+      total.className = 'total';
+      total.textContent = formatDuration(s?.totalSeconds || 0);
+      const sub = document.createElement('div');
+      sub.className = 'sub';
+      sub.textContent = s ? t('Most used: {app} ({time})', { app: s.topApp, time: formatDuration(s.topAppSeconds) }) : t('No activity yet today');
+      card.append(name, total, sub);
+      card.addEventListener('click', () => setViewAccount(viewSid === account.sid ? '' : account.sid));
+      box.appendChild(card);
+    });
+  } catch (e) { log(e); }
+}
+
 async function loadToday() {
   try {
     const [usage, groupUsage] = await Promise.all([
       api('/api/usage/today' + viewQuery()),
-      api('/api/usage/groups/today')
+      api('/api/usage/groups/today'),
+      loadTodayAccounts()
     ]);
     renderTodayChart(usage);
     const breakdown = document.getElementById('today-breakdown').checked;
@@ -658,9 +778,10 @@ document.getElementById('history-clear').addEventListener('click', async () => {
 
 async function loadHistory(days) {
   try {
-    const url = historyRange.mode === 'custom'
-      ? `/api/usage/history?from=${encodeURIComponent(historyRange.from)}&to=${encodeURIComponent(historyRange.to)}`
-      : `/api/usage/history?days=${days}`;
+    const range = historyRange.mode === 'custom'
+      ? `from=${encodeURIComponent(historyRange.from)}&to=${encodeURIComponent(historyRange.to)}`
+      : `days=${days}`;
+    const url = `/api/usage/history?${range}` + (viewSid ? `&sid=${encodeURIComponent(viewSid)}` : '');
     const groupUrl = historyRange.mode === 'custom'
       ? `/api/usage/groups/history?from=${encodeURIComponent(historyRange.from)}&to=${encodeURIComponent(historyRange.to)}`
       : `/api/usage/groups/history?days=${days}`;
@@ -672,7 +793,7 @@ async function loadHistory(days) {
     renderHistoryDashboard();
     loadWeeklyReport();
     loadTimeline();
-    loadHistorySites(url.replace('/api/usage/history', '/api/usage/sites/history'));
+    loadHistorySites(`/api/usage/sites/history?${range}`);
   } catch (e) { log(e); }
 }
 
@@ -734,7 +855,7 @@ async function loadWeeklyReport() {
   const panel = document.getElementById('weekly-report');
   if (!panel) return;
   try {
-    const data = await api('/api/report/weekly');
+    const data = await api('/api/report/weekly' + viewQuery());
     const change = data.changePercent == null
       ? t('no usage to compare with')
       : data.changePercent === 0 ? t('same as before') : (data.changePercent > 0 ? '+' : '') + data.changePercent + '%';
@@ -960,7 +1081,11 @@ let accountChoices = [];
 async function loadAccountChoices() {
   try {
     const st = await api('/api/screen-time');
-    accountChoices = (st.accounts || []).filter(a => a.eligible);
+    const accounts = (st.accounts || []).filter(a => a.eligible);
+    // Only redraw the account bar when the list changed.
+    const changed = accounts.map(a => a.sid + a.name).join('|') !== accountChoices.map(a => a.sid + a.name).join('|');
+    accountChoices = accounts;
+    if (changed || !document.getElementById('account-chips').childElementCount) applyMultiUserMode();
   } catch { /* keep the last list; the service may be briefly unavailable */ }
   return accountChoices;
 }

@@ -32,6 +32,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Older databases are upgraded for per-account groups", TestGroupMembersUpgrade),
     ("App limits can belong to one Windows account", TestPerAccountLimits),
     ("Shared limits and extra time are counted per Windows account", TestSharedLimitsPerAccount),
+    ("History can be filtered to one Windows account", TestUsageRangePerAccount),
     ("Homework mode times, plan and sealed apps", TestHomeworkMode),
     ("New programs are found once and described briefly", TestNewApps),
     ("Alerts link to the right dashboard page", TestPushLinks),
@@ -1712,6 +1713,31 @@ static async Task TestAccountUsageCase()
     }
 }
 
+static async Task TestUsageRangePerAccount()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-RangeAccount-Test-" + Guid.NewGuid().ToString("N"));
+    const string anna = "S-1-5-21-1-2-3-1001";
+    const string ben = "S-1-5-21-1-2-3-1002";
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        var none = Array.Empty<(int GroupId, int Seconds)>();
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 600, 0) }, none, anna);
+        await db.RecordUsageBatchAsync(new[] { ("Roblox", "roblox.exe", 120, 0) }, none, ben);
+        var today = MonitorAndControl.ScreenTime.ParentClock.Today;
+        var all = await db.GetUsageRangeAsync(today, today);
+        var annaOnly = await db.GetUsageRangeAsync(today, today, anna);
+        var benOnly = await db.GetUsageRangeAsync(today, today, ben);
+        AssertTrue(all.Count == 2, "History without an account lists everyone's apps.");
+        AssertTrue(annaOnly.Count == 1 && annaOnly[0].AppName == "Minecraft" && annaOnly[0].TotalSeconds == 600, "History for one account lists only that account's apps.");
+        AssertTrue(benOnly.Count == 1 && benOnly[0].AppName == "Roblox", "Another account sees its own apps only.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
 static async Task TestSharedLimitsPerAccount()
 {
     var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-SharedPerAccount-Test-" + Guid.NewGuid().ToString("N"));

@@ -257,11 +257,17 @@ public class DashboardServer
             return Results.Json(await usageTracker.GetTodayUsageIncludingPendingAsync(sid), JsonOpts);
         });
 
+        // One line per Windows account: how much app time it has used today and its top app (for the Today page).
+        app.MapGet("/api/usage/accounts/today", async () =>
+            Results.Json(await usageTracker.GetTodayAccountSummaryAsync(), JsonOpts));
+
         app.MapGet("/api/usage/groups/today", async () =>
             Results.Json(await usageTracker.GetTodayGroupUsageIncludingPendingAsync(), JsonOpts));
 
-        app.MapGet("/api/usage/history", async (int days = 7, string? from = null, string? to = null) =>
+        app.MapGet("/api/usage/history", async (int days = 7, string? from = null, string? to = null, string? sid = null) =>
         {
+            if (!string.IsNullOrEmpty(sid) && !AccountIdentity.IsValidSid(sid))
+                return Results.BadRequest(new { error = "Invalid account." });
             DateTime startDate;
             DateTime endDate;
 
@@ -284,7 +290,7 @@ public class DashboardServer
             if ((endDate - startDate).TotalDays > 366)
                 return Results.BadRequest(new { error = "History range is limited to 366 days." });
 
-            return Results.Json(await db.GetUsageRangeAsync(startDate, endDate), JsonOpts);
+            return Results.Json(await db.GetUsageRangeAsync(startDate, endDate, sid), JsonOpts);
         });
 
         // Website limits: blocked outright (0 minutes) or a daily allowance. The SYSTEM service turns them into browser policy.
@@ -514,13 +520,15 @@ public class DashboardServer
         });
 
         // This week compared with last week, per day and per app (also used by the summary email).
-        app.MapGet("/api/report/weekly", async (string? end = null) =>
+        app.MapGet("/api/report/weekly", async (string? end = null, string? sid = null) =>
         {
             var endDate = ParentClock.Today;
             if (!string.IsNullOrWhiteSpace(end) && !DateTime.TryParse(end, out endDate))
                 return Results.BadRequest(new { error = "Invalid date." });
+            if (!string.IsNullOrEmpty(sid) && !AccountIdentity.IsValidSid(sid))
+                return Results.BadRequest(new { error = "Invalid account." });
             endDate = endDate.Date;
-            return Results.Json(WeeklyReport.Build(await db.GetUsageRangeAsync(endDate.AddDays(-13), endDate), endDate), JsonOpts);
+            return Results.Json(WeeklyReport.Build(await db.GetUsageRangeAsync(endDate.AddDays(-13), endDate, sid), endDate), JsonOpts);
         });
 
         app.MapGet("/api/usage/groups/history", async (int days = 7, string? from = null, string? to = null) =>

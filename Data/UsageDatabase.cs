@@ -903,19 +903,30 @@ public class UsageDatabase : IDisposable
         finally { _lock.Release(); }
     }
 
-    public async Task<List<AppUsageRecord>> GetUsageRangeAsync(DateTime from, DateTime to)
+    /// <summary>Usage per app and day: everyone's added up, or (with <paramref name="userSid"/>) one Windows account's own time.</summary>
+    public async Task<List<AppUsageRecord>> GetUsageRangeAsync(DateTime from, DateTime to, string? userSid = null)
     {
         await _lock.WaitAsync();
         try
         {
             var list = new List<AppUsageRecord>();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = """
+            cmd.CommandText = string.IsNullOrEmpty(userSid)
+                ? """
                 SELECT AppName, ProcessName, Date, TotalSeconds, ForegroundSeconds, BackgroundSeconds
                 FROM UsageRecords
                 WHERE Date >= @from AND Date <= @to
                 ORDER BY TotalSeconds DESC;
+                """
+                : """
+                SELECT a.AppName,
+                       COALESCE((SELECT r.ProcessName FROM UsageRecords r WHERE r.AppName = a.AppName AND r.Date = a.Date), ''),
+                       a.Date, a.Seconds, a.ForegroundSeconds, a.BackgroundSeconds
+                FROM UserAppUsage a
+                WHERE a.UserSid = @sid AND a.Date >= @from AND a.Date <= @to
+                ORDER BY a.Seconds DESC;
                 """;
+            if (!string.IsNullOrEmpty(userSid)) cmd.Parameters.AddWithValue("@sid", userSid);
             cmd.Parameters.AddWithValue("@from", from.ToString("yyyy-MM-dd"));
             cmd.Parameters.AddWithValue("@to", to.ToString("yyyy-MM-dd"));
             using var r = await cmd.ExecuteReaderAsync();

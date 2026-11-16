@@ -144,6 +144,48 @@ public class UsageTracker : IDisposable
         return usage.OrderByDescending(record => record.TotalSeconds).ToList();
     }
 
+    /// <summary>Today's app time per Windows account (accounts with no recorded time are left out), busiest first.</summary>
+    public async Task<List<AccountUsageSummary>> GetTodayAccountSummaryAsync()
+    {
+        var perAccountApp = new Dictionary<(string Sid, string App), long>();
+        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var u in await _db.GetAllUserAppUsageTodayAsync())
+        {
+            if (string.IsNullOrEmpty(u.UserSid)) continue;
+            var key = (u.UserSid, u.AppName.ToLowerInvariant());
+            perAccountApp[key] = perAccountApp.GetValueOrDefault(key) + u.Total;
+            names[u.AppName] = u.AppName;
+        }
+        // Time not saved yet belongs to the account this DeviceMon runs for.
+        if (!string.IsNullOrEmpty(AccountIdentity.CurrentSid))
+            lock (_usageSync)
+                foreach (var kvp in _pendingUsage)
+                {
+                    var seconds = (int)(kvp.Value.ForegroundMilliseconds / 1000) + (int)(kvp.Value.BackgroundMilliseconds / 1000);
+                    if (seconds <= 0) continue;
+                    var key = (AccountIdentity.CurrentSid, kvp.Key.ToLowerInvariant());
+                    perAccountApp[key] = perAccountApp.GetValueOrDefault(key) + seconds;
+                    names[kvp.Key] = kvp.Key;
+                }
+
+        return perAccountApp
+            .GroupBy(kv => kv.Key.Sid)
+            .Select(g =>
+            {
+                var top = g.OrderByDescending(kv => kv.Value).First();
+                return new AccountUsageSummary
+                {
+                    UserSid = g.Key,
+                    TotalSeconds = g.Sum(kv => kv.Value),
+                    AppCount = g.Count(),
+                    TopApp = names.GetValueOrDefault(top.Key.App) ?? top.Key.App,
+                    TopAppSeconds = top.Value
+                };
+            })
+            .OrderByDescending(s => s.TotalSeconds)
+            .ToList();
+    }
+
     public async Task<List<AppLimitGroup>> GetLimitGroupsIncludingPendingAsync()
     {
         var groups = await _db.GetLimitGroupsAsync();
