@@ -231,12 +231,16 @@ internal sealed class ScreenTimeService : IDisposable
                 {
                     PersistUsage(tick, force: true);
                     _log($"Screen-time: break for {policy.UserSid} until {usage.BreakUntilUtc:O}.");
+                    var lang = ScreenTimeFiles.ReadLanguage();
                     foreach (var session in userSessions.Where(s => s.Unlocked))
-                        ScreenTimeWindows.Warn(session.SessionId, $"Time for a {policy.BreakMinutes}-minute break. The PC locks now and can be used again at {ParentClock.ToRuleTime(usage.BreakUntilUtc!.Value):HH:mm}.");
+                        ScreenTimeWindows.Warn(session.SessionId, ScreenTimeLocalization.BreakStart(policy.BreakMinutes, $"{ParentClock.ToRuleTime(usage.BreakUntilUtc!.Value):HH:mm}", lang));
                 }
                 else if (warnMinutes > 0)
+                {
+                    var lang = ScreenTimeFiles.ReadLanguage();
                     foreach (var session in userSessions.Where(s => s.Unlocked))
-                        ScreenTimeWindows.Warn(session.SessionId, $"A {policy.BreakMinutes}-minute break starts in about {warnMinutes} minute(s). Save your work.");
+                        ScreenTimeWindows.Warn(session.SessionId, ScreenTimeLocalization.BreakUpcoming(policy.BreakMinutes, warnMinutes, lang));
+                }
             }
             // A parent's "lock now" or a break: keep the account at the sign-in screen (programs keep running)
             // until the time is up. Signing back in just gets it locked again a few seconds later.
@@ -282,16 +286,18 @@ internal sealed class ScreenTimeService : IDisposable
                     {
                         var threshold = new[] { 1, 5, 10 }.FirstOrDefault(m => remaining <= m * 60);
                         var bedThreshold = untilBed is { } left ? new[] { 1, 5, 10 }.FirstOrDefault(m => left <= m) : 0;
-                        if (bedThreshold > 0 && !bedSent.Contains(bedThreshold) && (threshold == 0 || untilBed * 60 < remaining))
+                        if (untilBed is { } minsLeft && bedThreshold > 0 && !bedSent.Contains(bedThreshold) && (threshold == 0 || minsLeft * 60 < remaining))
                         {
                             bedSent.Add(bedThreshold);
-                            ScreenTimeWindows.Warn(session.SessionId,
-                                $"Bedtime in about {untilBed} minute(s). Save your work - you will be signed out then.");
+                            var lang = ScreenTimeFiles.ReadLanguage();
+                            ScreenTimeWindows.Warn(session.SessionId, ScreenTimeLocalization.BedtimeWarning(minsLeft, lang));
                         }
                         else if (threshold > 0 && !sent.Contains(threshold))
                         {
                             sent.Add(threshold);
-                            var text = $"About {Math.Ceiling(remaining / 60.0)} minute(s) of PC time left today. Save your work - you will be signed out when time runs out.";
+                            var lang = ScreenTimeFiles.ReadLanguage();
+                            var remainingMins = (int)Math.Ceiling(remaining / 60.0);
+                            var text = ScreenTimeLocalization.QuotaWarning(remainingMins, lang);
                             // At the 5 minute warning the child may ask for more time. The question is
                             // a Yes/No box, so it runs off the timer thread while it waits for an answer.
                             if (threshold == 5) AskForMoreTime(session.SessionId, policy, text);
@@ -388,7 +394,11 @@ internal sealed class ScreenTimeService : IDisposable
                 ProgramApprovals.Decide(programs, key, allow: false);
                 ProgramApprovals.Write(programs);
                 _log($"The parent kept the program {key} blocked.");
-                if (wasWaiting) TellAccount(entry.UserSid, $"Your parent did not allow {ProgramLabel(entry)}.");
+                if (wasWaiting)
+                {
+                    var lang = ScreenTimeFiles.ReadLanguage();
+                    TellAccount(entry.UserSid, ScreenTimeLocalization.ProgramBlocked(ProgramLabel(entry), lang));
+                }
                 return ScreenTimeReply.Success(new { blocked = true, wasWaiting });
             }
             default: // program-request
@@ -462,11 +472,12 @@ internal sealed class ScreenTimeService : IDisposable
         {
             try
             {
-                if (!ScreenTimeWindows.Ask(sessionId, text + " Ask your parent for more time?")) return;
+                var lang = ScreenTimeFiles.ReadLanguage();
+                if (!ScreenTimeWindows.Ask(sessionId, ScreenTimeLocalization.AskMoreTime(text, lang))) return;
                 var added = TimeRequestStore.Add(sid, name, DateTimeOffset.UtcNow);
                 _log(added ? $"Screen-time: {name} asked for more time." : $"Screen-time: {name} asked again; a request is already waiting.");
-                ScreenTimeWindows.Warn(sessionId, added ? "Your parent has been asked. You will be told if they add time."
-                                                       : "Your parent has already been asked. Please wait for their answer.");
+                ScreenTimeWindows.Warn(sessionId, added ? ScreenTimeLocalization.AskMoreTimeSent(lang)
+                                                       : ScreenTimeLocalization.AskMoreTimeAlreadySent(lang));
             }
             catch (Exception ex) { _log("Screen-time: could not record the request: " + ex.Message); }
             finally { lock (_asking) _asking.Remove(sessionId); }
@@ -550,8 +561,9 @@ internal sealed class ScreenTimeService : IDisposable
                     _log($"Homework mode started until {state.UntilUtc:O}.");
                     try
                     {
+                        var lang = ScreenTimeFiles.ReadLanguage();
                         foreach (var session in ScreenTimeWindows.Sessions().Where(s => s.Unlocked))
-                            ScreenTimeWindows.Warn(session.SessionId, $"Homework mode is on until {ParentClock.ToRuleTime(state.UntilUtc!.Value):HH:mm}. Games and entertainment are blocked until then.");
+                            ScreenTimeWindows.Warn(session.SessionId, ScreenTimeLocalization.HomeworkActive($"{ParentClock.ToRuleTime(state.UntilUtc!.Value):HH:mm}", lang));
                     }
                     catch { /* the mode is on even if the message cannot be shown */ }
                     return ScreenTimeReply.Success(new { untilUtc = state.UntilUtc });
@@ -618,8 +630,9 @@ internal sealed class ScreenTimeService : IDisposable
                         _log("Screen-time: a parent declined a request for more time.");
                         try
                         {
+                            var lang = ScreenTimeFiles.ReadLanguage();
                             foreach (var session in ScreenTimeWindows.Sessions().Where(s => s.Sid == request.UserSid && s.Unlocked))
-                                ScreenTimeWindows.Warn(session.SessionId, "Your parent did not add more time this time.");
+                                ScreenTimeWindows.Warn(session.SessionId, ScreenTimeLocalization.AskMoreTimeDismissed(lang));
                         }
                         catch { /* the answer is recorded even if the message cannot be shown */ }
                     }
@@ -667,7 +680,8 @@ internal sealed class ScreenTimeService : IDisposable
                         var entry = ProgramApprovals.Decide(programs, ProgramApprovals.Key(request.ProgramName)!, allow: true)!;
                         ProgramApprovals.Write(programs);
                         _log($"The parent allowed the program {entry.Name}.");
-                        TellAccount(entry.UserSid, $"Your parent allowed {ProgramLabel(entry)}. You can open it now.");
+                        var lang = ScreenTimeFiles.ReadLanguage();
+                        TellAccount(entry.UserSid, ScreenTimeLocalization.ProgramAllowed(ProgramLabel(entry), lang));
                     }
                     else if (request.Operation == "homework-stop")
                     {

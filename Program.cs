@@ -498,6 +498,7 @@ internal static class Program
     {
         _tracker = new WindowTracker();
         _tracker.LoadKnownApps(config.KnownApps);
+        ScreenTime.ScreenTimeFiles.WriteLanguage(_db!.GetSettingAsync("UiLanguage", "en").GetAwaiter().GetResult());
         // Load dynamic app mappings from database
         var mappings = _db!.GetAppMappingsAsync().GetAwaiter().GetResult();
         foreach (var m in mappings)

@@ -178,6 +178,39 @@ public static class ScreenTimeFiles
     public static string PoliciesPath => Path.Combine(DirectoryPath, "policies.json");
     public static string UsagePath => Path.Combine(DirectoryPath, "usage.json");
     public static string StatusPath => Path.Combine(DirectoryPath, "status.json");
+    public static string LanguagePath => Path.Combine(DirectoryPath, "language.json");
+
+    public static string NormalizeLanguage(string? language)
+    {
+        var value = (language ?? "en").Trim().ToLowerInvariant();
+        return value is "de" or "es" or "ru" or "fr" ? value : "en";
+    }
+
+    public static string ReadLanguage()
+    {
+        try
+        {
+            if (File.Exists(LanguagePath))
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(LanguagePath));
+                if (doc.RootElement.TryGetProperty("language", out var l) && l.GetString() is { } lang && lang.Length > 0)
+                    return NormalizeLanguage(lang);
+            }
+        }
+        catch { }
+        return "en";
+    }
+
+    public static void WriteLanguage(string language)
+    {
+        try
+        {
+            Directory.CreateDirectory(DirectoryPath);
+            WriteAtomic(LanguagePath, new { language = NormalizeLanguage(language) });
+        }
+        catch { }
+    }
+
     public static List<ScreenTimePolicy> ReadPolicies()
     {
         if (!File.Exists(PoliciesPath)) return new();

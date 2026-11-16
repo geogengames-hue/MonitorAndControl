@@ -15,4 +15,27 @@
   <data name="ClosingInSeconds" xml:space="preserve"><value>{app} wird in {seconds} Sekunden geschlossen...</value></data>
   <data name="WasClosed" xml:space="preserve"><value>{app} wurde geschlossen.</value></data>
   <data name="ClosingNow" xml:space="preserve"><value>Schließen...</value></data>
+  <data name="TimeLeft" xml:space="preserve"><value>Verbleibende Zeit</value></data>
+  <data name="Loading" xml:space="preserve"><value>Laden...</value></data>
+  <data name="PcLockedUntil" xml:space="preserve"><value>Dieser PC ist bis {0} gesperrt.</value></data>
+  <data name="PcTimeLeftToday" xml:space="preserve"><value>Verbleibende PC-Zeit heute: {0}.</value></data>
+  <data name="PcTimeLeftTooltip" xml:space="preserve"><value>Verbleibende PC-Zeit: {0}</value></data>
+  <data name="ItIsBedtime" xml:space="preserve"><value>Es ist Schlafenszeit.</value></data>
+  <data name="BedtimeIn" xml:space="preserve"><value>Schlafenszeit in {0}.</value></data>
+  <data name="BedtimeInTooltip" xml:space="preserve"><value>Schlafenszeit in {0}</value></data>
+  <data name="HomeworkUntil" xml:space="preserve"><value>Hausaufgabenmodus bis {0}.</value></data>
+  <data name="HomeworkUntilTooltip" xml:space="preserve"><value>Hausaufgaben bis {0}</value></data>
+  <data name="AppNoTimeLeftToday" xml:space="preserve"><value>{0}: heute keine Zeit mehr übrig (genutzt {1}).</value></data>
+  <data name="AppTimeLeftOfMax" xml:space="preserve"><value>{0}: noch {1} von {2} übrig.</value></data>
+  <data name="AppTimeLeftTooltip" xml:space="preserve"><value>{0}: noch {1}</value></data>
+  <data name="NoTimeLimitsSet" xml:space="preserve"><value>Derzeit sind für dieses Konto keine Zeitlimits festgelegt.</value></data>
+  <data name="NoTimeLimitsRightNow" xml:space="preserve"><value>Derzeit keine Zeitlimits</value></data>
+  <data name="LessThanAMinute" xml:space="preserve"><value>weniger als eine Minute</value></data>
+  <data name="DurationHoursMinutes" xml:space="preserve"><value>{0}h {1}m</value></data>
+  <data name="DurationMinutes" xml:space="preserve"><value>{0}m</value></data>
+  <data name="DurationMinutesFull" xml:space="preserve"><value>{0} Minuten</value></data>
+  <data name="PushLimitBreach" xml:space="preserve"><value>Zeitlimit für {0} erreicht. Wird in {1}s geschlossen.</value></data>
+  <data name="PushAppClosed" xml:space="preserve"><value>{0} wurde wegen Zeitüberschreitung geschlossen.</value></data>
+  <data name="PushScheduleClosed" xml:space="preserve"><value>{0} wurde durch Zeitplanregel geschlossen.</value></data>
+  <data name="PushTestMessage" xml:space="preserve"><value>Push-Benachrichtigungen funktionieren.</value></data>
 </root>

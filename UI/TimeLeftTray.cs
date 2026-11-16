@@ -13,13 +13,14 @@ public sealed class TimeLeftTray : IDisposable
     private readonly NotifyIcon _icon;
     private readonly System.Windows.Forms.Timer _timer;
     private TimeLeftView? _last;
+    private string _language = "en";
     private bool _busy;
 
     public TimeLeftTray(UsageDatabase db)
     {
         _db = db;
-        _icon = new NotifyIcon { Icon = SystemIcons.Information, Text = "Time left", Visible = false };
-        _icon.MouseClick += (_, _) => ShowDetails();
+        _icon = new NotifyIcon { Icon = SystemIcons.Information, Text = Localization.Text("TimeLeft", "en"), Visible = false };
+        _icon.MouseClick += async (_, _) => await ShowDetailsAsync();
         _timer = new System.Windows.Forms.Timer { Interval = 30000 };
         _timer.Tick += async (_, _) => await RefreshAsync();
         _timer.Start();
@@ -43,7 +44,8 @@ public sealed class TimeLeftTray : IDisposable
                 _icon.Visible = false;
                 return;
             }
-            _last = await TimeLeftReport.CollectAsync(_db);
+            _language = await _db.GetSettingAsync("UiLanguage", "en");
+            _last = await TimeLeftReport.CollectAsync(_db, _language);
             _icon.Text = _last.Tooltip;
             _icon.Visible = true;
         }
@@ -51,11 +53,14 @@ public sealed class TimeLeftTray : IDisposable
         finally { _busy = false; }
     }
 
-    private void ShowDetails()
+    private async Task ShowDetailsAsync()
     {
-        var text = string.Join("\n", (_last?.Lines ?? new List<string> { "Loading..." }));
+        try { _language = await _db.GetSettingAsync("UiLanguage", "en"); } catch { }
+        var loading = Localization.Text("Loading", _language);
+        var title = Localization.Text("TimeLeft", _language);
+        var text = string.Join("\n", (_last?.Lines ?? new List<string> { loading }));
         if (text.Length > 250) text = text[..247] + "...";
-        _icon.ShowBalloonTip(10000, "Time left", text, ToolTipIcon.None);
+        _icon.ShowBalloonTip(10000, title, text, ToolTipIcon.None);
     }
 
     public void Dispose()
