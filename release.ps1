@@ -18,17 +18,24 @@
 
     Nothing is uploaded unless you pass -Upload, and -Upload asks for confirmation.
 
+    Code signing uses YOUR certificate, supplied through CODE_SIGN_CERT_BASE64 + CODE_SIGN_PASSWORD (or
+    CODE_SIGN_CERT_PATH). There is no built-in certificate: without one the build is UNSIGNED and a warning
+    is shown. Pass -RequireSigning to fail instead (before building) when no certificate is configured, and
+    to fail if any executable or the installer ends up without a signature.
+
 .EXAMPLE
     .\release.ps1                 # build + verify only
     .\release.ps1 -Upload         # build, verify, then publish the GitHub release
     .\release.ps1 -Upload -WhatIf # show what would be uploaded, change nothing
+    .\release.ps1 -Upload -RequireSigning # fail unless the binaries are signed with your own certificate
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
     [string]$Repo = 'geogengames-hue/MonitorAndControl',
     [string]$Title = '',
     [switch]$SkipTests,
-    [switch]$Upload
+    [switch]$Upload,
+    [switch]$RequireSigning
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,6 +43,11 @@ Set-Location -LiteralPath $PSScriptRoot
 
 function Step($text) { Write-Host ""; Write-Host "== $text" -ForegroundColor Cyan }
 function Fail($text) { throw "Release stopped: $text" }
+
+# --- 0. Signing certificate ----------------------------------------------------
+if ($RequireSigning -and -not ($env:CODE_SIGN_CERT_BASE64 -or $env:CODE_SIGN_CERT_PATH)) {
+    Fail '-RequireSigning was given but no certificate is configured. Set CODE_SIGN_CERT_BASE64 and CODE_SIGN_PASSWORD (or CODE_SIGN_CERT_PATH).'
+}
 
 # --- 1. Version -------------------------------------------------------------
 Step 'Reading version'
@@ -96,7 +108,8 @@ $publishDir = Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\win-x64\publis
 Get-Process -Name DeviceMon, PopupHost, UpdateAgent, GameHost -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -and $_.Path.StartsWith($publishDir, [StringComparison]::OrdinalIgnoreCase) } |
     Stop-Process -Force -ErrorAction SilentlyContinue
-$publishOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'publish.ps1') 2>&1
+$publishArgs = if ($RequireSigning) { @('-RequireSigning') } else { @() }
+$publishOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'publish.ps1') @publishArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     $publishOutput | Select-Object -Last 25 | ForEach-Object { Write-Host $_ }
     Fail 'publish.ps1 failed.'
@@ -111,11 +124,25 @@ foreach ($f in $required) {
 foreach ($exe in 'DeviceMon.exe', 'GameHost.exe', 'PopupHost.exe', 'UpdateAgent.exe') {
     $fileVersion = (Get-Item -LiteralPath (Join-Path $publishDir $exe)).VersionInfo.FileVersion
     if ($fileVersion -ne "$version.0") { Fail "$exe is version $fileVersion, expected $version.0 (stale build?)" }
+    $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $publishDir $exe)
+    if ($sig.SignerCertificate) {
+        Write-Host "  $exe signature: $($sig.SignerCertificate.Subject) [$($sig.Status)]" -ForegroundColor Gray
+    } else {
+        if ($RequireSigning) { Fail "$exe is not signed (-RequireSigning)" }
+        Write-Warning "  $exe is not signed"
+    }
 }
 $setupExe = Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\win-x64\installer\MonitorAndControlSetup.exe'
 if (-not (Test-Path -LiteralPath $setupExe)) { Fail 'published output is missing the single-file installer (MonitorAndControlSetup.exe)' }
 $setupVersion = (Get-Item -LiteralPath $setupExe).VersionInfo.FileVersion
 if ($setupVersion -ne "$version.0") { Fail "MonitorAndControlSetup.exe is version $setupVersion, expected $version.0 (update Installer\Installer.csproj)" }
+$setupSig = Get-AuthenticodeSignature -LiteralPath $setupExe
+if ($setupSig.SignerCertificate) {
+    Write-Host "  MonitorAndControlSetup.exe signature: $($setupSig.SignerCertificate.Subject) [$($setupSig.Status)]" -ForegroundColor Gray
+} else {
+    if ($RequireSigning) { Fail 'MonitorAndControlSetup.exe is not signed (-RequireSigning)' }
+    Write-Warning "  MonitorAndControlSetup.exe is not signed"
+}
 try { $cfg = Get-Content -LiteralPath (Join-Path $publishDir 'appsettings.json') -Raw | ConvertFrom-Json }
 catch { Fail "published appsettings.json is not valid JSON: $($_.Exception.Message)" }
 Write-Host "All four executables are $version.0; appsettings.json valid (remote dashboard: $($cfg.EnableRemoteDashboard), bind $($cfg.DashboardBindAddress))."

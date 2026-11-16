@@ -95,7 +95,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Limit enforcer rehydrates exceeded groups", TestLimitEnforcerRehydratesExceededGroups),
     ("Limit enforcer blocks inactive group members without warnings", TestLimitEnforcerBlocksInactiveGroup),
     ("Limit enforcer starts one countdown per breached group", TestLimitEnforcerStartsSingleGroupCountdown),
-    ("Limit enforcer can pause and resume enforcement", TestLimitEnforcerPauseResume)
+    ("Limit enforcer can pause and resume enforcement", TestLimitEnforcerPauseResume),
+    ("No signing key is committed to the repository", CodeSigningTests.NoSigningKeyIsCommittedToTheRepository),
+    ("Sign script has no fallback certificate or command-line password", CodeSigningTests.SignScriptHasNoFallbackCertificateOrCommandLinePassword),
+    ("Code signing certificate loads from Base64 string", CodeSigningTests.Base64CertEnvironmentVariableFormat)
 };
 
 var failures = new List<string>();

@@ -27,26 +27,22 @@ jobs:
     - name: Run tests
       run: dotnet run --project .\Tests\MonitorAndControl.Tests.csproj -c Release
 
-    - name: Publish Monitor
-      run: dotnet publish .\MonitorAndControl.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
-
-    - name: Publish Watchdog
-      run: dotnet publish .\Watchdog\SystemHelperWatchdog.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
-
-    - name: Publish PopupHost
-      run: dotnet publish .\PopupHost\PopupHost.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
-
-    - name: Publish UpdateAgent
-      run: dotnet publish .\UpdateAgent\UpdateAgent.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
-
-    - name: Copy install scripts
+    - name: Publish and sign all components & installer
       shell: pwsh
+      env:
+        CODE_SIGN_CERT_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
+        CODE_SIGN_PASSWORD: ${{ secrets.CODE_SIGN_PASSWORD }}
       run: |
-        Copy-Item .\install-watchdog.ps1 publish\
-        Copy-Item .\uninstall-watchdog.ps1 publish\
+        .\publish.ps1
 
-    - name: Upload artifacts
+    - name: Upload artifacts (publish folder)
       uses: actions/upload-artifact@v4
       with:
         name: MonitorAndControl
-        path: publish/
+        path: bin/Release/net8.0-windows/win-x64/publish/
+
+    - name: Upload single-file installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: MonitorAndControlSetup
+        path: bin/Release/net8.0-windows/win-x64/installer/MonitorAndControlSetup.exe

@@ -24,3 +24,7 @@ Thumbs.db
 
 # Release build output (release.ps1)
 dist/
+
+# Code-signing keys must never be committed (see certs/README.md)
+*.pfx
+*.p12

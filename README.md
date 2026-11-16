@@ -199,6 +199,17 @@ Finally it zips that folder and embeds it in `Installer\Installer.csproj`, produ
 
 It checks that all projects (including the installer) share one version, runs the tests, verifies the published executables and `appsettings.json`, and creates `DeviceMon.zip` + `DeviceMon.zip.sha256` (the stable names the remote auto-update URL uses) plus a versioned copy. It then re-verifies that each zip matches its `.sha256` - a mismatched pair is rejected by the SYSTEM updater. With `-Upload` it asks for confirmation, publishes the release for the pushed commit, and downloads the files back to confirm the hashes match. `MonitorAndControlSetup.exe` is copied to `dist\<version>\` and uploaded with the release as the download for first-time installs.
 
+### Code signing & Windows Defender SmartScreen
+
+Windows Defender SmartScreen displays a warning ("Windows protected your PC") on new executables when they lack a verified digital signature or when a newly signed certificate has not yet accumulated sufficient download reputation across Microsoft's network.
+
+The repository contains no signing key or certificate. Builds are signed only with a certificate you supply, and are **unsigned** otherwise (the scripts print a warning):
+1. Set `CODE_SIGN_CERT_BASE64` (Base64 of your `.pfx`) and `CODE_SIGN_PASSWORD` as GitHub Secrets or environment variables, or `CODE_SIGN_CERT_PATH` for a `.pfx` on disk. `publish.ps1` then signs the four executables and `MonitorAndControlSetup.exe`.
+2. For real releases run `.\release.ps1 -Upload -RequireSigning`: it stops if no certificate is configured or any executable is unsigned, instead of publishing unsigned files.
+3. **SmartScreen reputation:** with a standard OV certificate, SmartScreen builds trust over time as users run the signed installer. Until then (and for unsigned builds) the warning can still appear.
+
+See [`certs/README.md`](certs/README.md) for full instructions and conversion commands.
+
 ### Publish options
 
 ```powershell
