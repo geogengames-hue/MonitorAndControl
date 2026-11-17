@@ -49,6 +49,38 @@ internal static class AppSettingsMigration
         return result;
     }
 
+    /// <summary>Reads EnableRemoteDashboard and DashboardPort from a JSON file, or returns defaults.</summary>
+    public static (bool EnableRemote, int Port) ReadRemoteConfig(string jsonPath)
+    {
+        try
+        {
+            if (!File.Exists(jsonPath)) return (true, 5000);
+            JsonObject obj = ParseObject(File.ReadAllText(jsonPath));
+            bool enableRemote = obj.TryGetPropertyValue("EnableRemoteDashboard", out var rNode) && rNode is JsonValue rVal && rVal.TryGetValue<bool>(out bool b) && b;
+            int port = obj.TryGetPropertyValue("DashboardPort", out var pNode) && pNode is JsonValue pVal && pVal.TryGetValue<int>(out int p) && p >= 1024 && p <= 65535 ? p : 5000;
+            return (enableRemote, port);
+        }
+        catch
+        {
+            return (true, 5000);
+        }
+    }
+
+    /// <summary>Updates EnableRemoteDashboard and DashboardPort in an existing JSON file, or creates it.</summary>
+    public static void UpdateRemoteConfig(string jsonPath, bool enableRemote, int port)
+    {
+        try
+        {
+            JsonObject obj = File.Exists(jsonPath) ? ParseObject(File.ReadAllText(jsonPath)) : new JsonObject();
+            obj["EnableRemoteDashboard"] = enableRemote;
+            obj["DashboardPort"] = port;
+            File.WriteAllText(jsonPath, obj.ToJsonString(WriteOptions));
+        }
+        catch
+        {
+        }
+    }
+
     /// <summary>The existing file plus the new options; every existing value is kept. Comments are not preserved.</summary>
     public static string Merge(string existingJson, string bundledJson)
     {

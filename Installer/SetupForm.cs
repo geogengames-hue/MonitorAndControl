@@ -22,6 +22,9 @@ internal sealed class SetupForm : Form
 
     private readonly List<string> _scriptArgs = new(); // arguments for install.ps1 (everything except -AppSettings, -Quiet, -Language)
     private readonly AppSettingsAction? _forcedAppSettings;
+    private readonly bool? _forcedEnableRemote;
+    private readonly int? _forcedDashboardPort;
+    private readonly string? _forcedRemotePin;
     private readonly bool _unattended; // -Quiet or -AppSettings given: never wait for an answer, close when done
     private readonly string? _badAppSettings;
     private readonly Label _status;
@@ -54,6 +57,23 @@ internal sealed class SetupForm : Form
             {
                 string value = i + 1 < args.Length ? args[++i] : "";
                 InstallerLocalization.Language = value;
+                continue;
+            }
+            if (args[i].Equals("-EnableRemoteDashboard", StringComparison.OrdinalIgnoreCase))
+            {
+                string value = i + 1 < args.Length ? args[++i] : "true";
+                if (bool.TryParse(value, out bool enabled)) _forcedEnableRemote = enabled;
+                continue;
+            }
+            if (args[i].Equals("-DashboardPort", StringComparison.OrdinalIgnoreCase))
+            {
+                string value = i + 1 < args.Length ? args[++i] : "";
+                if (int.TryParse(value, out int port) && port >= 1024 && port <= 65535) _forcedDashboardPort = port;
+                continue;
+            }
+            if (args[i].Equals("-RemotePin", StringComparison.OrdinalIgnoreCase))
+            {
+                _forcedRemotePin = i + 1 < args.Length ? args[++i] : "";
                 continue;
             }
             _scriptArgs.Add(args[i]);
@@ -180,6 +200,68 @@ internal sealed class SetupForm : Form
         }
 
         AppSettingsMigration.Prepare(installDir, previousDir, Path.Combine(workDir, "appsettings.json"), Choose, AppendLog);
+
+        string targetJson = Path.Combine(installDir, "appsettings.json");
+        string workJson = Path.Combine(workDir, "appsettings.json");
+        string configToRead = File.Exists(targetJson) ? targetJson : workJson;
+        var (currentRemote, currentPort) = AppSettingsMigration.ReadRemoteConfig(configToRead);
+
+        string dataDir = @"C:\ProgramData\SystemHelper";
+        bool hasExistingPin = RemotePinSetup.IsConfigured(dataDir);
+
+        bool finalRemote = _forcedEnableRemote ?? currentRemote;
+        int finalPort = _forcedDashboardPort ?? currentPort;
+        string? newPin = _forcedRemotePin;
+
+        if (!_unattended && _forcedEnableRemote == null && _forcedDashboardPort == null && _forcedRemotePin == null)
+        {
+            using var remoteDialog = new RemoteSetupDialog(currentRemote, currentPort, hasExistingPin);
+            remoteDialog.ShowDialog(this);
+            finalRemote = remoteDialog.EnableRemote;
+            finalPort = remoteDialog.Port;
+            newPin = remoteDialog.NewPin;
+        }
+
+        AppSettingsMigration.UpdateRemoteConfig(workJson, finalRemote, finalPort);
+        if (File.Exists(targetJson))
+        {
+            AppSettingsMigration.UpdateRemoteConfig(targetJson, finalRemote, finalPort);
+        }
+
+        if (finalRemote)
+        {
+            AppendLog(InstallerLocalization.RemoteConfigLogEnabled(finalPort));
+        }
+        else
+        {
+            AppendLog(InstallerLocalization.RemoteConfigLogDisabled);
+        }
+
+        if (!string.IsNullOrEmpty(newPin))
+        {
+            try
+            {
+                RemotePinSetup.SetPin(dataDir, newPin);
+                AppendLog(InstallerLocalization.RemotePinLogSet);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Warning: could not write remote PIN ({ex.Message})");
+            }
+        }
+        else if (hasExistingPin)
+        {
+            AppendLog(InstallerLocalization.RemotePinLogKept);
+        }
+        else
+        {
+            AppendLog(InstallerLocalization.RemotePinLogNotSet);
+        }
+
+        _scriptArgs.Add("-EnableRemoteDashboard");
+        _scriptArgs.Add(finalRemote ? "$true" : "$false");
+        _scriptArgs.Add("-DashboardPort");
+        _scriptArgs.Add(finalPort.ToString());
 
         if (previousDir != null && !string.Equals(Path.GetFullPath(previousDir).TrimEnd('\\'), Path.GetFullPath(installDir).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
             AppendLog(InstallerLocalization.PreviousInstallReplaced(previousDir));

@@ -606,4 +606,196 @@ public static class InstallerLocalization
             "ru" => $"Новые параметры, отсутствующие в вашем файле, используют встроенные значения по умолчанию: {names}.",
             _ => $"New options not in your file use the built-in defaults: {names}."
         };
+
+    // --- Remote Dashboard & Remote PIN Setup Dialog ---
+
+    public static string RemoteDialogTitle =>
+        Language switch
+        {
+            "es" => "Monitor & Control Setup - acceso remoto",
+            "de" => "Monitor & Control Setup – Remote-Zugriff",
+            "fr" => "Monitor & Control Setup - accès distant",
+            "ru" => "Monitor & Control Setup — удалённый доступ",
+            _ => "Monitor & Control Setup - remote access"
+        };
+
+    public static string RemoteDialogIntro =>
+        Language switch
+        {
+            "es" => "Configure si otros dispositivos de su red (teléfonos, tabletas u otros PC) pueden acceder al panel y realizar cambios.",
+            "de" => "Legen Sie fest, ob andere Geräte in Ihrem Netzwerk (Smartphones, Tablets oder andere PCs) auf das Dashboard zugreifen und Änderungen vornehmen können.",
+            "fr" => "Configurez si d'autres appareils de votre réseau (smartphones, tablettes ou autres PC) peuvent accéder au tableau de bord et effectuer des modifications.",
+            "ru" => "Укажите, смогут ли другие устройства в вашей сети (телефоны, планшеты или другие ПК) открывать панель и вносить изменения.",
+            _ => "Configure whether other devices on your network (phones, tablets, or other PCs) can access the dashboard and make changes."
+        };
+
+    public static string RemoteEnableOption =>
+        Language switch
+        {
+            "es" => "Activar panel remoto (accesible desde otros dispositivos en su red doméstica)",
+            "de" => "Remote-Dashboard aktivieren (erreichbar von anderen Geräten im Heimnetzwerk)",
+            "fr" => "Activer le tableau de bord à distance (accessible depuis d'autres appareils du réseau)",
+            "ru" => "Включить удалённую панель (доступ с других устройств в домашней сети)",
+            _ => "Enable remote dashboard (accessible from other devices on your home network)"
+        };
+
+    public static string RemoteDisableOption =>
+        Language switch
+        {
+            "es" => "Solo local (accesible únicamente en este PC en localhost)",
+            "de" => "Nur lokal (nur direkt auf diesem PC unter localhost erreichbar)",
+            "fr" => "Local uniquement (accessible uniquement sur ce PC via localhost)",
+            "ru" => "Только локально (доступ только непосредственно на этом ПК через localhost)",
+            _ => "Local only (accessible only directly on this PC at localhost)"
+        };
+
+    public static string RemotePortLabel =>
+        Language switch
+        {
+            "es" => "Puerto del panel (predeterminado 5000):",
+            "de" => "Dashboard-Port (Standard 5000):",
+            "fr" => "Port du tableau de bord (par défaut 5000) :",
+            "ru" => "Порт панели (по умолчанию 5000):",
+            _ => "Dashboard Port (default 5000):"
+        };
+
+    public static string RemotePortInUse =>
+        Language switch
+        {
+            "es" => "El puerto {0} está siendo utilizado por otra aplicación. Elija otro puerto.",
+            "de" => "Port {0} wird derzeit von einer anderen Anwendung verwendet. Bitte wählen Sie einen anderen Port.",
+            "fr" => "Le port {0} est actuellement utilisé par une autre application. Veuillez choisir un autre port.",
+            "ru" => "Порт {0} уже занят другим приложением. Пожалуйста, выберите другой порт.",
+            _ => "Port {0} is currently in use by another application. Please choose another port."
+        };
+
+    public static string RemotePortInvalid =>
+        Language switch
+        {
+            "es" => "El puerto debe ser un número entre 1024 y 65535.",
+            "de" => "Der Port muss eine Zahl zwischen 1024 und 65535 sein.",
+            "fr" => "Le port doit être un nombre compris entre 1024 et 65535.",
+            "ru" => "Порт должен быть числом от 1024 до 65535.",
+            _ => "Port must be a number between 1024 and 65535."
+        };
+
+    public static string RemotePinSectionHeader =>
+        Language switch
+        {
+            "es" => "PIN de cambios remotos (necesario para aprobar cambios de tiempo remotamente):",
+            "de" => "PIN für Remote-Änderungen (erforderlich zur Genehmigung von Bildschirmzeit aus der Ferne):",
+            "fr" => "Code PIN pour modifications à distance (requis pour approuver le temps d'écran à distance) :",
+            "ru" => "PIN-код удалённых изменений (нужен для подтверждения экранного времени удалённо):",
+            _ => "Remote Changes PIN (required to approve Screen Time changes remotely):"
+        };
+
+    public static string RemotePinExistingKeep =>
+        Language switch
+        {
+            "es" => "Mantener el PIN remoto existente",
+            "de" => "Bestehende Remote-PIN beibehalten",
+            "fr" => "Conserver le code PIN distant existant",
+            "ru" => "Сохранить существующий удалённый PIN-код",
+            _ => "Keep existing Remote PIN"
+        };
+
+    public static string RemotePinExistingChange =>
+        Language switch
+        {
+            "es" => "Definir un nuevo PIN remoto",
+            "de" => "Neue Remote-PIN festlegen",
+            "fr" => "Définir un nouveau code PIN distant",
+            "ru" => "Установить новый удалённый PIN-код",
+            _ => "Set a new Remote PIN"
+        };
+
+    public static string RemotePinLabel =>
+        Language switch
+        {
+            "es" => "PIN remoto (6-64 caracteres, al menos 3 caracteres distintos):",
+            "de" => "Remote-PIN (6-64 Zeichen, mindestens 3 verschiedene Zeichen):",
+            "fr" => "Code PIN distant (6-64 caractères, au moins 3 caractères distincts) :",
+            "ru" => "Удалённый PIN-код (6-64 символа, не менее 3 различных символов):",
+            _ => "Remote PIN (6-64 characters, at least 3 distinct characters):"
+        };
+
+    public static string RemotePinConfirmLabel =>
+        Language switch
+        {
+            "es" => "Confirmar PIN:",
+            "de" => "PIN bestätigen:",
+            "fr" => "Confirmer le code PIN :",
+            "ru" => "Подтвердите PIN-код:",
+            _ => "Confirm PIN:"
+        };
+
+    public static string RemotePinMismatch =>
+        Language switch
+        {
+            "es" => "Los PINs no coinciden.",
+            "de" => "Die PINs stimmen nicht überein.",
+            "fr" => "Les codes PIN ne correspondent pas.",
+            "ru" => "PIN-коды не совпадают.",
+            _ => "The PINs do not match."
+        };
+
+    public static string RemotePinTooShortOrWeak =>
+        Language switch
+        {
+            "es" => "El PIN debe tener 6-64 caracteres con al menos 3 caracteres distintos.",
+            "de" => "Die PIN muss 6-64 Zeichen lang sein und mindestens 3 verschiedene Zeichen enthalten.",
+            "fr" => "Le code PIN doit comporter 6 à 64 caractères avec au moins 3 caractères différents.",
+            "ru" => "PIN-код должен быть от 6 до 64 символов и содержать не менее 3 различных символов.",
+            _ => "PIN must be 6-64 characters with at least 3 different characters."
+        };
+
+    public static string RemoteConfigLogEnabled(int port) =>
+        Language switch
+        {
+            "es" => $"Panel remoto: Activado en el puerto {port} (Regla de firewall entrante configurada).",
+            "de" => $"Remote-Dashboard: Aktiviert auf Port {port} (Eingehende Firewall-Regel konfiguriert).",
+            "fr" => $"Tableau de bord à distance : Activé sur le port {port} (Règle de pare-feu entrant configurée).",
+            "ru" => $"Удалённая панель: Включена на порту {port} (Настроено входящее правило брандмауэра).",
+            _ => $"Remote dashboard: Enabled on port {port} (Inbound firewall rule configured)."
+        };
+
+    public static string RemoteConfigLogDisabled =>
+        Language switch
+        {
+            "es" => "Panel remoto: Desactivado (Solo acceso local en localhost).",
+            "de" => "Remote-Dashboard: Deaktiviert (Nur lokaler Zugriff auf localhost).",
+            "fr" => "Tableau de bord à distance : Désactivé (Accès local sur localhost uniquement).",
+            "ru" => "Удалённая панель: Выключена (Только локальный доступ на localhost).",
+            _ => "Remote dashboard: Disabled (Local access on localhost only)."
+        };
+
+    public static string RemotePinLogSet =>
+        Language switch
+        {
+            "es" => "PIN de cambios remotos configurado.",
+            "de" => "PIN für Remote-Änderungen konfiguriert.",
+            "fr" => "Code PIN pour modifications à distance configuré.",
+            "ru" => "PIN-код удалённых изменений настроен.",
+            _ => "Remote changes PIN configured."
+        };
+
+    public static string RemotePinLogKept =>
+        Language switch
+        {
+            "es" => "PIN remoto existente conservado.",
+            "de" => "Bestehende Remote-PIN beibehalten.",
+            "fr" => "Code PIN distant existant conservé.",
+            "ru" => "Существующий удалённый PIN-код сохранён.",
+            _ => "Existing Remote PIN preserved."
+        };
+
+    public static string RemotePinLogNotSet =>
+        Language switch
+        {
+            "es" => "PIN remoto no configurado (se puede configurar más tarde con GameHost.exe --set-remote-pin).",
+            "de" => "Remote-PIN nicht konfiguriert (kann später mit GameHost.exe --set-remote-pin eingerichtet werden).",
+            "fr" => "Code PIN distant non configuré (peut être configuré plus tard avec GameHost.exe --set-remote-pin).",
+            "ru" => "Удалённый PIN-код не настроен (можно настроить позже с помощью GameHost.exe --set-remote-pin).",
+            _ => "Remote PIN not configured (can be configured later with GameHost.exe --set-remote-pin)."
+        };
 }

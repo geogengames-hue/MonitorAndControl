@@ -109,20 +109,41 @@ internal static class Program
             return;
         }
 
-        Console.WriteLine("Set the remote PC Time PIN.");
-        Console.WriteLine($"It lets you change PC Time rules from the dashboard on another device, together with the");
-        Console.WriteLine("dashboard admin password. Use {0}-{1} characters; keep it secret and different from your admin password.",
-            MonitorAndControl.ScreenTime.RemotePinStore.MinLength, MonitorAndControl.ScreenTime.RemotePinStore.MaxLength);
-        var pin = ReadSecret("New PIN: ");
-        if (!MonitorAndControl.ScreenTime.RemotePinStore.IsAcceptable(pin, out var error))
+        string? pin = null;
+        for (int i = 0; i < args.Length; i++)
         {
-            Console.Error.WriteLine(error);
-            return;
+            if (args[i].Equals("--set-remote-pin", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+            {
+                pin = args[i + 1];
+                break;
+            }
         }
-        if (!string.Equals(pin, ReadSecret("Repeat PIN: "), StringComparison.Ordinal))
+
+        if (pin == null)
         {
-            Console.Error.WriteLine("The PINs do not match. Nothing was changed.");
-            return;
+            Console.WriteLine("Set the remote PC Time PIN.");
+            Console.WriteLine($"It lets you change PC Time rules from the dashboard on another device, together with the");
+            Console.WriteLine("dashboard admin password. Use {0}-{1} characters; keep it secret and different from your admin password.",
+                MonitorAndControl.ScreenTime.RemotePinStore.MinLength, MonitorAndControl.ScreenTime.RemotePinStore.MaxLength);
+            pin = ReadSecret("New PIN: ");
+            if (!MonitorAndControl.ScreenTime.RemotePinStore.IsAcceptable(pin, out var error))
+            {
+                Console.Error.WriteLine(error);
+                return;
+            }
+            if (!string.Equals(pin, ReadSecret("Repeat PIN: "), StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("The PINs do not match. Nothing was changed.");
+                return;
+            }
+        }
+        else
+        {
+            if (!MonitorAndControl.ScreenTime.RemotePinStore.IsAcceptable(pin, out var error))
+            {
+                Console.Error.WriteLine(error);
+                return;
+            }
         }
 
         store.Set(pin);

@@ -72,6 +72,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Installer carries over the settings of an older install", InstallerTests.SettingsOfAnOlderInstallAreCarriedOver),
     ("Installer detects and normalizes languages", InstallerTests.InstallerDetectsAndNormalizesLanguages),
     ("Installer messages are populated for all supported languages", InstallerTests.InstallerMessagesArePopulatedForAllSupportedLanguages),
+    ("Installer validates and stores remote PIN", InstallerTests.RemotePinSetupAcceptsAndStoresPin),
+    ("Installer reads and updates remote dashboard and port settings in appsettings", InstallerTests.RemoteConfigIsReadAndUpdatedInAppSettings),
     ("Usage database accumulates daily app usage", TestUsageDatabaseAccumulatesUsage),
     ("Usage database separates foreground and background time", TestUsageDatabaseTracksUsageSources),
     ("Usage database preserves legacy unclassified totals", TestUsageDatabasePreservesLegacyTotals),

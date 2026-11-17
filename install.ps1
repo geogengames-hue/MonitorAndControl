@@ -34,7 +34,12 @@ param(
     [string]$UpdateSha256Url = '',
     [int]$AutoCheckHours = 0,
     [string]$UpdateUsername = '',
-    [string]$UpdatePassword = ''
+    [string]$UpdatePassword = '',
+
+    # Remote dashboard and Remote PIN configuration
+    [bool]$EnableRemoteDashboard = $true,
+    [int]$DashboardPort = 5000,
+    [string]$RemotePin = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,15 +160,36 @@ sc.exe description $ServiceName "Restarts DeviceMon.exe if it is stopped." | Out
 sc.exe failure $ServiceName reset= 60 actions= restart/5000/restart/5000/restart/5000 | Out-Null
 sc.exe failureflag $ServiceName 1 | Out-Null
 
-# --- Let the dashboard (hosted by GameHost.exe) accept connections from the LAN ---
-# Windows only prompts for a firewall rule for programs running in a user session, so a
-# service gets none and inbound traffic is blocked. The dashboard only listens on the LAN
-# when "EnableRemoteDashboard" is on (otherwise it binds to 127.0.0.1), so this rule is
-# harmless by default.
+# --- Configure Windows Firewall for the dashboard (hosted by GameHost.exe) ---
+# Detect EnableRemoteDashboard and DashboardPort from appsettings.json if not passed explicitly
+$installedSettings = Join-Path $InstallDir 'appsettings.json'
+if (Test-Path -LiteralPath $installedSettings) {
+    try {
+        $json = Get-Content -LiteralPath $installedSettings -Raw | ConvertFrom-Json
+        if (-not $PSBoundParameters.ContainsKey('EnableRemoteDashboard') -and $null -ne $json.EnableRemoteDashboard) {
+            $EnableRemoteDashboard = [bool]$json.EnableRemoteDashboard
+        }
+        if (-not $PSBoundParameters.ContainsKey('DashboardPort') -and $null -ne $json.DashboardPort -and $json.DashboardPort -gt 0) {
+            $DashboardPort = [int]$json.DashboardPort
+        }
+    } catch { }
+}
+
 $firewallRule = 'DeviceMon dashboard (GameHost)'
 Remove-NetFirewallRule -DisplayName $firewallRule -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName $firewallRule -Direction Inbound -Action Allow -Protocol TCP `
-    -Program $watchdogExe -Profile Any | Out-Null
+if ($EnableRemoteDashboard) {
+    New-NetFirewallRule -DisplayName $firewallRule -Direction Inbound -Action Allow -Protocol TCP `
+        -Program $watchdogExe -LocalPort $DashboardPort -Profile Any | Out-Null
+    Write-Host "Inbound firewall rule configured for port $DashboardPort (remote dashboard: enabled)."
+} else {
+    Write-Host "Remote dashboard is disabled (local access only); no inbound firewall rule added."
+}
+
+# --- Optional: configure Remote PIN if passed ---
+if (-not [string]::IsNullOrWhiteSpace($RemotePin)) {
+    & "$watchdogExe" --set-remote-pin "$RemotePin" | Out-Null
+    Write-Host "Remote changes PIN configured."
+}
 
 Start-Service -Name $ServiceName
 
