@@ -624,7 +624,10 @@ public class DashboardServer
         app.MapGet("/api/live", async () =>
         {
             var trackingSuspended = tracker.IsUsageTrackingSuspended(out var trackingState);
-            var liveState = await db.GetLatestLiveSessionAsync();
+            LiveSessionRecord? liveState = null;
+            // The live card must keep working even if the session table cannot be read.
+            try { liveState = await db.GetLatestLiveSessionAsync(); }
+            catch { }
             var isLiveActive = liveState != null && (DateTime.UtcNow - liveState.LastSeenUtc).TotalSeconds < 15;
 
             var currentApp = tracker.CurrentAppName ?? (isLiveActive ? liveState!.AppName : null) ?? "None";

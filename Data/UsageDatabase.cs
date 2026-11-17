@@ -193,7 +193,7 @@ public class UsageDatabase : IDisposable
                 ProcessedAt TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS LiveSessions (
+            CREATE TABLE IF NOT EXISTS ServiceLiveSessions (
                 SessionId INTEGER PRIMARY KEY,
                 UserSid TEXT,
                 UserName TEXT,
@@ -1165,7 +1165,7 @@ public class UsageDatabase : IDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
-                INSERT OR REPLACE INTO LiveSessions (SessionId, UserSid, UserName, AppName, ProcessName, IsTracking, IdleSeconds, LastSeenUtc)
+                INSERT OR REPLACE INTO ServiceLiveSessions (SessionId, UserSid, UserName, AppName, ProcessName, IsTracking, IdleSeconds, LastSeenUtc)
                 VALUES (@session, @sid, @user, @app, @proc, @tracking, @idle, @seen);
                 """;
             cmd.Parameters.AddWithValue("@session", sessionId);
@@ -1189,7 +1189,7 @@ public class UsageDatabase : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
                 SELECT SessionId, UserSid, UserName, AppName, ProcessName, IsTracking, IdleSeconds, LastSeenUtc
-                FROM LiveSessions
+                FROM ServiceLiveSessions
                 ORDER BY LastSeenUtc DESC
                 LIMIT 1;
                 """;
