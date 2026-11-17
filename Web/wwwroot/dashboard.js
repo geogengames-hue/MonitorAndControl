@@ -276,6 +276,14 @@ async function ensureAuthenticatedOnOpen() {
   return true;
 }
 
+// The sidebar footer names the PC this dashboard belongs to (it says "Local device" until the name is known).
+async function loadDeviceName() {
+  try {
+    const health = await api('/api/health');
+    if (health.machine) document.getElementById('device-name').textContent = health.machine;
+  } catch { /* keep the generic label */ }
+}
+
 async function startApp() {
   const ok = await ensureAuthenticatedOnOpen();
   if (!ok) {
@@ -287,6 +295,7 @@ async function startApp() {
   if (!todayTimer) todayTimer = setInterval(loadLiveToday, 5000);
   if (!activeViewTimer) activeViewTimer = setInterval(refreshActiveView, 10000);
   if (!limitsUsageTimer) limitsUsageTimer = setInterval(refreshVisibleLimitUsage, 2000);
+  loadDeviceName();
   loadLive();
   loadLiveToday();
   connectSSE();
