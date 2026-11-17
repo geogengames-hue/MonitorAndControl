@@ -1392,7 +1392,8 @@ async function loadLogs() {
       else if (l.includes('[ERROR]')) cls = 'log-error';
       return `<span class="${cls}">${esc(l)}</span>`;
     }).join('\n');
-    out.scrollTop = out.scrollHeight;
+    const scroller = document.getElementById('logs-container');
+    scroller.scrollTop = scroller.scrollHeight;
   } catch (e) { log(e); }
 }
 
