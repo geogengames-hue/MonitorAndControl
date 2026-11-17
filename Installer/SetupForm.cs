@@ -20,9 +20,9 @@ internal sealed class SetupForm : Form
 
     private static readonly TimeSpan RuntimeInstallTimeout = TimeSpan.FromMinutes(20);
 
-    private readonly string[] _args;
-    private readonly List<string> _scriptArgs = new(); // arguments for install.ps1 (everything except -AppSettings)
+    private readonly List<string> _scriptArgs = new(); // arguments for install.ps1 (everything except -AppSettings, -Quiet, -Language)
     private readonly AppSettingsAction? _forcedAppSettings;
+    private readonly bool _unattended; // -Quiet or -AppSettings given: never wait for an answer, close when done
     private readonly string? _badAppSettings;
     private readonly Label _status;
     private readonly ProgressBar _progress;
@@ -34,9 +34,14 @@ internal sealed class SetupForm : Form
 
     public SetupForm(string[] args)
     {
-        _args = args;
+        bool quiet = false;
         for (int i = 0; i < args.Length; i++)
         {
+            if (args[i].Equals("-Quiet", StringComparison.OrdinalIgnoreCase))
+            {
+                quiet = true;
+                continue;
+            }
             if (args[i].Equals("-AppSettings", StringComparison.OrdinalIgnoreCase))
             {
                 string value = i + 1 < args.Length ? args[++i] : "";
@@ -53,6 +58,7 @@ internal sealed class SetupForm : Form
             }
             _scriptArgs.Add(args[i]);
         }
+        _unattended = quiet || _forcedAppSettings != null;
 
         Text = InstallerLocalization.SetupTitle(SetupVersion);
         ClientSize = new Size(640, 380);
@@ -129,8 +135,8 @@ internal sealed class SetupForm : Form
             }
             _busy = false;
             _close.Enabled = true;
-            // Unattended use (arguments given): close on success so scripts are not left waiting.
-            if (ExitCode == 0 && _args.Length > 0) Close();
+            // Unattended use (-Quiet or -AppSettings): close on success so scripts are not left waiting.
+            if (ExitCode == 0 && _unattended) Close();
         }
     }
 
@@ -163,11 +169,11 @@ internal sealed class SetupForm : Form
             }
         }
 
-        // Unattended runs (arguments given) never wait for an answer: -AppSettings, else Merge.
+        // Unattended runs (-Quiet or -AppSettings) never wait for an answer: -AppSettings, else Merge.
         AppSettingsAction Choose(IReadOnlyList<(string Name, string Value)> newOptions)
         {
             if (_forcedAppSettings is { } forced) return forced;
-            if (_args.Length > 0) return AppSettingsAction.Merge;
+            if (_unattended) return AppSettingsAction.Merge;
             using var dialog = new AppSettingsDialog(newOptions);
             dialog.ShowDialog(this);
             return dialog.Choice;

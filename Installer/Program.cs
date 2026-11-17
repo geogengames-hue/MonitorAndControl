@@ -10,8 +10,10 @@ namespace MonitorAndControl.Installer;
 /// .NET 8 runtime, extracts the payload to a temporary folder and runs the bundled
 /// install.ps1, so the install logic lives in one place.
 ///
-/// Any command-line arguments are passed on to install.ps1, e.g.
+/// Command-line arguments are passed on to install.ps1, e.g.
 ///   MonitorAndControlSetup.exe -InstallDir "D:\DeviceMon" -UpdateSource "https://.../DeviceMon.zip"
+/// except Setup's own -Language, -AppSettings Merge|Keep|Replace and -Quiet. Only -Quiet and -AppSettings
+/// make a run unattended (no questions asked, window closes on success).
 /// The manifest requests administrator rights, so Windows shows one UAC prompt. As a
 /// second line of defence, Setup never installs without elevation: if it is somehow
 /// started un-elevated it relaunches itself elevated, or stops. (The GameHost service
