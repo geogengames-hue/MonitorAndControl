@@ -186,6 +186,8 @@ The script publishes four projects:
 
 It also copies `appsettings.json`, the `wwwroot/` folder, and PowerShell helper scripts.
 
+Finally it zips that folder and embeds it in `Installer\Installer.csproj`, producing the single-file installer `bin\Release\net8.0-windows\win-x64\installer\MonitorAndControlSetup.exe` (kept outside the `publish` folder so it is not part of `DeviceMon.zip`). The installer extracts the embedded files to a temporary folder and runs the bundled `install.ps1`.
+
 ### Cutting a release
 
 `release.ps1` does the whole release in one step and refuses to ship a bad package:
@@ -195,7 +197,18 @@ It also copies `appsettings.json`, the `wwwroot/` folder, and PowerShell helper 
 .\release.ps1 -Upload    # also create the GitHub release (needs gh logged in, a clean tree, and everything pushed)
 ```
 
-It checks that all four projects share one version, runs the tests, verifies the published executables and `appsettings.json`, and creates `DeviceMon.zip` + `DeviceMon.zip.sha256` (the stable names the remote auto-update URL uses) plus a versioned copy. It then re-verifies that each zip matches its `.sha256` - a mismatched pair is rejected by the SYSTEM updater. With `-Upload` it asks for confirmation, publishes the release for the pushed commit, and downloads the files back to confirm the hashes match.
+It checks that all projects (including the installer) share one version, runs the tests, verifies the published executables and `appsettings.json`, and creates `DeviceMon.zip` + `DeviceMon.zip.sha256` (the stable names the remote auto-update URL uses) plus a versioned copy. It then re-verifies that each zip matches its `.sha256` - a mismatched pair is rejected by the SYSTEM updater. With `-Upload` it asks for confirmation, publishes the release for the pushed commit, and downloads the files back to confirm the hashes match. `MonitorAndControlSetup.exe` is copied to `dist\<version>\` and uploaded with the release as the download for first-time installs.
+
+### Code signing & Windows Defender SmartScreen
+
+Windows Defender SmartScreen displays a warning ("Windows protected your PC") on new executables when they lack a verified digital signature or when a newly signed certificate has not yet accumulated sufficient download reputation across Microsoft's network.
+
+The repository contains no signing key or certificate. Builds are signed only with a certificate you supply, and are **unsigned** otherwise (the scripts print a warning):
+1. Set `CODE_SIGN_CERT_BASE64` (Base64 of your `.pfx`) and `CODE_SIGN_PASSWORD` as GitHub Secrets or environment variables, or `CODE_SIGN_CERT_PATH` for a `.pfx` on disk. `publish.ps1` then signs the four executables and `MonitorAndControlSetup.exe`.
+2. For real releases run `.\release.ps1 -Upload -RequireSigning`: it stops if no certificate is configured or any executable is unsigned, instead of publishing unsigned files.
+3. **SmartScreen reputation:** with a standard OV certificate, SmartScreen builds trust over time as users run the signed installer. Until then (and for unsigned builds) the warning can still appear.
+
+See [`certs/README.md`](certs/README.md) for full instructions and conversion commands.
 
 ### Publish options
 
@@ -254,6 +267,10 @@ Opens the dashboard at `http://localhost:5000` and runs in the system tray.
 ## Section B — For End Users: Using Pre‑Built Releases
 
 ### Quick start
+
+**Easiest: one file.** Download `MonitorAndControlSetup.exe` from the [Releases](https://github.com/geogengames-hue/MonitorAndControl/releases) page and run it. It asks for administrator rights once, installs DeviceMon into `C:\Program Files\DeviceMon`, and installs and starts the `GameHost` watchdog. It contains every component (`DeviceMon.exe`, `GameHost.exe`, `PopupHost.exe`, `UpdateAgent.exe`, the dashboard files and `appsettings.json`), so nothing else needs to be downloaded or placed next to it. Setup runs on a PC with no .NET installed: if the .NET 8 Desktop Runtime or ASP.NET Core 8 Runtime is missing, it downloads it from Microsoft (signature-checked) and installs it first, so that PC needs internet access once. Running it again over an existing install updates it, and the setup log reports the version it found. Your `appsettings.json` is always kept: if the new version adds options your file lacks, Setup lists them and asks whether to add them with their defaults (recommended), keep your file as it is, or replace it with the new default file (a dated `appsettings.json.bak-...` backup is always written first). A manual install in another folder is found through its `GameHost` service, and its `appsettings.json` is carried over; that old folder is left in place for you to delete. For unattended installs add `-Quiet` (never waits for an answer; new options are merged) and/or `-AppSettings Merge|Keep|Replace`; either one makes Setup unattended, and it then closes itself when done. Other arguments, such as `-Language de`, do not. Other options of [`install.ps1`](#recommended-install-protected-program-files-location-requires-admin) can be passed on the command line, for example `MonitorAndControlSetup.exe -InstallDir "D:\DeviceMon"`.
+
+**Manual alternative:**
 
 1. **Download** the latest release from the [Releases](https://github.com/geogengames-hue/MonitorAndControl/releases) page (`DeviceMon.exe`, `GameHost.exe`, `PopupHost.exe`, and `UpdateAgent.exe` must be kept together in the same folder)
 2. **Extract** the zip to a folder (e.g. `C:\MonitorAndControl`)

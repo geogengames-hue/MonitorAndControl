@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MonitorAndControlSetup</AssemblyName>
+    <RootNamespace>MonitorAndControl.Installer</RootNamespace>
+    <Company>DeviceMon</Company>
+    <Product>Monitor &amp; Control Setup</Product>
+    <Description>Single-file installer for Monitor &amp; Control</Description>
+    <AssemblyTitle>Monitor &amp; Control Setup</AssemblyTitle>
+    <Version>1.13.0</Version>
+    <AssemblyVersion>1.13.0.0</AssemblyVersion>
+    <FileVersion>1.13.0.0</FileVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Self-contained so Setup starts on a PC with no .NET installed; it installs the runtimes DeviceMon needs. -->
+    <SelfContained>true</SelfContained>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- publish.ps1 passes the zipped publish folder: dotnet publish -p:PayloadZip=<path> -->
+  <ItemGroup Condition="'$(PayloadZip)' != ''">
+    <EmbeddedResource Include="$(PayloadZip)" LogicalName="payload.zip" />
+  </ItemGroup>
+
+</Project>

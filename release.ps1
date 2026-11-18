@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Builds, verifies and (optionally) uploads a DeviceMon release in one step.
 
@@ -11,23 +11,31 @@
          DeviceMon.zip                    (stable name used by the remote auto-update URL)
          MonitorAndControl-v<version>.zip (versioned copy)
        and re-verifies each pair. A mismatched zip/.sha256 is rejected by the SYSTEM
-       updater, so this check is the point of the script.
-    5. With -Upload: creates the GitHub release for the pushed commit, uploads the four
-       files, then downloads them back and confirms the hashes match.
+       updater, so this check is the point of the script. The single-file installer
+       MonitorAndControlSetup.exe (first-time installs) is copied next to them.
+    5. With -Upload: creates the GitHub release for the pushed commit, uploads the
+       files, then downloads the zip back and confirms the hashes match.
 
     Nothing is uploaded unless you pass -Upload, and -Upload asks for confirmation.
+
+    Code signing uses YOUR certificate, supplied through CODE_SIGN_CERT_BASE64 + CODE_SIGN_PASSWORD (or
+    CODE_SIGN_CERT_PATH). There is no built-in certificate: without one the build is UNSIGNED and a warning
+    is shown. Pass -RequireSigning to fail instead (before building) when no certificate is configured, and
+    to fail if any executable or the installer ends up without a signature.
 
 .EXAMPLE
     .\release.ps1                 # build + verify only
     .\release.ps1 -Upload         # build, verify, then publish the GitHub release
     .\release.ps1 -Upload -WhatIf # show what would be uploaded, change nothing
+    .\release.ps1 -Upload -RequireSigning # fail unless the binaries are signed with your own certificate
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
     [string]$Repo = 'geogengames-hue/MonitorAndControl',
     [string]$Title = '',
     [switch]$SkipTests,
-    [switch]$Upload
+    [switch]$Upload,
+    [switch]$RequireSigning
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,9 +44,14 @@ Set-Location -LiteralPath $PSScriptRoot
 function Step($text) { Write-Host ""; Write-Host "== $text" -ForegroundColor Cyan }
 function Fail($text) { throw "Release stopped: $text" }
 
+# --- 0. Signing certificate ----------------------------------------------------
+if ($RequireSigning -and -not ($env:CODE_SIGN_CERT_BASE64 -or $env:CODE_SIGN_CERT_PATH)) {
+    Fail '-RequireSigning was given but no certificate is configured. Set CODE_SIGN_CERT_BASE64 and CODE_SIGN_PASSWORD (or CODE_SIGN_CERT_PATH).'
+}
+
 # --- 1. Version -------------------------------------------------------------
 Step 'Reading version'
-$projects = @('MonitorAndControl.csproj', 'Watchdog\SystemHelperWatchdog.csproj', 'PopupHost\PopupHost.csproj', 'UpdateAgent\UpdateAgent.csproj')
+$projects = @('MonitorAndControl.csproj', 'Watchdog\SystemHelperWatchdog.csproj', 'PopupHost\PopupHost.csproj', 'UpdateAgent\UpdateAgent.csproj', 'Installer\Installer.csproj')
 $versions = foreach ($p in $projects) {
     $m = [regex]::Match((Get-Content -LiteralPath $p -Raw), '<Version>\s*([0-9]+\.[0-9]+\.[0-9]+)\s*</Version>')
     if (-not $m.Success) { Fail "no <Version> found in $p" }
@@ -95,7 +108,8 @@ $publishDir = Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\win-x64\publis
 Get-Process -Name DeviceMon, PopupHost, UpdateAgent, GameHost -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -and $_.Path.StartsWith($publishDir, [StringComparison]::OrdinalIgnoreCase) } |
     Stop-Process -Force -ErrorAction SilentlyContinue
-$publishOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'publish.ps1') 2>&1
+$publishArgs = if ($RequireSigning) { @('-RequireSigning') } else { @() }
+$publishOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'publish.ps1') @publishArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     $publishOutput | Select-Object -Last 25 | ForEach-Object { Write-Host $_ }
     Fail 'publish.ps1 failed.'
@@ -110,6 +124,24 @@ foreach ($f in $required) {
 foreach ($exe in 'DeviceMon.exe', 'GameHost.exe', 'PopupHost.exe', 'UpdateAgent.exe') {
     $fileVersion = (Get-Item -LiteralPath (Join-Path $publishDir $exe)).VersionInfo.FileVersion
     if ($fileVersion -ne "$version.0") { Fail "$exe is version $fileVersion, expected $version.0 (stale build?)" }
+    $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $publishDir $exe)
+    if ($sig.SignerCertificate) {
+        Write-Host "  $exe signature: $($sig.SignerCertificate.Subject) [$($sig.Status)]" -ForegroundColor Gray
+    } else {
+        if ($RequireSigning) { Fail "$exe is not signed (-RequireSigning)" }
+        Write-Warning "  $exe is not signed"
+    }
+}
+$setupExe = Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\win-x64\installer\MonitorAndControlSetup.exe'
+if (-not (Test-Path -LiteralPath $setupExe)) { Fail 'published output is missing the single-file installer (MonitorAndControlSetup.exe)' }
+$setupVersion = (Get-Item -LiteralPath $setupExe).VersionInfo.FileVersion
+if ($setupVersion -ne "$version.0") { Fail "MonitorAndControlSetup.exe is version $setupVersion, expected $version.0 (update Installer\Installer.csproj)" }
+$setupSig = Get-AuthenticodeSignature -LiteralPath $setupExe
+if ($setupSig.SignerCertificate) {
+    Write-Host "  MonitorAndControlSetup.exe signature: $($setupSig.SignerCertificate.Subject) [$($setupSig.Status)]" -ForegroundColor Gray
+} else {
+    if ($RequireSigning) { Fail 'MonitorAndControlSetup.exe is not signed (-RequireSigning)' }
+    Write-Warning "  MonitorAndControlSetup.exe is not signed"
 }
 try { $cfg = Get-Content -LiteralPath (Join-Path $publishDir 'appsettings.json') -Raw | ConvertFrom-Json }
 catch { Fail "published appsettings.json is not valid JSON: $($_.Exception.Message)" }
@@ -150,8 +182,13 @@ foreach ($name in $stable, $versioned) {
 }
 $releaseHash = (Get-FileHash -LiteralPath (Join-Path $dist $stable) -Algorithm SHA256).Hash
 
+# The single-file installer for first-time installs (it embeds the same files as the zip).
+$installer = 'MonitorAndControlSetup.exe'
+Copy-Item -LiteralPath $setupExe -Destination (Join-Path $dist $installer)
+Write-Host ("OK  {0,-34} {1}" -f $installer, (Get-FileHash -LiteralPath (Join-Path $dist $installer) -Algorithm SHA256).Hash)
+
 # --- 7. Upload (opt-in) -----------------------------------------------------
-$files = @($stable, "$stable.sha256", $versioned, "$versioned.sha256") | ForEach-Object { Join-Path $dist $_ }
+$files = @($stable, "$stable.sha256", $versioned, "$versioned.sha256", $installer) | ForEach-Object { Join-Path $dist $_ }
 
 if (-not $Upload) {
     Step 'Done (nothing uploaded)'

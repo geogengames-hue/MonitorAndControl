@@ -12,4 +12,10 @@
     <ProjectReference Include="..\MonitorAndControl.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Installer logic without any UI, compiled here so it can be tested. -->
+    <Compile Include="..\Installer\AppSettingsMigration.cs" Link="Installer\AppSettingsMigration.cs" />
+    <Compile Include="..\Installer\InstallerLocalization.cs" Link="Installer\InstallerLocalization.cs" />
+  </ItemGroup>
+
 </Project>

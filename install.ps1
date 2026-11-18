@@ -162,4 +162,4 @@ Write-Host "  DeviceMon installed to $InstallDir (protected by Program Files per
 Write-Host "  GameHost watchdog installed and started; it launches DeviceMon in the child's session and restarts it within ~5s if closed."
 Write-Host "  Usage data and logs: $dataDir (protected against deletion by GameHost)."
 Write-Host ""
-Write-Host "To update later: re-run this script as Administrator against the new publish folder."
+Write-Host "To update later: run the new MonitorAndControlSetup.exe, or re-run this script as Administrator against the new publish folder."
