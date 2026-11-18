@@ -108,7 +108,9 @@ $publishDir = Join-Path $PSScriptRoot 'bin\Release\net8.0-windows\win-x64\publis
 Get-Process -Name DeviceMon, PopupHost, UpdateAgent, GameHost -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -and $_.Path.StartsWith($publishDir, [StringComparison]::OrdinalIgnoreCase) } |
     Stop-Process -Force -ErrorAction SilentlyContinue
-$publishArgs = if ($RequireSigning) { @('-RequireSigning') } else { @() }
+# Built explicitly: in Windows PowerShell an `if` that yields an empty array gives $null, which splats as a stray empty argument.
+$publishArgs = @()
+if ($RequireSigning) { $publishArgs += '-RequireSigning' }
 $publishOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'publish.ps1') @publishArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     $publishOutput | Select-Object -Last 25 | ForEach-Object { Write-Host $_ }

@@ -37,7 +37,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'uninstall-watchdog.ps1') -Desti
 
 # Sign published binaries before packaging. Without a certificate the build stays UNSIGNED (warning),
 # or fails with -RequireSigning. There is no built-in certificate.
-$signMode = if ($RequireSigning) { @() } else { @('-SkipIfNoCertificate') }
+$signMode = @{ SkipIfNoCertificate = [bool](-not $RequireSigning) }
 if (-not $SkipSigning) {
     Write-Host "Signing published executables..." -ForegroundColor Cyan
     $binaries = Get-ChildItem -LiteralPath $publishDir -Filter '*.exe' | Select-Object -ExpandProperty FullName
