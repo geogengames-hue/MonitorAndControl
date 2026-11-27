@@ -13,6 +13,8 @@ internal sealed class ScreenTimeService : IDisposable
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly Dictionary<string, HashSet<int>> _warnings = new();
     private readonly Dictionary<int, long> _logoffs = new();
+    // When the sign-out notice was shown, per session: the account is signed out a few seconds later.
+    private readonly Dictionary<int, long> _signOutNotices = new();
     private readonly Dictionary<string, ScreenTimeUsage> _usage;
     private System.Threading.Timer? _timer;
     private long _lastTick;
@@ -254,6 +256,7 @@ internal sealed class ScreenTimeService : IDisposable
             // Checkpoint periodically (and always right before a logoff) rather than every
             // second: a restart loses at most a few seconds of usage, without constant disk churn.
             PersistUsage(tick, force: false);
+            foreach (var id in _signOutNotices.Keys.Where(id => sessions.All(s => s.SessionId != id)).ToList()) _signOutNotices.Remove(id);
             foreach (var policy in policies.Where(p => p.Enabled))
             {
                 var usage = _usage[policy.ProfileId];
@@ -269,6 +272,19 @@ internal sealed class ScreenTimeService : IDisposable
                 {
                     if (remaining == 0 || bedtime)
                     {
+                        // Someone at the screen (signing in with no time left, or time just ran out) is told first.
+                        if (session.Unlocked)
+                        {
+                            if (!_signOutNotices.TryGetValue(session.SessionId, out var noticed))
+                            {
+                                _signOutNotices[session.SessionId] = tick;
+                                ScreenTimeWindows.Warn(session.SessionId, bedtime
+                                    ? "It is bedtime. You will be signed out in a few seconds."
+                                    : "There is no PC time left today. You will be signed out in a few seconds.");
+                                continue;
+                            }
+                            if (tick - noticed < 8000) continue;
+                        }
                         if (!_logoffs.TryGetValue(session.SessionId, out var last) || tick - last >= 5000)
                         {
                             PersistUsage(tick, force: true);
@@ -280,6 +296,7 @@ internal sealed class ScreenTimeService : IDisposable
                     }
                     else if (session.Unlocked)
                     {
+                        _signOutNotices.Remove(session.SessionId);
                         var threshold = new[] { 1, 5, 10 }.FirstOrDefault(m => remaining <= m * 60);
                         var bedThreshold = untilBed is { } left ? new[] { 1, 5, 10 }.FirstOrDefault(m => left <= m) : 0;
                         if (bedThreshold > 0 && !bedSent.Contains(bedThreshold) && (threshold == 0 || untilBed * 60 < remaining))

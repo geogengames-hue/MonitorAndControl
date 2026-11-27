@@ -27,6 +27,8 @@ public class LimitEnforcer
     public event Action<string, int, string>? OnBreachAlert;
     public event Action<string, int>? OnCountdownTick;
     public event Action<string>? OnAppKilled;
+    /// <summary>An app that is already over its limit was reopened and closed again (the child should be told why).</summary>
+    public event Action<string>? OnAppBlocked;
     public event Action<string>? OnAppTerminatedBySchedule;
 
     public DateTimeOffset? PausedUntil => _pausedUntil;
@@ -113,6 +115,7 @@ public class LimitEnforcer
         {
             KillAppProcesses(app);
             OnAppKilled?.Invoke(app);
+            OnAppBlocked?.Invoke(app);
         }
 
         // A new app of a category whose group has used up today's time (a game first opened today).
@@ -121,6 +124,7 @@ public class LimitEnforcer
             Logger.Instance.Warn($"{app} is in a category whose time is used up today; closing it.");
             KillAppProcesses(app);
             OnAppKilled?.Invoke(app);
+            OnAppBlocked?.Invoke(app);
             return;
         }
 
@@ -131,6 +135,7 @@ public class LimitEnforcer
             _exceededToday[app] = today;
             KillAppProcesses(app);
             OnAppKilled?.Invoke(app);
+            OnAppBlocked?.Invoke(app);
         }
     }
 
