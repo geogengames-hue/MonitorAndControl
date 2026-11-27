@@ -327,7 +327,7 @@ async function refreshActiveView() {
 async function loadLive() {
   try {
     const data = await api('/api/live');
-    document.getElementById('live-app').textContent = data.currentApp || '(idle)';
+    document.getElementById('live-app').textContent = data.currentApp || t('(idle)');
     document.getElementById('live-proc').textContent = data.currentProcess || '';
     const status = document.getElementById('enforcement-status');
     if (data.enforcementPaused) {

@@ -1161,6 +1161,7 @@ public class DashboardServer
                 if (!AllowedLanguages.Contains(language))
                     return Results.BadRequest(new { error = "Unsupported language." });
                 await db.SetSettingAsync("UiLanguage", language);
+                ScreenTime.ScreenTimeFiles.WriteLanguage(language);
             }
             if (root.TryGetProperty("pauseTrackingWhenIdle", out var pauseIdle))
                 await db.SetSettingAsync("PauseTrackingWhenIdle", pauseIdle.GetBoolean() ? "true" : "false");
@@ -1757,6 +1758,8 @@ public class DashboardServer
             await db.ReplaceScheduleRulesAsync(backup.Schedules);
             foreach (var setting in backup.Settings.Where(kvp => ExportableSettings.Contains(kvp.Key)))
                 await db.SetSettingAsync(setting.Key, setting.Value);
+            if (backup.Settings.TryGetValue("UiLanguage", out var importedLang) && !string.IsNullOrEmpty(importedLang))
+                ScreenTime.ScreenTimeFiles.WriteLanguage(importedLang);
             if (backup.UserLimits != null) await db.ReplaceUserLimitRulesAsync(backup.UserLimits);
             if (backup.SiteLimits != null) await db.ReplaceSiteLimitsAsync(backup.SiteLimits);
             if (backup.UserSiteLimits != null) await db.ReplaceUserSiteLimitsAsync(backup.UserSiteLimits);

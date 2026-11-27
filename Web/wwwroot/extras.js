@@ -62,12 +62,12 @@ pushEl('save')?.addEventListener('click', async () => {
     });
     pushMessage(t('Saved.'));
     await loadPushSettings();
-  } catch (error) { pushMessage(errorText(error), true); }
+  } catch (error) { pushMessage(t(errorText(error)), true); }
 });
 pushEl('test')?.addEventListener('click', async () => {
   pushMessage(t('Sending...'));
   try { await api('/api/settings/push-test', { method: 'POST' }); pushMessage(t('Test sent. Check your phone.')); }
-  catch (error) { pushMessage(errorText(error), true); }
+  catch (error) { pushMessage(t(errorText(error)), true); }
 });
 
 // ---- other PCs

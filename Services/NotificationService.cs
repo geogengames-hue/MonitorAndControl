@@ -27,17 +27,25 @@ public class NotificationService : IDisposable
         _push = new PushSender(db);
     }
 
+    private async Task<string> GetLanguageAsync() => await _db.GetSettingAsync("UiLanguage", "en");
+
     /// <summary>Sends a test message to the parent's phone; false when it could not be delivered.</summary>
-    public Task<bool> TestPushAsync() => _push.SendAsync("Push notifications are working.");
+    public async Task<bool> TestPushAsync()
+    {
+        var language = await GetLanguageAsync();
+        return await _push.SendAsync(Localization.Text("PushTestMessage", language));
+    }
 
     public async Task NotifyBreachAsync(string appName, int killDelaySeconds)
     {
-        var push = _push.SendAsync($"{appName} time limit reached. Will be closed in {killDelaySeconds}s.");
+        var language = await GetLanguageAsync();
+        var msg = Localization.Text("PushLimitBreach", language, appName, killDelaySeconds);
+        var push = _push.SendAsync(msg);
         await FireWebhook("limit_breach", appName, new
         {
             type = "limit_breach",
             app = appName,
-            message = $"{appName} time limit reached. Will be closed in {killDelaySeconds}s.",
+            message = msg,
             killDelaySeconds,
             timestamp = DateTime.Now
         });
@@ -46,12 +54,14 @@ public class NotificationService : IDisposable
 
     public async Task NotifyKilledAsync(string appName)
     {
-        var push = _push.SendAsync($"{appName} was closed due to time limit.");
+        var language = await GetLanguageAsync();
+        var msg = Localization.Text("PushAppClosed", language, appName);
+        var push = _push.SendAsync(msg);
         await FireWebhook("app_killed", appName, new
         {
             type = "app_killed",
             app = appName,
-            message = $"{appName} was closed due to time limit.",
+            message = msg,
             timestamp = DateTime.Now
         });
         await push;
@@ -59,12 +69,14 @@ public class NotificationService : IDisposable
 
     public async Task NotifyScheduleTerminatedAsync(string appName)
     {
-        var push = _push.SendAsync($"{appName} was closed by schedule rule.");
+        var language = await GetLanguageAsync();
+        var msg = Localization.Text("PushScheduleClosed", language, appName);
+        var push = _push.SendAsync(msg);
         await FireWebhook("schedule_kill", appName, new
         {
             type = "schedule_kill",
             app = appName,
-            message = $"{appName} was closed by schedule rule.",
+            message = msg,
             timestamp = DateTime.Now
         });
         await push;

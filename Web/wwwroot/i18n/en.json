@@ -35,17 +35,38 @@
   "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.": "URL updates require HTTPS and an exact SHA-256. The updater runs silently; if Windows blocks file copy or watchdog repair, the result appears below after restart.",
   "Send email when a limit is reached": "Send email when a limit is reached",
   "Send email when an app is closed by enforcement": "Send email when an app is closed by enforcement",
-  "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.": "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures."
-, "No update has been recorded yet.": "No update has been recorded yet."
-, "Last update succeeded": "Last update succeeded"
-, "Last update failed": "Last update failed"
-, "Update is running": "Update is running"
-, "Update is starting": "Update is starting"
-, "Update status unknown": "Update status unknown"
-, "Update status": "Update status"
-, "Show update log": "Show update log"
-, "Started": "Started"
-, "Finished": "Finished"
-, "Source": "Source"
-, "Could not load update status.": "Could not load update status."
+  "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.": "Alerts cover database/config deletion, major clock changes, watchdog failure or recovery, and repeated dashboard login failures.",
+  "No update has been recorded yet.": "No update has been recorded yet.",
+  "Last update succeeded": "Last update succeeded",
+  "Last update failed": "Last update failed",
+  "Update is running": "Update is running",
+  "Update is starting": "Update is starting",
+  "Update status unknown": "Update status unknown",
+  "Update status": "Update status",
+  "Show update log": "Show update log",
+  "Started": "Started",
+  "Finished": "Finished",
+  "Source": "Source",
+  "Could not load update status.": "Could not load update status.",
+  "(idle)": "(idle)",
+  "min": "min",
+  "Name": "Name",
+  "App name (e.g. Fortnite)": "App name (e.g. Fortnite)",
+  "Process name (e.g. FortniteClient-Win64-Shipping.exe)": "Process name (e.g. FortniteClient-Win64-Shipping.exe)",
+  "Site (e.g. youtube.com)": "Site (e.g. youtube.com)",
+  "INFO, WARN, ERROR, app name...": "INFO, WARN, ERROR, app name...",
+  "Time's up! This app will close soon.": "Time's up! This app will close soon.",
+  "The ntfy server must be an https address, such as https://ntfy.sh.": "The ntfy server must be an https address, such as https://ntfy.sh.",
+  "The ntfy topic needs 6 to 64 letters, digits, - or _. Make it long and hard to guess: anyone who knows it can read your alerts.": "The ntfy topic needs 6 to 64 letters, digits, - or _. Make it long and hard to guess: anyone who knows it can read your alerts.",
+  "That does not look like a Telegram bot token (it looks like 123456789:AAH...).": "That does not look like a Telegram bot token (it looks like 123456789:AAH...).",
+  "The Telegram chat ID is a number (it can start with -).": "The Telegram chat ID is a number (it can start with -).",
+  "Unknown notification service.": "Unknown notification service.",
+  "The test message could not be delivered. Check the settings and that the phone app is subscribed.": "The test message could not be delivered. Check the settings and that the phone app is subscribed.",
+  "Choose a Windows account.": "Choose a Windows account.",
+  "Too many account limits.": "Too many account limits.",
+  "Too many website rules.": "Too many website rules.",
+  "This link has expired or was already used.": "This link has expired or was already used.",
+  "The screen-time service is unavailable.": "The screen-time service is unavailable.",
+  "The GameHost service is stopped. Screen-time control is unavailable.": "The GameHost service is stopped. Screen-time control is unavailable.",
+  "No screen-time status yet. Update GameHost or check the service log.": "No screen-time status yet. Update GameHost or check the service log."
 }

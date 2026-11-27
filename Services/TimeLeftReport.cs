@@ -8,37 +8,49 @@ public sealed record TimeLeftView(string Tooltip, List<string> Lines);
 /// <summary>What the child is shown when "show time left" is on: PC time, bedtime, lock, homework mode and app allowances.</summary>
 public static class TimeLeftReport
 {
-    public static string Duration(long seconds)
+    public static string Duration(long seconds, string language = "en")
     {
         var t = TimeSpan.FromSeconds(Math.Max(0, seconds));
-        if (t.TotalHours >= 1) return $"{(int)t.TotalHours}h {t.Minutes}m";
-        return t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m" : "less than a minute";
+        if (t.TotalHours >= 1) return Localization.Text("DurationHoursMinutes", language, (int)t.TotalHours, t.Minutes);
+        return t.TotalMinutes >= 1
+            ? Localization.Text("DurationMinutes", language, (int)t.TotalMinutes)
+            : Localization.Text("LessThanAMinute", language);
     }
+
+    private static string FormatBedtime(int mins, string language) =>
+        mins >= 60
+            ? Localization.Text("DurationHoursMinutes", language, mins / 60, mins % 60)
+            : Localization.Text("DurationMinutesFull", language, mins);
+
+    private static string FormatBedtimeShort(int mins, string language) =>
+        mins >= 60
+            ? Localization.Text("DurationHoursMinutes", language, mins / 60, mins % 60)
+            : Localization.Text("DurationMinutes", language, mins);
 
     /// <summary>Pure formatting, so it can be tested without a database or a screen.</summary>
     public static TimeLeftView Build(long? pcRemainingSeconds, int? minutesToBedtime, bool inBedtime, DateTimeOffset? lockedUntil,
-        DateTimeOffset? homeworkUntil, IEnumerable<(string App, long Used, long Max)> apps, DateTimeOffset now)
+        DateTimeOffset? homeworkUntil, IEnumerable<(string App, long Used, long Max)> apps, DateTimeOffset now, string language = "en")
     {
         var lines = new List<string>();
         var tip = new List<string>();
 
         if (lockedUntil is { } locked && locked > now)
-            lines.Add($"This PC is locked until {ParentClock.ToRuleTime(locked):HH:mm}.");
+            lines.Add(Localization.Text("PcLockedUntil", language, $"{ParentClock.ToRuleTime(locked):HH:mm}"));
         if (pcRemainingSeconds is { } left)
         {
-            lines.Add($"PC time left today: {Duration(left)}.");
-            tip.Add($"PC time left {Duration(left)}");
+            lines.Add(Localization.Text("PcTimeLeftToday", language, Duration(left, language)));
+            tip.Add(Localization.Text("PcTimeLeftTooltip", language, Duration(left, language)));
         }
-        if (inBedtime) lines.Add("It is bedtime.");
+        if (inBedtime) lines.Add(Localization.Text("ItIsBedtime", language));
         else if (minutesToBedtime is { } mins)
         {
-            lines.Add($"Bedtime in {(mins >= 60 ? $"{mins / 60}h {mins % 60}m" : $"{mins} minutes")}.");
-            if (mins <= 120) tip.Add($"Bedtime in {(mins >= 60 ? $"{mins / 60}h {mins % 60}m" : $"{mins}m")}");
+            lines.Add(Localization.Text("BedtimeIn", language, FormatBedtime(mins, language)));
+            if (mins <= 120) tip.Add(Localization.Text("BedtimeInTooltip", language, FormatBedtimeShort(mins, language)));
         }
         if (homeworkUntil is { } hw && hw > now)
         {
-            lines.Add($"Homework mode until {ParentClock.ToRuleTime(hw):HH:mm}.");
-            tip.Add($"Homework until {ParentClock.ToRuleTime(hw):HH:mm}");
+            lines.Add(Localization.Text("HomeworkUntil", language, $"{ParentClock.ToRuleTime(hw):HH:mm}"));
+            tip.Add(Localization.Text("HomeworkUntilTooltip", language, $"{ParentClock.ToRuleTime(hw):HH:mm}"));
         }
 
         var rows = apps.OrderBy(a => a.Max - a.Used).ToList();
@@ -46,22 +58,22 @@ public static class TimeLeftReport
         {
             var remaining = Math.Max(0, max - used);
             lines.Add(remaining == 0
-                ? $"{app}: no time left today (used {Duration(used)})."
-                : $"{app}: {Duration(remaining)} left of {Duration(max)}.");
+                ? Localization.Text("AppNoTimeLeftToday", language, app, Duration(used, language))
+                : Localization.Text("AppTimeLeftOfMax", language, app, Duration(remaining, language), Duration(max, language)));
         }
         if (rows.Count > 0)
         {
             var first = rows[0];
-            tip.Add($"{first.App} {Duration(Math.Max(0, first.Max - first.Used))} left");
+            tip.Add(Localization.Text("AppTimeLeftTooltip", language, first.App, Duration(Math.Max(0, first.Max - first.Used), language)));
         }
 
-        if (lines.Count == 0) lines.Add("No time limits are set for this account right now.");
-        var tooltip = tip.Count > 0 ? string.Join(" | ", tip) : "No time limits right now";
+        if (lines.Count == 0) lines.Add(Localization.Text("NoTimeLimitsSet", language));
+        var tooltip = tip.Count > 0 ? string.Join(" | ", tip) : Localization.Text("NoTimeLimitsRightNow", language);
         return new TimeLeftView(tooltip.Length > 120 ? tooltip[..117] + "..." : tooltip, lines);
     }
 
     /// <summary>Gathers the numbers for the account this DeviceMon is running for.</summary>
-    public static async Task<TimeLeftView> CollectAsync(UsageDatabase db)
+    public static async Task<TimeLeftView> CollectAsync(UsageDatabase db, string language = "en")
     {
         var now = DateTimeOffset.UtcNow;
         var sid = AccountIdentity.CurrentSid;
@@ -107,6 +119,6 @@ public static class TimeLeftReport
         catch { /* the database may be busy; the next refresh will fill it in */ }
 
         var homework = HomeworkState.Read();
-        return Build(pcRemaining, untilBed, inBed, lockedUntil, HomeworkState.IsActive(homework, now) ? homework!.UntilUtc : null, apps, now);
+        return Build(pcRemaining, untilBed, inBed, lockedUntil, HomeworkState.IsActive(homework, now) ? homework!.UntilUtc : null, apps, now, language);
     }
 }

@@ -18,6 +18,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Account usage ignores capitals in the app name", TestAccountUsageCase),
     ("A claimed job runs in one account at a time", TestLeaseClaim),
     ("The time-left view reads clearly", TestTimeLeftView),
+    ("Screen-time session notifications are localized in all supported languages", TestScreenTimeLocalization),
     ("The time zone is pinned until a parent accepts a change", TestPinnedTimeZone),
     ("Check-in addresses must be public https", TestHeartbeatUrls),
     ("Alert buttons: deep links, one-tap decline and Telegram keys", TestAlertButtons),
@@ -1662,6 +1663,44 @@ static Task TestTimeLeftView()
     var locked = MonitorAndControl.Services.TimeLeftReport.Build(600, null, true, now.AddMinutes(20), null, Array.Empty<(string, long, long)>(), now);
     AssertTrue(locked.Lines[0].StartsWith("This PC is locked until") && locked.Lines.Contains("It is bedtime."), "A lock and bedtime are shown.");
     AssertTrue(MonitorAndControl.Services.TimeLeftReport.Duration(30) == "less than a minute" && MonitorAndControl.Services.TimeLeftReport.Duration(3600) == "1h 0m", "Durations read naturally.");
+
+    var viewEs = MonitorAndControl.Services.TimeLeftReport.Build(7800, 45, false, null, now.AddMinutes(30), apps, now, "es");
+    AssertTrue(viewEs.Lines.Contains("Tiempo de PC restante hoy: 2h 10m."), "Spanish PC time line.");
+    AssertTrue(viewEs.Lines.Contains("Hora de dormir en 45 minutos."), "Spanish bedtime line.");
+    AssertTrue(viewEs.Lines.Any(l => l.StartsWith("Modo deberes hasta las")), "Spanish homework line.");
+    AssertTrue(viewEs.Lines.Contains("Minecraft: quedan 25m de 1h 0m."), "Spanish app remaining line.");
+    AssertTrue(viewEs.Lines.Contains("Roblox: no queda tiempo hoy (usado 10m)."), "Spanish app used up line.");
+    AssertTrue(viewEs.Tooltip.StartsWith("Tiempo de PC restante: 2h 10m"), "Spanish tooltip.");
+    AssertTrue(MonitorAndControl.Services.TimeLeftReport.Duration(30, "es") == "menos de un minuto", "Spanish duration less than a minute.");
+    return Task.CompletedTask;
+}
+
+static Task TestScreenTimeLocalization()
+{
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.BreakStart(15, "16:00", "es")
+        == "Es hora de un descanso de 15 minutos. El PC se bloqueará ahora y podrá usarse de nuevo a las 16:00.", "Spanish break start.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.BreakUpcoming(15, 5, "es")
+        == "Un descanso de 15 minutos comenzará en unos 5 minuto(s). Guarda tu trabajo.", "Spanish break upcoming.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.SignOutBedtime("es")
+        == "Es hora de dormir. Se cerrará la sesión en unos segundos.", "Spanish bedtime signout.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.SignOutQuota("es")
+        == "No queda tiempo de PC hoy. Se cerrará la sesión en unos segundos.", "Spanish quota signout.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.BedtimeWarning(10, "es")
+        == "Hora de dormir en unos 10 minuto(s). Guarda tu trabajo: se cerrará la sesión.", "Spanish bedtime warning.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.QuotaWarning(10, "es")
+        == "Quedan unos 10 minuto(s) de tiempo de PC hoy. Guarda tu trabajo: se cerrará la sesión cuando se agote el tiempo.", "Spanish quota warning.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.AskMoreTime("Aviso.", "es")
+        == "Aviso. ¿Pedir más tiempo a tus padres?", "Spanish ask more time.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.AskMoreTimeSent("es")
+        == "Se ha enviado la petición a tus padres. Se te avisará si añaden tiempo.", "Spanish ask sent.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.AskMoreTimeDismissed("es")
+        == "Tus padres no han añadido más tiempo esta vez.", "Spanish ask dismissed.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.ProgramAllowed("Fortnite", "es")
+        == "Tus padres han permitido Fortnite. Ya puedes abrirlo.", "Spanish program allowed.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.ProgramBlocked("Fortnite", "es")
+        == "Tus padres no han permitido Fortnite.", "Spanish program blocked.");
+    AssertTrue(MonitorAndControl.ScreenTime.ScreenTimeLocalization.HomeworkActive("18:00", "es")
+        == "El modo deberes está activado hasta las 18:00. Los juegos y el entretenimiento están bloqueados hasta entonces.", "Spanish homework active.");
     return Task.CompletedTask;
 }
 
