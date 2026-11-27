@@ -214,8 +214,10 @@ public class DashboardServer
             if (root.TryGetProperty("newPassword", out var np))
                 newPassword = np.GetString() ?? "";
 
-            if (newPassword.Length is < 8 or > 128)
-                return Results.BadRequest(new { error = "Admin password must be 8-128 characters." });
+            if (newPassword.Length is < 8 or > RemotePinStore.MaxLength)
+                return Results.BadRequest(new { error = $"Parent password must be 8-{RemotePinStore.MaxLength} characters." });
+            if (!RemotePinStore.IsAcceptable(newPassword, out var simpleError))
+                return Results.BadRequest(new { error = simpleError.Replace("PIN", "password") });
 
             var storedHash = await db.GetSettingAsync("DashboardAdminPasswordHash", "");
             if (!string.IsNullOrEmpty(storedHash))

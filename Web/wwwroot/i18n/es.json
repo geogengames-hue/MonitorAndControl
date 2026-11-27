@@ -799,5 +799,6 @@
   "Sensitive changes are off: the parent password has not reached the service yet. Sign out and sign in again to finish.": "Los cambios sensibles est├ín desactivados: la contrase├▒a de padres a├║n no ha llegado al servicio. Cierre sesi├│n y vuelva a iniciarla para terminar.",
   "Sensitive changes are locked until {time} after too many wrong password attempts.": "Los cambios sensibles est├ín bloqueados hasta las {time} por demasiados intentos de contrase├▒a err├│neos.",
   "Save the rule. You confirm it with your parent password.": "Guardar la regla. Se confirma con su contrase├▒a de padres.",
-  "Protect the app limits, schedule and groups so they can only be changed after you confirm with your parent password.": "Protege los l├¡mites de apps, el horario y los grupos para que solo se puedan cambiar tras confirmar con su contrase├▒a de padres."
+  "Protect the app limits, schedule and groups so they can only be changed after you confirm with your parent password.": "Protege los l├¡mites de apps, el horario y los grupos para que solo se puedan cambiar tras confirmar con su contrase├▒a de padres.",
+  "Your parent password: it signs you in and confirms sensitive changes (8-64 characters). Set one before anything else.": "Su contrase├▒a de padres: inicia su sesi├│n y confirma los cambios sensibles (8-64 caracteres). Defina una antes que nada."
 }
