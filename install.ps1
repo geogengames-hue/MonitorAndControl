@@ -34,7 +34,12 @@ param(
     [string]$UpdateSha256Url = '',
     [int]$AutoCheckHours = 0,
     [string]$UpdateUsername = '',
-    [string]$UpdatePassword = ''
+    [string]$UpdatePassword = '',
+
+    # Remote dashboard and Remote PIN configuration
+    [bool]$EnableRemoteDashboard = $true,
+    [int]$DashboardPort = 5000,
+    [string]$RemotePin = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -154,6 +159,38 @@ sc.exe create $ServiceName binPath= "`"$watchdogExe`"" start= auto obj= LocalSys
 sc.exe description $ServiceName "Restarts DeviceMon.exe if it is stopped." | Out-Null
 sc.exe failure $ServiceName reset= 60 actions= restart/5000/restart/5000/restart/5000 | Out-Null
 sc.exe failureflag $ServiceName 1 | Out-Null
+
+# --- Configure Windows Firewall for the dashboard (hosted by GameHost.exe) ---
+# Detect EnableRemoteDashboard and DashboardPort from appsettings.json if not passed explicitly
+$installedSettings = Join-Path $InstallDir 'appsettings.json'
+if (Test-Path -LiteralPath $installedSettings) {
+    try {
+        $json = Get-Content -LiteralPath $installedSettings -Raw | ConvertFrom-Json
+        if (-not $PSBoundParameters.ContainsKey('EnableRemoteDashboard') -and $null -ne $json.EnableRemoteDashboard) {
+            $EnableRemoteDashboard = [bool]$json.EnableRemoteDashboard
+        }
+        if (-not $PSBoundParameters.ContainsKey('DashboardPort') -and $null -ne $json.DashboardPort -and $json.DashboardPort -gt 0) {
+            $DashboardPort = [int]$json.DashboardPort
+        }
+    } catch { }
+}
+
+$firewallRule = 'DeviceMon dashboard (GameHost)'
+Remove-NetFirewallRule -DisplayName $firewallRule -ErrorAction SilentlyContinue
+if ($EnableRemoteDashboard) {
+    New-NetFirewallRule -DisplayName $firewallRule -Direction Inbound -Action Allow -Protocol TCP `
+        -Program $watchdogExe -LocalPort $DashboardPort -Profile Any | Out-Null
+    Write-Host "Inbound firewall rule configured for port $DashboardPort (remote dashboard: enabled)."
+} else {
+    Write-Host "Remote dashboard is disabled (local access only); no inbound firewall rule added."
+}
+
+# --- Optional: configure Remote PIN if passed ---
+if (-not [string]::IsNullOrWhiteSpace($RemotePin)) {
+    & "$watchdogExe" --set-remote-pin "$RemotePin" | Out-Null
+    Write-Host "Remote changes PIN configured."
+}
+
 Start-Service -Name $ServiceName
 
 Write-Host ""

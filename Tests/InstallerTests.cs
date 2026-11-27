@@ -210,7 +210,96 @@ internal static class InstallerTests
             Check(!string.IsNullOrWhiteSpace(InstallerLocalization.KeptSettingsImportedLog), $"KeptSettingsImportedLog for {lang}");
             Check(!string.IsNullOrWhiteSpace(InstallerLocalization.KeptSettingsExistingLog), $"KeptSettingsExistingLog for {lang}");
             Check(!string.IsNullOrWhiteSpace(InstallerLocalization.NewOptionsDefaultNotice("Opt")), $"NewOptionsDefaultNotice for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemoteDialogTitle), $"RemoteDialogTitle for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemoteDialogIntro), $"RemoteDialogIntro for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemoteEnableOption), $"RemoteEnableOption for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemoteDisableOption), $"RemoteDisableOption for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePortLabel), $"RemotePortLabel for {lang}");
+            Check(!string.IsNullOrWhiteSpace(string.Format(InstallerLocalization.RemotePortInUse, 5000)), $"RemotePortInUse for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePortInvalid), $"RemotePortInvalid for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinSectionHeader), $"RemotePinSectionHeader for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinExistingKeep), $"RemotePinExistingKeep for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinExistingChange), $"RemotePinExistingChange for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinLabel), $"RemotePinLabel for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinConfirmLabel), $"RemotePinConfirmLabel for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinMismatch), $"RemotePinMismatch for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinTooShortOrWeak), $"RemotePinTooShortOrWeak for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemoteConfigLogEnabled(5000)), $"RemoteConfigLogEnabled for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemoteConfigLogDisabled), $"RemoteConfigLogDisabled for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinLogSet), $"RemotePinLogSet for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinLogKept), $"RemotePinLogKept for {lang}");
+            Check(!string.IsNullOrWhiteSpace(InstallerLocalization.RemotePinLogNotSet), $"RemotePinLogNotSet for {lang}");
         }
+        return Task.CompletedTask;
+    }
+
+    public static Task RemotePinSetupAcceptsAndStoresPin()
+    {
+        // Validation
+        Check(!RemotePinSetup.IsAcceptable("12345", out _), "Too short PIN must be rejected");
+        Check(!RemotePinSetup.IsAcceptable("111111", out _), "PIN with only 1 distinct char must be rejected");
+        Check(!RemotePinSetup.IsAcceptable("121212", out _), "PIN with only 2 distinct chars must be rejected");
+        Check(RemotePinSetup.IsAcceptable("123456", out _), "Valid 6-char PIN with 6 distinct chars must be accepted");
+        Check(RemotePinSetup.IsAcceptable("SecretPIN-99", out _), "Valid alphanumeric PIN must be accepted");
+
+        // Storage and detection
+        string tempDir = NewTempDir();
+        try
+        {
+            Check(!RemotePinSetup.IsConfigured(tempDir), "Unconfigured dir must return false");
+            RemotePinSetup.SetPin(tempDir, "Secret123");
+            Check(RemotePinSetup.IsConfigured(tempDir), "Configured dir must return true");
+
+            // Verify with ScreenTime RemotePinStore
+            string pinFile = Path.Combine(tempDir, "Protected", "remote-pin.json");
+            var store = new MonitorAndControl.ScreenTime.RemotePinStore(pinFile);
+            var (configured, lockedUntil, _) = store.GetStatus(DateTimeOffset.UtcNow);
+            Check(configured && lockedUntil == null, "ScreenTime RemotePinStore must recognize the PIN record");
+            var result = store.Verify("Secret123", DateTimeOffset.UtcNow);
+            Check(result.Status == MonitorAndControl.ScreenTime.RemotePinStatus.Ok, "PIN must verify successfully");
+            var wrongResult = store.Verify("WrongPin123", DateTimeOffset.UtcNow);
+            Check(wrongResult.Status == MonitorAndControl.ScreenTime.RemotePinStatus.Wrong, "Wrong PIN must be rejected");
+        }
+        finally
+        {
+            try
+            {
+                string prot = Path.Combine(tempDir, "Protected");
+                if (Directory.Exists(prot))
+                {
+                    foreach (var f in Directory.GetFiles(prot)) File.Delete(f);
+                    Directory.Delete(prot);
+                }
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public static Task RemoteConfigIsReadAndUpdatedInAppSettings()
+    {
+        string tempDir = NewTempDir();
+        try
+        {
+            string jsonPath = Path.Combine(tempDir, "appsettings.json");
+            File.WriteAllText(jsonPath, """{ "DashboardPort": 5000, "EnableRemoteDashboard": true }""");
+
+            var (remote, port) = AppSettingsMigration.ReadRemoteConfig(jsonPath);
+            Check(remote == true && port == 5000, "ReadRemoteConfig must read existing values");
+
+            AppSettingsMigration.UpdateRemoteConfig(jsonPath, enableRemote: false, port: 5050);
+            var (updatedRemote, updatedPort) = AppSettingsMigration.ReadRemoteConfig(jsonPath);
+            Check(updatedRemote == false && updatedPort == 5050, "UpdateRemoteConfig must update values");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+
         return Task.CompletedTask;
     }
 }

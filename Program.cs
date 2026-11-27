@@ -571,8 +571,27 @@ internal static class Program
         var webTask = Task.Run(() => StartWebServer(config));
     }
 
+    private static bool IsWatchdogServiceRunning()
+    {
+        try
+        {
+            using var sc = new System.ServiceProcess.ServiceController(WatchdogServiceName);
+            return sc.Status == System.ServiceProcess.ServiceControllerStatus.Running;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static async Task StartWebServer(AppConfig config)
     {
+        if (IsWatchdogServiceRunning())
+        {
+            Logger.Instance.Info("Dashboard is hosted by GameHost service.");
+            return;
+        }
+
         try
         {
             await DashboardServer.StartAsync(
@@ -580,9 +599,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            File.AppendAllText(
-                Path.Combine(Path.GetTempPath(), "SystemHelper_error.log"),
-                $"{DateTime.Now}: Web server error: {ex}");
+            Logger.Instance.Warn($"Standalone dashboard web server not started: {ex.Message}");
         }
     }
 

@@ -195,7 +195,16 @@ public static class ScreenTimeFiles
         try
         {
             File.WriteAllText(temp, JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true }));
-            if (File.Exists(path)) File.Replace(temp, path, path + ".bak");
+            if (File.Exists(path))
+            {
+                var bak = path + ".bak";
+                try { File.Replace(temp, path, bak); }
+                catch
+                {
+                    try { File.Copy(path, bak, overwrite: true); } catch { }
+                    File.Copy(temp, path, overwrite: true);
+                }
+            }
             else File.Move(temp, path);
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }

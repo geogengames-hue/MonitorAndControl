@@ -6,6 +6,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>GameHost</AssemblyName>
     <Company>DeviceMon</Company>
     <Product>GameHost</Product>
@@ -17,12 +18,26 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MailKit" Version="4.17.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.28" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Shared screen-time protocol/rules, also compiled into DeviceMon. -->
+    <!-- Shared core, data, services and web dashboard, also compiled into DeviceMon. -->
+    <Compile Include="..\NativeMethods.cs" Link="NativeMethods.cs" />
+    <Compile Include="..\Data\*.cs" Link="Data\%(Filename)%(Extension)" />
+    <Compile Include="..\Models\*.cs" Link="Models\%(Filename)%(Extension)" />
+    <Compile Include="..\Services\*.cs" Link="Services\%(Filename)%(Extension)" />
     <Compile Include="..\ScreenTime\*.cs" Link="ScreenTime\%(Filename)%(Extension)" />
+    <Compile Include="..\Web\*.cs" Link="Web\%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\Resources\*.resx" Link="Resources\%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>
