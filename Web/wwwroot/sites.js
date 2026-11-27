@@ -84,7 +84,8 @@ async function loadSiteLimits() {
     // Rules for everyone and rules for one Windows account share one table.
     const [shared, own] = await Promise.all([api('/api/site-limits'), api('/api/user-site-limits'), loadAccountChoices()]);
     fillAccountSelect(siteEl('account'));
-    const rules = [...shared.map(r => ({ ...r, userSid: '' })), ...own];
+    followViewAccount(siteEl('account'));
+    const rules = [...shared.map(r => ({ ...r, userSid: '' })), ...own].filter(r => !viewSid || !r.userSid || r.userSid === viewSid);
     holder.replaceChildren();
     if (!rules.length) {
       const p = document.createElement('p');
@@ -290,6 +291,7 @@ appListEditor({
 // ---- app limits for one Windows account
 const ulEl = id => document.getElementById('ul-' + id);
 let ulAccounts = [];
+let ulLastViewSid = '';
 
 function ulMessage(text) {
   const box = ulEl('message');
@@ -309,7 +311,9 @@ async function loadUserLimits(refreshAccounts = true) {
       } catch { /* keep the previous list */ }
     }
     const select = ulEl('account');
-    const chosen = select.value;
+    // The form follows the account chosen in the account bar; a manual choice is kept until that changes.
+    const chosen = viewSid !== ulLastViewSid ? viewSid : select.value;
+    ulLastViewSid = viewSid;
     select.replaceChildren();
     if (!ulAccounts.length) {
       const o = document.createElement('option');
@@ -320,7 +324,8 @@ async function loadUserLimits(refreshAccounts = true) {
     ulAccounts.forEach(a => { const o = document.createElement('option'); o.value = a.sid; o.textContent = a.name; select.appendChild(o); });
     if (ulAccounts.some(a => a.sid === chosen)) select.value = chosen;
 
-    const [rules, known] = await Promise.all([api('/api/user-limits'), api('/api/apps')]);
+    const [allRules, known] = await Promise.all([api('/api/user-limits'), api('/api/apps')]);
+    const rules = viewSid ? allRules.filter(rule => rule.userSid === viewSid) : allRules;
     const list = ulEl('app-list');
     list.replaceChildren();
     [...new Set(Object.values(known))].sort().forEach(name => { const o = document.createElement('option'); o.value = name; list.appendChild(o); });

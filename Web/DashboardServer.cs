@@ -249,14 +249,25 @@ public class DashboardServer
             return Results.Ok(new { status = "rotated" });
         });
 
-        app.MapGet("/api/usage/today", async () =>
-            Results.Json(await usageTracker.GetTodayUsageIncludingPendingAsync(), JsonOpts));
+        // ?sid= limits the list to one Windows account's own time (without it: everyone added up).
+        app.MapGet("/api/usage/today", async (string? sid) =>
+        {
+            if (!string.IsNullOrEmpty(sid) && !AccountIdentity.IsValidSid(sid))
+                return Results.BadRequest(new { error = "Invalid account." });
+            return Results.Json(await usageTracker.GetTodayUsageIncludingPendingAsync(sid), JsonOpts);
+        });
+
+        // One line per Windows account: how much app time it has used today and its top app (for the Today page).
+        app.MapGet("/api/usage/accounts/today", async () =>
+            Results.Json(await usageTracker.GetTodayAccountSummaryAsync(), JsonOpts));
 
         app.MapGet("/api/usage/groups/today", async () =>
             Results.Json(await usageTracker.GetTodayGroupUsageIncludingPendingAsync(), JsonOpts));
 
-        app.MapGet("/api/usage/history", async (int days = 7, string? from = null, string? to = null) =>
+        app.MapGet("/api/usage/history", async (int days = 7, string? from = null, string? to = null, string? sid = null) =>
         {
+            if (!string.IsNullOrEmpty(sid) && !AccountIdentity.IsValidSid(sid))
+                return Results.BadRequest(new { error = "Invalid account." });
             DateTime startDate;
             DateTime endDate;
 
@@ -279,7 +290,7 @@ public class DashboardServer
             if ((endDate - startDate).TotalDays > 366)
                 return Results.BadRequest(new { error = "History range is limited to 366 days." });
 
-            return Results.Json(await db.GetUsageRangeAsync(startDate, endDate), JsonOpts);
+            return Results.Json(await db.GetUsageRangeAsync(startDate, endDate, sid), JsonOpts);
         });
 
         // Website limits: blocked outright (0 minutes) or a daily allowance. The SYSTEM service turns them into browser policy.
@@ -509,13 +520,15 @@ public class DashboardServer
         });
 
         // This week compared with last week, per day and per app (also used by the summary email).
-        app.MapGet("/api/report/weekly", async (string? end = null) =>
+        app.MapGet("/api/report/weekly", async (string? end = null, string? sid = null) =>
         {
             var endDate = ParentClock.Today;
             if (!string.IsNullOrWhiteSpace(end) && !DateTime.TryParse(end, out endDate))
                 return Results.BadRequest(new { error = "Invalid date." });
+            if (!string.IsNullOrEmpty(sid) && !AccountIdentity.IsValidSid(sid))
+                return Results.BadRequest(new { error = "Invalid account." });
             endDate = endDate.Date;
-            return Results.Json(WeeklyReport.Build(await db.GetUsageRangeAsync(endDate.AddDays(-13), endDate), endDate), JsonOpts);
+            return Results.Json(WeeklyReport.Build(await db.GetUsageRangeAsync(endDate.AddDays(-13), endDate, sid), endDate), JsonOpts);
         });
 
         app.MapGet("/api/usage/groups/history", async (int days = 7, string? from = null, string? to = null) =>
@@ -557,17 +570,36 @@ public class DashboardServer
             if (auth != null) return auth;
 
             var minutes = 15;
+            var untilBedtime = false;
             if (ctx.Request.ContentLength > 0)
             {
                 using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
                 if (doc.RootElement.TryGetProperty("minutes", out var mins))
                     minutes = mins.GetInt32();
+                untilBedtime = doc.RootElement.TryGetProperty("untilBedtime", out var bedtime) && bedtime.ValueKind == JsonValueKind.True;
             }
 
-            if (minutes is < 1 or > 240)
-                return Results.BadRequest(new { error = "Pause duration must be between 1 and 240 minutes." });
+            TimeSpan duration;
+            if (untilBedtime)
+            {
+                // Until the end of today's allowed hours (the latest open schedule window), or midnight if there is none.
+                var now = ParentClock.Now;
+                var rules = (await scheduler.GetRulesAsync()).ToList();
+                var allowedUntil = rules.Select(r => r.AppName ?? "").Append("").Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(app => SchedulerService.GetCurrentAllowedWindowEnd(rules, app, now))
+                    .Where(end => end != null).Max() ?? now.Date.AddDays(1);
+                if (allowedUntil <= now)
+                    return Results.BadRequest(new { error = "No remaining allowed time today." });
+                duration = allowedUntil - now;
+            }
+            else
+            {
+                if (minutes is < 1 or > 240)
+                    return Results.BadRequest(new { error = "Pause duration must be between 1 and 240 minutes." });
+                duration = TimeSpan.FromMinutes(minutes);
+            }
 
-            var pausedUntil = enforcer.PauseFor(TimeSpan.FromMinutes(minutes));
+            var pausedUntil = enforcer.PauseFor(duration);
             return Results.Ok(new { status = "paused", pausedUntil });
         });
 
@@ -620,11 +652,15 @@ public class DashboardServer
             return Results.Ok(new { status = "blocked", killed });
         });
 
-        app.MapGet("/api/live", () =>
+        app.MapGet("/api/live", async () =>
         {
             var trackingSuspended = tracker.IsUsageTrackingSuspended(out var trackingState);
+            var sessions = await db.GetLiveSessionsAsync(LiveSessionPublisher.MaxAge);
             return Results.Json(new
             {
+                account = Environment.UserName,
+                accountSid = AccountIdentity.CurrentSid,
+                sessions = sessions.Select(s => new { sid = s.UserSid, account = s.Account, app = s.App, process = s.Process, state = s.State }),
                 currentApp = tracker.CurrentAppName ?? "None",
                 currentProcess = tracker.CurrentProcessName ?? "None",
                 isTracking = tracker.CurrentAppName != null,
@@ -872,8 +908,17 @@ public class DashboardServer
             return Results.Ok();
         });
 
-        app.MapGet("/api/bonus/today", async () =>
-            Results.Json(await db.GetTodayBonusTimeAsync(), JsonOpts));
+        // Without ?sid= the bonus given to everyone; with it, what that Windows account has in total (everyone's plus its own).
+        app.MapGet("/api/bonus/today", async (string? sid) =>
+        {
+            if (string.IsNullOrEmpty(sid))
+                return Results.Json(await db.GetTodayBonusTimeAsync(), JsonOpts);
+            if (!AccountIdentity.IsValidSid(sid))
+                return Results.BadRequest(new { error = "Invalid account." });
+            var date = ParentClock.Today.ToString("yyyy-MM-dd");
+            return Results.Json((await AccountAllowances.BonusForAccountAsync(db, sid))
+                .Select(b => new AppBonusTime { AppName = b.Key, Date = date, BonusMinutes = b.Value }), JsonOpts);
+        });
 
         app.MapPost("/api/bonus", async (HttpContext ctx) =>
         {
@@ -881,6 +926,7 @@ public class DashboardServer
             if (auth != null) return auth;
 
             string appName = "";
+            string userSid = "";
             var minutes = 0;
             if (ctx.Request.ContentLength > 0)
             {
@@ -890,18 +936,24 @@ public class DashboardServer
                     appName = Clean(app.GetString());
                 if (root.TryGetProperty("minutes", out var mins))
                     minutes = mins.GetInt32();
+                // Empty = a bonus for every Windows account; otherwise only for this one.
+                if (root.TryGetProperty("userSid", out var sidElement) && sidElement.ValueKind == JsonValueKind.String)
+                    userSid = sidElement.GetString() ?? "";
             }
 
             if (!IsValidAppName(appName) || minutes is < 1 or > 240)
                 return Results.BadRequest(new { error = "Bonus time requires a valid app name and 1-240 minutes." });
+            if (userSid.Length > 0 && !AccountIdentity.IsValidSid(userSid))
+                return Results.BadRequest(new { error = "Choose a Windows account." });
 
-            var limits = await db.GetLimitRulesAsync();
-            if (!limits.Any(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+            if (!await HasLimitForAsync(db, appName, userSid))
                 return Results.BadRequest(new { error = "Bonus time can only be granted to apps with a limit." });
 
-            var totalBonusMinutes = await db.AddTodayBonusMinutesAsync(appName, minutes);
+            var totalBonusMinutes = userSid.Length > 0
+                ? await db.AddUserBonusMinutesAsync(userSid, appName, minutes)
+                : await db.AddTodayBonusMinutesAsync(appName, minutes);
             enforcer.ClearExceeded(appName);
-            Logger.Instance.Warn($"Bonus time granted: {appName} +{minutes} min today ({totalBonusMinutes} min total)");
+            Logger.Instance.Warn($"Bonus time granted: {appName} +{minutes} min today ({totalBonusMinutes} min total{(userSid.Length > 0 ? $", account {userSid}" : ", everyone")})");
             return Results.Ok(new { status = "granted", appName, bonusMinutes = totalBonusMinutes });
         });
 
@@ -911,38 +963,58 @@ public class DashboardServer
             if (auth != null) return auth;
 
             string appName = "";
+            string userSid = "";
             if (ctx.Request.ContentLength > 0)
             {
                 using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
                 if (doc.RootElement.TryGetProperty("appName", out var app))
                     appName = Clean(app.GetString());
+                if (doc.RootElement.TryGetProperty("userSid", out var sidElement) && sidElement.ValueKind == JsonValueKind.String)
+                    userSid = sidElement.GetString() ?? "";
             }
 
             if (!IsValidAppName(appName))
                 return Results.BadRequest(new { error = "A valid app name is required." });
+            if (userSid.Length > 0 && !AccountIdentity.IsValidSid(userSid))
+                return Results.BadRequest(new { error = "Choose a Windows account." });
 
-            var limits = await db.GetLimitRulesAsync();
-            var limit = limits.FirstOrDefault(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
+            var limit = userSid.Length > 0
+                ? (await db.GetUserLimitRulesAsync(userSid)).FirstOrDefault(l => l.Enabled && l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase))
+                : null;
+            limit ??= (await db.GetLimitRulesAsync()).FirstOrDefault(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
             if (limit == null)
                 return Results.BadRequest(new { error = "Bonus time can only be granted to apps with a limit." });
 
             var now = ParentClock.Now;
             var rules = await scheduler.GetRulesAsync();
-            // App bonus time is shared by everyone, so only the schedule rules for everyone bound it.
-            var allowedUntil = SchedulerService.GetCurrentAllowedWindowEnd(rules.Where(r => string.IsNullOrEmpty(r.UserSid)), appName, now)
+            // The schedule rules for everyone, and for the chosen account, bound how far the extra time may reach.
+            var allowedUntil = SchedulerService.GetCurrentAllowedWindowEnd(rules.Where(r => string.IsNullOrEmpty(r.UserSid) || r.UserSid == userSid), appName, now)
                 ?? now.Date.AddDays(1);
             if (allowedUntil <= now)
                 return Results.BadRequest(new { error = "No remaining allowed time today." });
 
-            var usageSeconds = await db.GetAppTodaySecondsAsync(appName);
-            var currentBonus = await db.GetTodayBonusMinutesAsync(appName);
+            // For one account: its own time and bonus. For everyone: enough for the busiest account.
+            long usageSeconds;
+            int currentBonus;
+            if (userSid.Length > 0)
+            {
+                usageSeconds = (await db.GetUserAppUsageTodayAsync(userSid)).GetValueOrDefault(appName);
+                currentBonus = (await AccountAllowances.BonusForAccountAsync(db, userSid)).GetValueOrDefault(appName);
+            }
+            else
+            {
+                usageSeconds = await db.GetAppTodaySecondsAsync(appName);
+                currentBonus = await db.GetTodayBonusMinutesAsync(appName);
+            }
             var currentAllowanceMinutes = limit.DailyMaxMinutes + currentBonus;
             var desiredAllowanceMinutes = (int)Math.Ceiling((usageSeconds + (allowedUntil - now).TotalSeconds) / 60.0);
             var minutesToAdd = Math.Clamp(desiredAllowanceMinutes - currentAllowanceMinutes, 1, 720);
 
-            var totalBonusMinutes = await db.AddTodayBonusMinutesAsync(appName, minutesToAdd);
+            var totalBonusMinutes = userSid.Length > 0
+                ? await db.AddUserBonusMinutesAsync(userSid, appName, minutesToAdd)
+                : await db.AddTodayBonusMinutesAsync(appName, minutesToAdd);
             enforcer.ClearExceeded(appName);
-            Logger.Instance.Warn($"Bonus time granted until bedtime: {appName} +{minutesToAdd} min today ({totalBonusMinutes} min total, until {allowedUntil:g})");
+            Logger.Instance.Warn($"Bonus time granted until bedtime: {appName} +{minutesToAdd} min today ({totalBonusMinutes} min total{(userSid.Length > 0 ? $", account {userSid}" : ", everyone")}, until {allowedUntil:g})");
             return Results.Ok(new
             {
                 status = "granted",
@@ -2050,6 +2122,10 @@ public class DashboardServer
     private static string Clean(string? value) => InputValidation.Clean(value);
 
     private static bool IsValidAppName(string value) => InputValidation.IsValidAppName(value);
+    /// <summary>Whether the app has a limit that applies to everyone or, with an account, to that account.</summary>
+    private static async Task<bool> HasLimitForAsync(UsageDatabase db, string appName, string userSid) =>
+        (await db.GetLimitRulesAsync()).Any(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase))
+        || userSid.Length > 0 && (await db.GetUserLimitRulesAsync(userSid)).Any(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsValidProcessName(string value) => InputValidation.IsValidProcessName(value);
 

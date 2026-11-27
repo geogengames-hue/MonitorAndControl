@@ -31,6 +31,10 @@
   <main class="main">
     <div id="alert-bar" class="alert-bar hidden"></div>
     <div id="error-bar" class="error-bar hidden"></div>
+    <div id="account-bar" class="account-bar hidden" role="group" aria-labelledby="account-bar-label" title="Whose time the Live, Today, History and Limits pages show, and who receives extra time you give. All (sum) adds everyone up.">
+      <span id="account-bar-label" class="account-bar-label">Viewing account</span>
+      <div id="account-chips" class="account-chips"></div><div id="account-options" class="account-options" role="region" aria-live="polite"></div>
+    </div>
     <div id="view-screen-time" class="view">
       <div class="page-heading">
         <div><span class="eyebrow">Family safety console</span><h2>PC Time</h2>
@@ -136,14 +140,17 @@
           <div class="hero-glow"></div>
           <div class="hero-content">
             <div class="live-label" title="The app the child is using right now.">Currently Active</div>
+            <div class="live-account multi-only" id="live-account" title="The Windows account this page is showing."></div>
             <div class="live-app" id="live-app">Waiting...</div>
             <div class="live-proc" id="live-proc"></div>
             <div class="live-status" id="enforcement-status"></div>
+            <div class="live-sessions multi-only" id="live-sessions" title="Other Windows accounts signed in on this PC and what they are doing."></div>
           </div>
           <div class="hero-visual" aria-hidden="true"><i></i><i></i><i></i><span>LIVE</span></div>
         </section>
         <section class="live-card diagnostic-card">
           <div class="card-heading"><div><div class="live-label" title="Shows how each running app is being counted: in use, in the background or ignored.">Tracking Diagnostics</div><p>How running applications are being counted</p></div><span class="card-mark">01</span></div>
+          <p class="scope-note multi-only hidden" id="tracking-owner"></p>
           <div class="tracking-summary" id="tracking-summary"></div>
           <div class="tracking-diagnostics" id="tracking-diagnostics"></div>
         </section>
@@ -153,9 +160,18 @@
         </section>
         <section class="live-card action-card">
           <div class="card-heading"><div><div class="live-label" title="One-click controls that take effect immediately.">Quick Actions</div><p>Immediate controls</p></div><span class="card-mark">03</span></div>
+          <div class="live-subhead">Pause limits</div>
+          <div class="quick-actions duration-dock">
+            <button id="action-pause-15" title="Stop closing apps for 15 minutes. Limits resume automatically." class="btn-secondary" type="button">15m</button>
+            <button id="action-pause-30" title="Stop closing apps for 30 minutes. Limits resume automatically." class="btn-secondary" type="button">30m</button>
+            <button id="action-pause-60" title="Stop closing apps for 60 minutes. Limits resume automatically." class="btn-secondary" type="button">60m</button>
+            <button id="action-pause-bedtime" title="Stop closing apps until the end of today&#x27;s allowed hours, or midnight if there is no schedule." class="btn-secondary" type="button">Until Bedtime</button>
+            <span class="custom-minutes">
+              <input type="number" id="action-pause-custom" min="1" max="240" step="1" placeholder="Custom minutes" title="Stop closing apps for this many minutes (1-240). Press Enter or Pause." aria-label="Custom pause in minutes">
+              <button id="action-pause-custom-go" title="Stop closing apps for the minutes typed in the box. Limits resume automatically." class="btn-secondary" type="button">Pause</button>
+            </span>
+          </div>
           <div class="quick-actions action-dock">
-            <button id="action-pause-15" title="Stop closing apps for 15 minutes. Limits resume automatically." class="btn-secondary">Pause 15m</button>
-            <button id="action-pause-30" title="Stop closing apps for 30 minutes. Limits resume automatically." class="btn-secondary">Pause 30m</button>
             <button id="action-resume" title="End the pause now and enforce limits again." class="btn-secondary">Resume</button>
             <button id="action-reset-today" title="Set today&#x27;s recorded time to zero for all apps. Earlier days are not affected." class="btn-secondary">Reset Today</button>
             <button id="action-block-all" title="Close every tracked app that is running right now. They can be opened again." class="btn-danger">Block All Now</button>
@@ -163,17 +179,39 @@
         </section>
         <section class="live-card extend-card">
           <div class="card-heading"><div><div class="live-label" title="Give an app extra time today without changing its daily limit.">Extend App Time</div><p>Grant a temporary exception</p></div><span class="card-mark">04</span></div>
-          <div class="quick-actions extend-dock">
+          <p class="scope-note multi-only" id="extend-target"></p>
+          <div class="quick-actions duration-dock">
             <select id="quick-extend-app" title="Choose the app to give extra time to."><option value="">Choose app</option></select>
-            <button id="quick-extend-15" title="Add 15 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary">+15m</button>
-            <button id="quick-extend-30" title="Add 30 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary">+30m</button>
-            <button id="quick-extend-bedtime" title="Keep the chosen app allowed until the end of today&#x27;s allowed hours, or midnight if there is no schedule." class="btn-secondary">Until Bedtime</button>
+            <button id="quick-extend-15" title="Add 15 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary" type="button">+15m</button>
+            <button id="quick-extend-30" title="Add 30 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary" type="button">+30m</button>
+            <button id="quick-extend-60" title="Add 60 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary" type="button">+60m</button>
+            <button id="quick-extend-bedtime" title="Keep the chosen app allowed until the end of today&#x27;s allowed hours, or midnight if there is no schedule." class="btn-secondary" type="button">Until Bedtime</button>
+            <span class="custom-minutes">
+              <input type="number" id="quick-extend-custom" min="1" max="240" step="1" placeholder="Custom minutes" title="Add this many minutes to the chosen app&#x27;s allowance for today (1-240). Press Enter or Add." aria-label="Custom extra minutes for the app">
+              <button id="quick-extend-custom-go" title="Add the minutes typed in the box to the chosen app&#x27;s allowance for today." class="btn-secondary" type="button">Add</button>
+            </span>
+          </div>
+        </section>
+        <section class="live-card extend-card" id="live-time-card">
+          <div class="card-heading"><div><div class="live-label" title="Give a Windows account more total PC time today, on top of its daily allowance (the PC Time rule).">Extend PC Time</div><p>Add to the total time for today</p></div><span class="card-mark">05</span></div>
+          <div id="live-time-left" class="live-time-left" role="status" aria-live="polite"></div>
+          <div class="quick-actions live-time-dock">
+            <select id="live-time-account" class="multi-only" title="The Windows account that gets the extra PC time."></select>
+            <button id="live-time-15" title="Add 15 minutes to today&#x27;s total PC time of this account." class="btn-secondary" type="button">+15m</button>
+            <button id="live-time-30" title="Add 30 minutes to today&#x27;s total PC time of this account." class="btn-secondary" type="button">+30m</button>
+            <button id="live-time-60" title="Add 60 minutes to today&#x27;s total PC time of this account." class="btn-secondary" type="button">+60m</button>
+            <span class="custom-minutes">
+              <input type="number" id="live-time-custom" min="1" max="240" step="1" placeholder="Custom minutes" title="Add this many minutes to today&#x27;s total PC time of this account (1-240). Press Enter or Add." aria-label="Custom extra PC minutes">
+              <button id="live-time-custom-go" title="Add the minutes typed in the box to today&#x27;s total PC time of this account." class="btn-secondary" type="button">Add</button>
+            </span>
           </div>
         </section>
       </div>
     </div>
     <div id="view-today" class="view">
       <h2>Today's Usage</h2>
+      <p id="today-scope" class="scope-note multi-only"></p>
+      <div id="today-accounts" class="account-overview multi-only"></div>
       <label title="Split each app&#x27;s time into foreground (window in use) and background (running behind other windows)." style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
         <input type="checkbox" id="today-breakdown" style="width:auto"> Show foreground/background breakdown
       </label>
@@ -186,6 +224,7 @@
     </div>
     <div id="view-history" class="view">
       <h2>Usage History</h2>
+      <p id="history-scope" class="scope-note multi-only"></p>
       <div class="history-toolbar">
         <div class="history-range">
           <button data-days="7" class="active">7 Days</button>
@@ -252,6 +291,7 @@
     </div>
     <div id="view-limits" class="view">
       <h2>App Limits</h2>
+      <p id="limits-scope" class="scope-note multi-only"></p>
       <div id="limits-protect-banner" class="screen-notice hidden" role="status"></div>
       <p style="font-size:13px;color:#888">Background and overlay settings apply per process and save immediately, even when no daily limit is set.</p>
       <h3 title="All apps in a group share one daily time pool. Apps running together count once.">Shared Limit Groups</h3>
@@ -261,7 +301,7 @@
         <h3>Create / Edit Group</h3>
         <input type="text" id="group-name" title="A name for the group, for example Games." placeholder="Group name (e.g. Games)">
         <input type="number" id="group-minutes" title="Minutes per day that all apps in the group share." placeholder="Minutes per day" min="1" max="1440" value="180">
-        <select id="group-account" title="Everyone shares this group, or it counts only one Windows account's own time."><option value="">Everyone</option></select>
+        <select id="group-account" class="multi-only" title="Everyone shares this group, or it counts only one Windows account's own time."><option value="">Everyone</option></select>
         <select id="group-category" title="Also count every other app in this category, including ones first opened later. An app ticked in another group stays in that group.">
           <option value="">Only the apps ticked below</option>
           <option value="games">+ all Games</option>
@@ -288,10 +328,10 @@
         <button id="limit-save" title="Save this limit.">Save</button>
         <button id="limit-cancel" title="Stop editing and discard the changes." class="btn-secondary hidden">Cancel</button>
       </div>
-      <h3 class="individual-limits-title" title="App limits that count only one Windows account's own time, so each child can have their own allowance.">Limits for one account</h3>
-      <p style="font-size:13px;color:#888">The limits above add up everyone's time on this PC. A limit here counts only one Windows account's own time, so two children can each have their own allowance. It applies on top of the shared limits. Groups, schedule rules and website rules can also be set for one account (choose it in their forms). Homework mode applies to everyone.</p>
-      <div class="table-container" id="user-limits-table"></div>
-      <div class="add-form">
+      <h3 class="individual-limits-title multi-only" id="limits-one-account" title="App limits that count only one Windows account's own time, so each child can have their own allowance.">Limits for one account</h3>
+      <p class="multi-only" style="font-size:13px;color:#888">The limits above give every Windows account its own allowance, counted from that account's own time. A limit set here for one account replaces the shared limit for that app. Groups, schedule rules and website rules can also be set for one account (choose it in their forms). Homework mode applies to everyone.</p>
+      <div class="table-container multi-only" id="user-limits-table"></div>
+      <div class="add-form multi-only">
         <h3>Add / Edit Account Limit</h3>
         <select id="ul-account" title="The Windows account this limit applies to."></select>
         <input type="text" id="ul-app" list="ul-app-list" title="The app to limit, as shown in your tracked apps." placeholder="App name (e.g. Minecraft)" autocomplete="off">
@@ -310,7 +350,7 @@
       <div class="table-container" id="site-limits-table"></div>
       <div class="add-form">
         <h3>Add / Edit Website Limit</h3>
-        <select id="site-account" title="The rule applies to everyone, or only to one Windows account (counted from that account's own browsing, and in force while it is the account at the screen)."><option value="">Everyone</option></select>
+        <select id="site-account" class="multi-only" title="The rule applies to everyone, or only to one Windows account (counted from that account's own browsing, and in force while it is the account at the screen)."><option value="">Everyone</option></select>
         <input type="text" id="site-host" title="The site to limit, for example youtube.com. Its subdomains (m.youtube.com, music.youtube.com) are included." placeholder="Site (e.g. youtube.com)" autocomplete="off">
         <select id="site-mode" title="Block the site, limit it to some minutes a day, or always allow it (used with the allow-list switch above).">
           <option value="block">Block completely</option>
@@ -349,12 +389,12 @@
       </div>
     </div>
     <div id="view-schedule" class="view">
-      <h2>Allowed Hours Schedule</h2>
+      <h2>Allowed Hours Schedule</h2><p id="schedule-scope" class="scope-note multi-only"></p>
       <div id="schedule-protect-banner" class="screen-notice hidden" role="status"></div>
       <div class="table-container" id="schedule-table"></div>
       <div class="add-form">
         <h3>Add Allowed Hours Rule</h3>
-        <select id="schedule-account" title="The rule applies to everyone, or only to one Windows account."><option value="">Everyone</option></select>
+        <select id="schedule-account" class="multi-only" title="The rule applies to everyone, or only to one Windows account."><option value="">Everyone</option></select>
         <select id="schedule-app" title="Which app the rule applies to, or all apps.">
           <option value="">All apps</option>
         </select>

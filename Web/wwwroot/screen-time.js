@@ -26,9 +26,9 @@ const screenElement = id => document.getElementById('screen-' + id);
 const screenIsLocal = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
 
 // Returns why a remote change cannot be made right now, or '' when it can.
-function screenRemoteBlock() {
-  if (screenIsLocal || !screenData) return '';
-  const remote = screenData.remote;
+function screenRemoteBlock(data = screenData) {
+  if (screenIsLocal || !data) return '';
+  const remote = data.remote;
   if (!remote?.configured)
     return t('Remote changes are off. On the child PC, run GameHost.exe --set-remote-pin as administrator, or open this dashboard on that PC.');
   const until = remote.lockedUntilUtc ? new Date(remote.lockedUntilUtc) : null;
@@ -353,7 +353,10 @@ async function loadScreenTime(force = false) {
       option.textContent = account.name;
       select.appendChild(option);
     });
-    if (eligibleAccounts.some(a => a.sid === previousSid)) select.value = previousSid;
+    // With an account chosen in the account bar, this page shows that account.
+    const barSid = typeof viewSid === 'string' ? viewSid : '';
+    if (eligibleAccounts.some(a => a.sid === barSid)) select.value = barSid;
+    else if (eligibleAccounts.some(a => a.sid === previousSid)) select.value = previousSid;
     else select.value = eligibleAccounts[0]?.sid || '';
     if (!eligibleAccounts.length) {
       const option = document.createElement('option');
@@ -365,6 +368,7 @@ async function loadScreenTime(force = false) {
     screenElement('message').textContent = data.error || remoteBlock || t('Accounts refreshed. Choose who to control and save the limit.');
     screenElement('message').classList.toggle('screen-error', !!data.error || !!remoteBlock);
     screenRenderSelection(force || !screenDirty || select.value !== previousSid);
+    renderAccountOptions();
     screenRenderRequests();
     screenRenderTimeZone();
     screenRenderPrograms();
@@ -381,7 +385,11 @@ async function loadScreenTime(force = false) {
   }
 }
 
-screenElement('account').addEventListener('change', () => screenRenderSelection(true));
+screenElement('account').addEventListener('change', () => {
+  screenRenderSelection(true);
+  // Picking an account here picks it in the account bar too, so every page agrees on who is selected.
+  if (isMultiUser() && screenElement('account').value) setViewAccount(screenElement('account').value);
+});
 screenElement('form').addEventListener('input', () => { screenDirty = true; });
 screenElement('refresh').addEventListener('click', () => loadScreenTime());
 
@@ -577,10 +585,98 @@ screenElement('auth-form').addEventListener('submit', async event => {
   }
   if (!screenElement('auth').open) {
     await loadScreenTime(true);
+    loadLiveTime();
     if (!screenData?.error) screenElement('message').textContent = t('Settings saved for the selected account.');
   }
 });
 
+// ---- Live page: give a Windows account more total PC time today (the "Extend PC Time" card).
+// It adds minutes to the account's extra time for today and is approved like any other PC Time change.
+let liveTimeData = null;
+let liveTimeLastViewSid = '';
+const liveTimeElement = id => document.getElementById('live-time-' + id);
+
+async function loadLiveTime() {
+  if (!liveTimeElement('left')) return;
+  try {
+    liveTimeData = await screenApi('/api/screen-time');
+  } catch (error) {
+    liveTimeData = { error: error.message, accounts: [], profiles: [] };
+  }
+  renderLiveTime();
+}
+
+function renderLiveTime() {
+  const data = liveTimeData;
+  if (!data) return;
+  const select = liveTimeElement('account');
+  const accounts = (data.accounts || []).filter(account => account.eligible);
+  // The card follows the account chosen in the account bar; a manual choice is kept until that changes.
+  const wanted = viewSid !== liveTimeLastViewSid ? viewSid : select.value;
+  liveTimeLastViewSid = viewSid;
+  // Rebuild the list only when it changed, so an open drop-down is not closed by the refresh.
+  if ([...select.options].map(o => o.value).join('|') !== accounts.map(a => a.sid).join('|')) {
+    select.replaceChildren();
+    accounts.forEach(account => {
+      const option = document.createElement('option');
+      option.value = account.sid;
+      option.textContent = account.name;
+      select.appendChild(option);
+    });
+  }
+  select.value = accounts.some(account => account.sid === wanted) ? wanted : accounts[0]?.sid || '';
+
+  const account = accounts.find(a => a.sid === select.value);
+  const profile = (data.profiles || []).find(p => p.userSid === select.value);
+  const left = liveTimeElement('left');
+  left.replaceChildren();
+  left.classList.remove('warning', 'exceeded');
+  const block = screenRemoteBlock(data);
+  let canGrant = false;
+  if (data.error) left.textContent = data.error;
+  else if (!account) left.textContent = t('No enabled standard account found');
+  else if (!profile?.enabled) left.textContent = t('{name} has no PC Time rule, so there is no total time to extend. Set one under PC Time.', { name: account.name });
+  else {
+    canGrant = !block;
+    const time = document.createElement('strong');
+    time.textContent = profile.remainingSeconds <= 0 ? t('Time is up') : screenDuration(profile.remainingSeconds);
+    left.append(account.name + ': ', time, profile.remainingSeconds <= 0 ? '' : ' ' + t('left today'),
+      profile.bonusMinutes ? ' ' + t('+ {n} min today', { n: profile.bonusMinutes }) : '');
+    left.classList.toggle('exceeded', profile.remainingSeconds <= 0);
+    left.classList.toggle('warning', profile.remainingSeconds > 0 && profile.remainingSeconds < 900);
+    if (block) left.append(document.createElement('br'), block);
+  }
+  ['15', '30', '60', 'custom', 'custom-go'].forEach(n => { liveTimeElement(n).disabled = !canGrant; });
+  renderAccountOptions();
+}
+
+function liveTimeGrant(minutes) {
+  const data = liveTimeData;
+  const sid = liveTimeElement('account').value;
+  const account = data?.accounts.find(a => a.sid === sid && a.eligible);
+  const profile = data?.profiles.find(p => p.userSid === sid);
+  if (!account || !profile?.enabled) return;
+  screenPending = {
+    userSid: account.sid,
+    dailyMinutes: profile.dailyMinutes,
+    weekendMinutes: profile.weekendMinutes ?? 0,
+    bedtimeStart: profile.bedtimeStart || '',
+    bedtimeEnd: profile.bedtimeEnd || '',
+    weekendBedtimeStart: profile.weekendBedtimeStart || '',
+    bonusMinutes: Math.min(1440, (profile.bonusMinutes ?? 0) + minutes),
+    breakAfterMinutes: profile.breakAfterMinutes ?? 0,
+    breakMinutes: profile.breakMinutes ?? 0,
+    enabled: true
+  };
+  screenOpenAuth(t('Add {n} minutes of PC time for {name} today.', { n: minutes, name: account.name }));
+}
+
+['15', '30', '60'].forEach(n => liveTimeElement(n).addEventListener('click', () => liveTimeGrant(Number(n))));
+wireCustomMinutes('live-time-custom', 'live-time-custom-go', liveTimeGrant);
+liveTimeElement('account').addEventListener('change', renderLiveTime);
+document.querySelector('.sidebar nav a[data-view="live"]').addEventListener('click', loadLiveTime);
+
 setInterval(() => {
   if (document.getElementById('view-screen-time').classList.contains('active') && !screenElement('auth').open) loadScreenTime();
+  if ((document.getElementById('view-live').classList.contains('active') || (isMultiUser() && viewSid)) && !screenElement('auth').open && !document.hidden) loadLiveTime();
 }, 5000);

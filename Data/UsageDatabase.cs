@@ -93,6 +93,23 @@ public class UsageDatabase : IDisposable
                 PRIMARY KEY (UserSid, AppName, Date)
             );
 
+            CREATE TABLE IF NOT EXISTS UserAppBonus (
+                UserSid TEXT NOT NULL,
+                AppName TEXT NOT NULL COLLATE NOCASE,
+                Date TEXT NOT NULL,
+                BonusMinutes INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (UserSid, AppName, Date)
+            );
+
+            CREATE TABLE IF NOT EXISTS LiveSessions (
+                UserSid TEXT PRIMARY KEY,
+                Account TEXT NOT NULL DEFAULT '',
+                App TEXT NOT NULL DEFAULT '',
+                Process TEXT NOT NULL DEFAULT '',
+                State TEXT NOT NULL DEFAULT 'active',
+                UpdatedUtc TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS ActivityHours (
                 Hour TEXT NOT NULL,
                 Kind TEXT NOT NULL,
@@ -217,6 +234,8 @@ public class UsageDatabase : IDisposable
         {
             "ALTER TABLE UsageRecords ADD COLUMN ForegroundSeconds INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE UsageRecords ADD COLUMN BackgroundSeconds INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE UserAppUsage ADD COLUMN ForegroundSeconds INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE UserAppUsage ADD COLUMN BackgroundSeconds INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE LimitGroups ADD COLUMN UserSid TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE LimitGroups ADD COLUMN Category TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE ScheduleRules ADD COLUMN UserSid TEXT NOT NULL DEFAULT '';"
@@ -396,6 +415,67 @@ public class UsageDatabase : IDisposable
         finally { _lock.Release(); }
     }
 
+    /// <summary>Today's usage of every Windows account: (account, app, total, foreground, background seconds).</summary>
+    public async Task<List<(string UserSid, string AppName, long Total, long Foreground, long Background)>> GetAllUserAppUsageTodayAsync()
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var list = new List<(string, string, long, long, long)>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT UserSid, AppName, Seconds, ForegroundSeconds, BackgroundSeconds FROM UserAppUsage WHERE Date = @date";
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+                list.Add((r.GetString(0), r.GetString(1), r.GetInt64(2), r.GetInt64(3), r.GetInt64(4)));
+            return list;
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>Today's extra minutes per app that were given to one Windows account alone.</summary>
+    public async Task<Dictionary<string, int>> GetUserBonusTodayAsync(string userSid)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT AppName, BonusMinutes FROM UserAppBonus WHERE UserSid = @sid AND Date = @date";
+            cmd.Parameters.AddWithValue("@sid", userSid);
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
+            using var r = await cmd.ExecuteReaderAsync();
+            while (await r.ReadAsync()) map[r.GetString(0)] = r.GetInt32(1);
+            return map;
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>Gives one Windows account extra minutes for an app today; returns that account's bonus total for the app.</summary>
+    public async Task<int> AddUserBonusMinutesAsync(string userSid, string appName, int minutes)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO UserAppBonus (UserSid, AppName, Date, BonusMinutes)
+                VALUES (@sid, @app, @date, @minutes)
+                ON CONFLICT(UserSid, AppName, Date) DO UPDATE SET
+                    BonusMinutes = BonusMinutes + @minutes;
+
+                SELECT BonusMinutes FROM UserAppBonus WHERE UserSid = @sid AND AppName = @app AND Date = @date;
+                """;
+            cmd.Parameters.AddWithValue("@sid", userSid);
+            cmd.Parameters.AddWithValue("@app", appName);
+            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@minutes", minutes);
+            var result = await cmd.ExecuteScalarAsync();
+            return result is long l ? (int)l : minutes;
+        }
+        finally { _lock.Release(); }
+    }
+
     // ---- Single-use "Not now" links from phone alerts ------------------------------------------
     // ---- "Ask to open this site" requests --------------------------------------------------
     public const int MaxWaitingSiteRequests = 50;
@@ -466,6 +546,31 @@ public class UsageDatabase : IDisposable
 
     public Task<bool> MarkSiteRequestToldAsync(string id) =>
         ExecuteAsync("UPDATE SiteRequests SET Told = 1 WHERE Id = @id", ("@id", id));
+
+    /// <summary>Records what a signed-in account is doing right now, so the dashboard can tell the accounts apart.</summary>
+    public Task<bool> PublishLiveSessionAsync(string userSid, string account, string app, string process, string state) =>
+        ExecuteAsync("INSERT INTO LiveSessions (UserSid, Account, App, Process, State, UpdatedUtc) VALUES (@sid, @account, @app, @process, @state, @now) " +
+                     "ON CONFLICT(UserSid) DO UPDATE SET Account = @account, App = @app, Process = @process, State = @state, UpdatedUtc = @now",
+            ("@sid", userSid), ("@account", account), ("@app", app), ("@process", process), ("@state", state),
+            ("@now", DateTime.UtcNow.ToString("O")));
+
+    /// <summary>The accounts that reported in within <paramref name="maxAge"/>; a signed-out account stops reporting and drops out.</summary>
+    public async Task<List<LiveSession>> GetLiveSessionsAsync(TimeSpan maxAge)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT UserSid, Account, App, Process, State FROM LiveSessions WHERE UpdatedUtc >= @since ORDER BY Account";
+            cmd.Parameters.AddWithValue("@since", DateTime.UtcNow.Subtract(maxAge).ToString("O"));
+            using var r = await cmd.ExecuteReaderAsync();
+            var list = new List<LiveSession>();
+            while (await r.ReadAsync())
+                list.Add(new LiveSession(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetString(4)));
+            return list;
+        }
+        finally { _lock.Release(); }
+    }
 
     private async Task<bool> ExecuteAsync(string sql, params (string Name, object Value)[] parameters)
     {
@@ -798,19 +903,30 @@ public class UsageDatabase : IDisposable
         finally { _lock.Release(); }
     }
 
-    public async Task<List<AppUsageRecord>> GetUsageRangeAsync(DateTime from, DateTime to)
+    /// <summary>Usage per app and day: everyone's added up, or (with <paramref name="userSid"/>) one Windows account's own time.</summary>
+    public async Task<List<AppUsageRecord>> GetUsageRangeAsync(DateTime from, DateTime to, string? userSid = null)
     {
         await _lock.WaitAsync();
         try
         {
             var list = new List<AppUsageRecord>();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = """
+            cmd.CommandText = string.IsNullOrEmpty(userSid)
+                ? """
                 SELECT AppName, ProcessName, Date, TotalSeconds, ForegroundSeconds, BackgroundSeconds
                 FROM UsageRecords
                 WHERE Date >= @from AND Date <= @to
                 ORDER BY TotalSeconds DESC;
+                """
+                : """
+                SELECT a.AppName,
+                       COALESCE((SELECT r.ProcessName FROM UsageRecords r WHERE r.AppName = a.AppName AND r.Date = a.Date), ''),
+                       a.Date, a.Seconds, a.ForegroundSeconds, a.BackgroundSeconds
+                FROM UserAppUsage a
+                WHERE a.UserSid = @sid AND a.Date >= @from AND a.Date <= @to
+                ORDER BY a.Seconds DESC;
                 """;
+            if (!string.IsNullOrEmpty(userSid)) cmd.Parameters.AddWithValue("@sid", userSid);
             cmd.Parameters.AddWithValue("@from", from.ToString("yyyy-MM-dd"));
             cmd.Parameters.AddWithValue("@to", to.ToString("yyyy-MM-dd"));
             using var r = await cmd.ExecuteReaderAsync();
@@ -876,7 +992,7 @@ public class UsageDatabase : IDisposable
             using (var cmd = _connection.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "DELETE FROM AppBonusTime WHERE Date = @date";
+                cmd.CommandText = "DELETE FROM AppBonusTime WHERE Date = @date; DELETE FROM UserAppBonus WHERE Date = @date";
                 cmd.Parameters.AddWithValue("@date", date);
                 await cmd.ExecuteNonQueryAsync();
             }
@@ -951,15 +1067,23 @@ public class UsageDatabase : IDisposable
         finally { _lock.Release(); }
     }
 
+    /// <summary>Today's seconds in an app by the busiest Windows account (what a limit counts); the shared total when no account is known.</summary>
     public async Task<long> GetAppTodaySecondsAsync(string appName)
     {
         await _lock.WaitAsync();
         try
         {
+            var date = MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd");
+            using var perAccount = _connection.CreateCommand();
+            perAccount.CommandText = "SELECT MAX(Seconds) FROM UserAppUsage WHERE AppName = @app AND Date = @date";
+            perAccount.Parameters.AddWithValue("@app", appName);
+            perAccount.Parameters.AddWithValue("@date", date);
+            if (await perAccount.ExecuteScalarAsync() is long busiest && busiest > 0) return busiest;
+
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = "SELECT TotalSeconds FROM UsageRecords WHERE AppName = @app AND Date = @date";
             cmd.Parameters.AddWithValue("@app", appName);
-            cmd.Parameters.AddWithValue("@date", MonitorAndControl.ScreenTime.ParentClock.Today.ToString("yyyy-MM-dd"));
+            cmd.Parameters.AddWithValue("@date", date);
             var result = await cmd.ExecuteScalarAsync();
             return result is long l ? l : 0L;
         }
@@ -1587,13 +1711,19 @@ public class UsageDatabase : IDisposable
                     using var cmd = _connection.CreateCommand();
                     cmd.Transaction = tx;
                     cmd.CommandText = """
-                        INSERT INTO UserAppUsage (UserSid, AppName, Date, Seconds) VALUES (@sid, @app, @date, @seconds)
-                        ON CONFLICT(UserSid, AppName, Date) DO UPDATE SET Seconds = Seconds + @seconds;
+                        INSERT INTO UserAppUsage (UserSid, AppName, Date, Seconds, ForegroundSeconds, BackgroundSeconds)
+                        VALUES (@sid, @app, @date, @seconds, @foreground, @background)
+                        ON CONFLICT(UserSid, AppName, Date) DO UPDATE SET
+                            Seconds = Seconds + @seconds,
+                            ForegroundSeconds = ForegroundSeconds + @foreground,
+                            BackgroundSeconds = BackgroundSeconds + @background;
                         """;
                     cmd.Parameters.AddWithValue("@sid", userSid);
                     cmd.Parameters.AddWithValue("@app", record.AppName);
                     cmd.Parameters.AddWithValue("@date", date);
                     cmd.Parameters.AddWithValue("@seconds", total);
+                    cmd.Parameters.AddWithValue("@foreground", record.ForegroundSeconds);
+                    cmd.Parameters.AddWithValue("@background", record.BackgroundSeconds);
                     await cmd.ExecuteNonQueryAsync();
                 }
             foreach (var record in groupRecords)

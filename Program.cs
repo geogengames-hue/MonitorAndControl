@@ -28,6 +28,7 @@ internal static class Program
     private static ProgramGate? _programGate;
     private static SiteRequestService? _siteRequests;
     private static AllowedAppTime? _allowedAppTime;
+    private static LiveSessionPublisher? _liveSessions;
     private static MonitorAndControl.UI.TimeLeftTray? _timeLeftTray;
     private static LimitEnforcer? _enforcer;
     private static SchedulerService? _scheduler;
@@ -567,6 +568,8 @@ internal static class Program
         _programGate.Start();
         _allowedAppTime = new AllowedAppTime(_tracker, _enforcer);
         _allowedAppTime.Start();
+        _liveSessions = new LiveSessionPublisher(_db!, _tracker);
+        _liveSessions.Start();
 
         var webTask = Task.Run(() => StartWebServer(config));
     }
@@ -729,13 +732,12 @@ internal static class Program
     {
         try
         {
-            var limits = await _db!.GetLimitRulesAsync();
-            var limit = limits.FirstOrDefault(l => l.AppName.Equals(appName, StringComparison.OrdinalIgnoreCase));
-            if (limit == null)
+            var allowances = await AccountAllowances.ForAccountAsync(_db!, AccountIdentity.CurrentSid);
+            var allowance = allowances.FirstOrDefault(a => a.App.Equals(appName, StringComparison.OrdinalIgnoreCase));
+            if (allowance.App == null)
                 return Localization.Text("CanUseAgainAfterMidnight", language);
 
-            var bonus = await _db.GetTodayBonusMinutesAsync(appName);
-            var total = limit.DailyMaxMinutes + bonus;
+            var total = allowance.Max / 60;
             var reset = MonitorAndControl.ScreenTime.ParentClock.Today.AddDays(1);
             return Localization.Text("AllowanceResetsAt", language, total, reset);
         }
@@ -838,6 +840,7 @@ internal static class Program
         _siteRequests?.Dispose();
         _programGate?.Dispose();
         _allowedAppTime?.Dispose();
+        _liveSessions?.Dispose();
         DashboardServer.LoginLockoutDetected = null;
         ScreenTimeEndpoints.RemoteEvent = null;
         _parentReportService?.Dispose();

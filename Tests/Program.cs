@@ -16,6 +16,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Remote PIN rejects weak values", TestRemotePinRules),
     ("Weekend limit applies on Saturday and Sunday only", TestWeekendLimit),
     ("Account usage ignores capitals in the app name", TestAccountUsageCase),
+    ("Each signed-in account reports its live session", TestLiveSessions),
     ("A claimed job runs in one account at a time", TestLeaseClaim),
     ("The time-left view reads clearly", TestTimeLeftView),
     ("The time zone is pinned until a parent accepts a change", TestPinnedTimeZone),
@@ -30,6 +31,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("App categories cover new apps and are sealed", TestAppCategories),
     ("Older databases are upgraded for per-account groups", TestGroupMembersUpgrade),
     ("App limits can belong to one Windows account", TestPerAccountLimits),
+    ("Shared limits and extra time are counted per Windows account", TestSharedLimitsPerAccount),
+    ("History can be filtered to one Windows account", TestUsageRangePerAccount),
     ("Homework mode times, plan and sealed apps", TestHomeworkMode),
     ("New programs are found once and described briefly", TestNewApps),
     ("Alerts link to the right dashboard page", TestPushLinks),
@@ -296,7 +299,7 @@ static async Task TestLimitEnforcerRehydratesExceededApps()
         DailyMaxMinutes = 1,
         Enabled = true
     });
-    await db.RecordUsageAsync("Chess", "chess.exe", 60);
+    await db.RecordUsageBatchAsync(new[] { ("Chess", "chess.exe", 60, 0) }, Array.Empty<(int GroupId, int Seconds)>(), MonitorAndControl.Services.AccountIdentity.CurrentSid);
 
     await enforcer.RehydrateExceededTodayAsync();
 
@@ -1702,6 +1705,92 @@ static async Task TestAccountUsageCase()
         await db.SaveUserLimitRuleAsync(new MonitorAndControl.Models.AppLimitRule { AppName = "minecraft", UserSid = anna, DailyMaxMinutes = 45, Enabled = true });
         AssertTrue((await db.GetUserLimitRulesAsync(anna)).Single().DailyMaxMinutes == 45, "A rule is one per app and account whatever the capitals.");
         AssertTrue((await db.GetUserLimitRulesAsync("S-1-5-21-9-9-9-9")).Count == 0, "Asking for one account returns only its rules.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static async Task TestUsageRangePerAccount()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-RangeAccount-Test-" + Guid.NewGuid().ToString("N"));
+    const string anna = "S-1-5-21-1-2-3-1001";
+    const string ben = "S-1-5-21-1-2-3-1002";
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        var none = Array.Empty<(int GroupId, int Seconds)>();
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 600, 0) }, none, anna);
+        await db.RecordUsageBatchAsync(new[] { ("Roblox", "roblox.exe", 120, 0) }, none, ben);
+        var today = MonitorAndControl.ScreenTime.ParentClock.Today;
+        var all = await db.GetUsageRangeAsync(today, today);
+        var annaOnly = await db.GetUsageRangeAsync(today, today, anna);
+        var benOnly = await db.GetUsageRangeAsync(today, today, ben);
+        AssertTrue(all.Count == 2, "History without an account lists everyone's apps.");
+        AssertTrue(annaOnly.Count == 1 && annaOnly[0].AppName == "Minecraft" && annaOnly[0].TotalSeconds == 600, "History for one account lists only that account's apps.");
+        AssertTrue(benOnly.Count == 1 && benOnly[0].AppName == "Roblox", "Another account sees its own apps only.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+static async Task TestSharedLimitsPerAccount()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-SharedPerAccount-Test-" + Guid.NewGuid().ToString("N"));
+    const string anna = "S-1-5-21-1-2-3-1001";
+    const string ben = "S-1-5-21-1-2-3-1002";
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        var none = Array.Empty<(int GroupId, int Seconds)>();
+        await db.SaveLimitRuleAsync(new AppLimitRule { AppName = "Minecraft", DailyMaxMinutes = 30, Enabled = true });
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 25 * 60, 0) }, none, anna);
+        await db.RecordUsageBatchAsync(new[] { ("Minecraft", "minecraft.exe", 10 * 60, 0) }, none, ben);
+
+        var annaView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, anna)).Single();
+        var benView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, ben)).Single();
+        AssertTrue(annaView.Used == 25 * 60 && benView.Used == 10 * 60 && annaView.Max == 30 * 60 && benView.Max == 30 * 60,
+            "A shared limit gives each account its own allowance, counted from its own time.");
+
+        await db.AddUserBonusMinutesAsync(anna, "Minecraft", 15);
+        annaView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, anna)).Single();
+        benView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, ben)).Single();
+        AssertTrue(annaView.Max == 45 * 60 && benView.Max == 30 * 60, "Extra time granted to one account does not reach the others.");
+
+        await db.AddTodayBonusMinutesAsync("Minecraft", 5);
+        benView = (await MonitorAndControl.Services.AccountAllowances.ForAccountAsync(db, ben)).Single();
+        AssertTrue(benView.Max == 35 * 60, "Extra time granted to everyone reaches every account.");
+
+        AssertTrue(await db.GetAppTodaySecondsAsync("Minecraft") == 25 * 60, "The app total used for one-off checks is the busiest account's time.");
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+    }
+}
+
+static async Task TestLiveSessions()
+{
+    var dir = Path.Combine(Path.GetTempPath(), "DeviceMon-Live-Test-" + Guid.NewGuid().ToString("N"));
+    const string anna = "S-1-5-21-1-2-3-1001";
+    const string ben = "S-1-5-21-1-2-3-1002";
+    try
+    {
+        var db = new MonitorAndControl.Data.UsageDatabase(Path.Combine(dir, "monitor.db"));
+        await db.PublishLiveSessionAsync(anna, "anna", "Minecraft", "minecraft.exe", "active");
+        await db.PublishLiveSessionAsync(ben, "ben", "", "", "locked");
+        await db.PublishLiveSessionAsync(anna, "anna", "Roblox", "roblox.exe", "active");
+        var sessions = await db.GetLiveSessionsAsync(TimeSpan.FromSeconds(30));
+        AssertTrue(sessions.Count == 2, "Each account has one live session.");
+        AssertTrue(sessions.Single(s => s.UserSid == anna).App == "Roblox" && sessions.Single(s => s.UserSid == ben).State == "locked",
+            "Reporting again replaces what the account was doing, and each account keeps its own state.");
+        await Task.Delay(50);
+        AssertTrue((await db.GetLiveSessionsAsync(TimeSpan.FromMilliseconds(1))).Count == 0, "An account that stops reporting drops out.");
     }
     finally
     {
