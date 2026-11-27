@@ -52,6 +52,8 @@ public sealed class ScreenTimeRequest
     public string TicketId { get; set; } = "";
     /// <summary>Remote PIN for "remote-save". Never logged and never stored in the request history.</summary>
     public string Pin { get; set; } = "";
+    /// <summary>For "set-parent-password": the dashboard password the service should also accept as the parent password. Never logged.</summary>
+    public string NewPin { get; set; } = "";
 }
 public sealed record ScreenTimeReply(bool Ok, string? Error, JsonElement? Data)
 {

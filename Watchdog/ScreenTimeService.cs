@@ -508,6 +508,25 @@ internal sealed class ScreenTimeService : IDisposable
             if (request.UserSid.Length > 0) _exemptUntil[request.UserSid] = DateTimeOffset.UtcNow.AddSeconds(8);
             return ScreenTimeReply.Success(new { exempt = true });
         }
+        if (request.Command == "set-parent-password")
+        {
+            // The control server only lets DeviceMon (or an elevated caller) send this, and DeviceMon only does so
+            // after it verified the dashboard password: the service then accepts that same password for sensitive changes.
+            try
+            {
+                if (!DirectoryProtection.IsProtectedFromUsers(_protectedDirectory))
+                    return ScreenTimeReply.Failure("The protected settings folder is not secure.");
+                if (!RemotePinStore.IsAcceptable(request.NewPin, out var pinError)) return ScreenTimeReply.Failure(pinError);
+                lock (_sync)
+                {
+                    if (_remotePin.Matches(request.NewPin)) return ScreenTimeReply.Success(new { changed = false });
+                    _remotePin.Set(request.NewPin);
+                }
+                _log("Parent password updated for sensitive changes.");
+                return ScreenTimeReply.Success(new { changed = true });
+            }
+            catch (Exception ex) { return ScreenTimeReply.Failure("Could not store the parent password: " + ex.Message); }
+        }
         List<ScreenTimeWindows.Account> accounts;
         try { accounts = ScreenTimeWindows.Accounts(includeExcluded: true); }
         catch { return ScreenTimeReply.Failure("Could not list local accounts."); }

@@ -790,5 +790,6 @@
   "Use the guess": "Utiliser la supposition",
   "The category this app counts in.": "La catégorie dans laquelle compte cette application.",
   "Enter a group name, daily limit, and select at least one app or a category.": "Saisissez un nom de groupe et une limite quotidienne, et choisissez au moins une application ou une catégorie.",
-  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importé. {n} règle(s) pour des comptes Windows absents de ce PC ont été ignorées."
+  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importé. {n} règle(s) pour des comptes Windows absents de ce PC ont été ignorées.",
+  "Saved, but the Windows service could not be reached: sign in again later to finish.": "Enregistr├⌐, mais le service Windows est injoignable : reconnectez-vous plus tard pour terminer."
 }

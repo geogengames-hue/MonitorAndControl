@@ -834,7 +834,15 @@ static Task TestRemotePinVerifyAndStorage()
         AssertTrue(reopened.Verify("correct horse 42", now).Status == MonitorAndControl.ScreenTime.RemotePinStatus.Ok, "The right PIN works.");
         AssertTrue(reopened.Verify("wrong", now).Message.Contains("4 attempt"), "A successful login resets the failure count.");
 
+        // Matches lets the dashboard sync its verified password without ever touching the lockout counters.
+        AssertTrue(store.Matches("correct horse 42"), "Matches recognizes the stored password.");
+        AssertFalse(store.Matches("wrong"), "Matches rejects another password.");
+        AssertFalse(store.Matches(""), "Matches rejects an empty password.");
+        for (var i = 0; i < 3; i++) store.Matches("still wrong");
+        AssertTrue(store.Verify("wrong", now).Message.Contains("3 attempt"), "Matches never counts as a failed attempt.");
+
         store.Clear();
+        AssertFalse(store.Matches("correct horse 42"), "Nothing matches once the password is cleared.");
         AssertFalse(File.Exists(path) || File.Exists(path + ".bak"), "Clearing removes the PIN and its backup copy.");
     }
     finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }

@@ -146,6 +146,13 @@ internal sealed class ScreenTimeControlServer : IDisposable
                     _log($"Screen-time policy changed through the remote PIN (requested by {callerSid}).");
                 }
                 return remote;
+            case "set-parent-password":
+                if (!fromMonitor && !elevated)
+                {
+                    _log($"Refused set-parent-password from {(caller ?? "an unknown program")}: only DeviceMon may send it.");
+                    return ScreenTimeReply.Failure("Only DeviceMon can do this.");
+                }
+                return _handle(request);
             case "homework-start":
             case "set-blocked-sites":
             case "limits-seal":

@@ -47,5 +47,6 @@
 , "Started": "Started"
 , "Finished": "Finished"
 , "Source": "Source"
-, "Could not load update status.": "Could not load update status."
+, "Could not load update status.": "Could not load update status.",
+  "Saved, but the Windows service could not be reached: sign in again later to finish.": "Saved, but the Windows service could not be reached: sign in again later to finish."
 }

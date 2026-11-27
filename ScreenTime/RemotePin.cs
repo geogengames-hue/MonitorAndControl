@@ -102,6 +102,21 @@ public sealed class RemotePinStore
         Save(new Record { Salt = Convert.ToBase64String(salt), Hash = Convert.ToBase64String(Hash(pin, salt, DefaultIterations)) });
     }
 
+    /// <summary>
+    /// True when <paramref name="pin"/> equals the stored one. Never touches the lockout counters,
+    /// so it is only for the dashboard syncing its own (already verified) password into the store.
+    /// </summary>
+    public bool Matches(string pin)
+    {
+        lock (_sync)
+        {
+            var record = Load();
+            if (record == null || string.IsNullOrEmpty(pin) || pin.Length > MaxLength) return false;
+            var actual = Hash(pin, Convert.FromBase64String(record.Salt), record.Iterations);
+            return CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(record.Hash), actual);
+        }
+    }
+
     public void Clear()
     {
         lock (_sync)

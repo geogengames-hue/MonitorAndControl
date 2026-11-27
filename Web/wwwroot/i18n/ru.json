@@ -790,5 +790,6 @@
   "Use the guess": "Использовать догадку",
   "The category this app counts in.": "Категория, в которой учитывается это приложение.",
   "Enter a group name, daily limit, and select at least one app or a category.": "Введите название группы и дневной лимит и выберите хотя бы одно приложение или категорию.",
-  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Импортировано. Пропущено правил для учётных записей Windows, которых нет на этом ПК: {n}."
+  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Импортировано. Пропущено правил для учётных записей Windows, которых нет на этом ПК: {n}.",
+  "Saved, but the Windows service could not be reached: sign in again later to finish.": "╨í╨╛╤à╤Ç╨░╨╜╨╡╨╜╨╛, ╨╜╨╛ ╤ü╨╗╤â╨╢╨▒╨░ Windows ╨╜╨╡╨┤╨╛╤ü╤é╤â╨┐╨╜╨░: ╨▓╨╛╨╣╨┤╨╕╤é╨╡ ╤ü╨╜╨╛╨▓╨░ ╨┐╨╛╨╖╨╢╨╡, ╤ç╤é╨╛╨▒╤ï ╨╖╨░╨▓╨╡╤Ç╤ê╨╕╤é╤î."
 }
