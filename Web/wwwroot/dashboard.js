@@ -163,7 +163,7 @@ document.querySelectorAll('.sidebar nav a').forEach(a => {
     a.classList.add('active');
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.getElementById('view-' + a.dataset.view).classList.add('active');
-    updateAccountBarVisibility();
+    renderAccountBar();
     if (a.dataset.view === 'today') loadToday();
     if (a.dataset.view === 'history') loadHistory(currentDays);
     if (a.dataset.view === 'limits') loadLimits();
@@ -310,7 +310,9 @@ function usedSeconds(u) {
 
 // The PC is "multi-user" when it has more than one standard (non-administrator) Windows account. Only then does the
 // dashboard show the account bar, per-account overviews and per-account forms; with one account it stays uncluttered.
-const ACCOUNT_VIEWS = ['live', 'today', 'history', 'limits'];
+const ACCOUNT_VIEWS = ['live', 'today', 'history', 'limits', 'screen-time', 'schedule'];
+// "All (sum)" only means something where numbers can be added up or time given to everyone; the other pages need one account.
+const ALL_ACCOUNTS_VIEWS = ['today', 'history', 'limits'];
 
 function isMultiUser() {
   return accountChoices.length > 1;
@@ -340,11 +342,81 @@ function applyMultiUserMode() {
 
 function updateAccountBarVisibility() {
   document.getElementById('account-bar')?.classList.toggle('hidden', !isMultiUser() || !ACCOUNT_VIEWS.includes(getActiveViewName()));
+  renderAccountOptions();
+}
+
+// The pages that hold an account's own options, as shortcuts under the account bar.
+const ACCOUNT_OPTION_PAGES = [
+  { view: 'screen-time', label: 'PC Time', hint: 'Daily allowance, bedtime, breaks and lock for this account.' },
+  { view: 'limits', label: 'App Limits', hint: 'Limits, shared groups and extra time for this account.' },
+  { view: 'schedule', label: 'Schedule', hint: 'Allowed hours for this account.' },
+  { view: 'limits', label: 'Website Limits', hint: 'Blocked and limited websites for this account.', target: 'site-limits-table' }
+];
+
+function renderAccountOptions() {
+  const box = document.getElementById('account-options');
+  if (!box) return;
+  box.replaceChildren();
+  if (!isMultiUser()) return;
+  const text = document.createElement('div');
+  text.className = 'account-options-text';
+  if (!viewSid) {
+    text.textContent = t('Choose an account above to see and change its own options: PC time, app limits, schedule and website limits.');
+    box.appendChild(text);
+    return;
+  }
+  const name = accountLabel(viewSid);
+  const title = document.createElement('strong');
+  title.textContent = t('Options for {name}', { name });
+  text.appendChild(title);
+  const profile = typeof liveTimeData !== 'undefined' ? (liveTimeData?.profiles || []).find(p => p.userSid === viewSid) : null;
+  const time = document.createElement('span');
+  time.className = 'account-options-time';
+  if (profile?.enabled) {
+    time.textContent = profile.remainingSeconds <= 0
+      ? t('PC time is used up today.')
+      : t('{time} of PC time left today.', { time: screenDuration(profile.remainingSeconds) });
+    time.classList.toggle('exceeded', profile.remainingSeconds <= 0);
+  } else if (profile) time.textContent = t('No PC Time limit for this account.');
+  if (time.textContent) text.appendChild(time);
+  box.appendChild(text);
+  const links = document.createElement('div');
+  links.className = 'account-options-links';
+  const active = getActiveViewName();
+  ACCOUNT_OPTION_PAGES.forEach(page => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'account-option-link';
+    button.textContent = t(page.label);
+    button.title = t(page.hint);
+    button.setAttribute('aria-current', String(!page.target && page.view === active));
+    button.addEventListener('click', () => {
+      document.querySelector(`.sidebar nav a[data-view="${page.view}"]`)?.click();
+      if (page.target) setTimeout(() => document.getElementById(page.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+    });
+    links.appendChild(button);
+  });
+  box.appendChild(links);
+}
+
+// Add/edit forms for one account start on the account chosen in the bar (once per change, so a manual choice sticks).
+const formAccountApplied = {};
+function followViewAccount(select) {
+  if (!select || formAccountApplied[select.id] === viewSid) return;
+  if (viewSid && ![...select.options].some(o => o.value === viewSid)) return;
+  select.value = viewSid;
+  formAccountApplied[select.id] = viewSid;
 }
 
 function renderAccountBar() {
   const box = document.getElementById('account-chips');
   if (!box) return;
+  const view = getActiveViewName();
+  const needsAccount = isMultiUser() && ACCOUNT_VIEWS.includes(view) && !ALL_ACCOUNTS_VIEWS.includes(view);
+  if (!viewSid && needsAccount) {
+    setViewAccount(accountChoices[0].sid);
+    return;
+  }
   box.replaceChildren();
   const add = (sid, name) => {
     const chip = document.createElement('button');
@@ -356,7 +428,7 @@ function renderAccountBar() {
     chip.addEventListener('click', () => setViewAccount(sid));
     box.appendChild(chip);
   };
-  add('', t('All accounts'));
+  if (ALL_ACCOUNTS_VIEWS.includes(view)) add('', t('All (sum)'));
   accountChoices.forEach(a => add(a.sid, a.name));
   updateAccountBarVisibility();
   renderScopeNotes();
@@ -367,7 +439,7 @@ function renderScopeNotes() {
   const name = viewSid ? accountLabel(viewSid) : '';
   const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
   set('today-scope', viewSid
-    ? t('Showing {name} only. Click the account again, or choose All accounts above, to add everyone up.', { name })
+    ? t('Showing {name} only. Click the account again, or choose All (sum) above, to add everyone up.', { name })
     : t('Showing every account added up. Choose an account above, or click one below, to see only its time.'));
   set('history-scope', viewSid
     ? t('Showing {name} only. Websites, shared groups and the hourly timeline still cover every account.', { name })
@@ -385,11 +457,14 @@ function setViewAccount(sid) {
   viewSid = sid;
   localStorage.setItem('viewAccount', viewSid);
   renderAccountBar();
+  ['group-account', 'schedule-account', 'site-account'].forEach(id => followViewAccount(document.getElementById(id)));
+  if (getActiveViewName() === 'screen-time' && typeof loadScreenTime === 'function') loadScreenTime(true);
   loadLive();
   loadLiveToday();
   loadToday();
   refreshActiveView();
   if (typeof loadUserLimits === 'function') loadUserLimits(false);
+  if (typeof loadSiteLimits === 'function' && getActiveViewName() === 'limits') loadSiteLimits();
   if (typeof loadLiveTime === 'function') loadLiveTime();
 }
 
@@ -1123,6 +1198,7 @@ async function loadLimits() {
       loadAccountChoices()
     ]);
     fillAccountSelect(document.getElementById('group-account'), editingGroup?.userSid);
+    if (!editingGroup) followViewAccount(document.getElementById('group-account'));
     renderLimitGroups(groups, known, limits);
     loadAppCategories();
     const table = document.getElementById('limits-table');
@@ -1491,9 +1567,15 @@ async function loadSchedule() {
     ]);
     syncScheduleAppOptions(known, limits);
     fillAccountSelect(document.getElementById('schedule-account'));
+    followViewAccount(document.getElementById('schedule-account'));
+    const shownRules = viewSid ? rules.filter(r => !r.userSid || r.userSid === viewSid) : rules;
+    const scope = document.getElementById('schedule-scope');
+    if (scope) scope.textContent = viewSid
+      ? t('Showing the rules that apply to {name}: those for this account and those for everyone.', { name: accountLabel(viewSid) })
+      : t('Showing every rule. Choose an account above to see only the rules that apply to it.');
     const table = document.getElementById('schedule-table');
     let html = `<table><thead><tr><th>${t('Applies To')}</th><th>${t('Account')}</th><th>${t('Day')}</th><th>${t('Start')}</th><th>${t('End')}</th><th>${t('Enabled')}</th><th>${t('Actions')}</th></tr></thead><tbody>`;
-    rules.forEach(r => {
+    shownRules.forEach(r => {
       html += `<tr>
         <td>${r.appName ? esc(r.appName) : t('All apps')}</td>
         <td>${esc(accountLabel(r.userSid))}</td>
@@ -1504,7 +1586,7 @@ async function loadSchedule() {
         <td class="actions"><button class="btn-danger" title="${t("Delete this rule.")}" onclick="deleteSchedule(${r.id})">${t('Delete')}</button></td>
       </tr>`;
     });
-    if (rules.length === 0) html += `<tr><td colspan="7" style="color:#666;text-align:center">${t('No schedule rules configured')}</td></tr>`;
+    if (shownRules.length === 0) html += `<tr><td colspan="7" style="color:#666;text-align:center">${t('No schedule rules configured')}</td></tr>`;
     html += '</tbody></table>';
     table.innerHTML = html;
   } catch (e) { log(e); }

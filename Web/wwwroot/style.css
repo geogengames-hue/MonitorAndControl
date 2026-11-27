@@ -521,6 +521,14 @@ body:not(.multi-user) .multi-only { display: none !important; }
 .account-chip .account-avatar { width: 26px; height: 26px; font-size: 13px; }
 .account-chip:hover { border-color: var(--primary); color: var(--text); }
 .account-chip[aria-pressed="true"] { background: var(--primary-soft); border-color: var(--primary); color: var(--text); }
+.account-options { flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; padding-top: 10px; border-top: 1px solid var(--border); color: var(--text-soft); font-size: 13px; }
+.account-options:empty { display: none; }
+.account-options-text strong { margin-right: 10px; color: var(--text); font-size: 15px; }
+.account-options-time.exceeded { color: var(--danger, #e5534b); font-weight: 650; }
+.account-options-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.account-option-link { margin: 0; padding: 5px 12px; border: 1px solid var(--border-strong); border-radius: 6px; background: transparent; color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; }
+.account-option-link:hover { border-color: var(--primary); }
+.account-option-link[aria-current="true"] { background: var(--primary-soft); border-color: var(--primary); }
 .scope-note { margin: -4px 0 14px; color: var(--text-soft); font-size: 13px; }
 .account-overview { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .account-overview:empty { display: none; }

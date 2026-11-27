@@ -31,9 +31,9 @@
   <main class="main">
     <div id="alert-bar" class="alert-bar hidden"></div>
     <div id="error-bar" class="error-bar hidden"></div>
-    <div id="account-bar" class="account-bar hidden" role="group" aria-labelledby="account-bar-label" title="Whose time the Live, Today, History and Limits pages show, and who receives extra time you give. All accounts adds everyone up.">
+    <div id="account-bar" class="account-bar hidden" role="group" aria-labelledby="account-bar-label" title="Whose time the Live, Today, History and Limits pages show, and who receives extra time you give. All (sum) adds everyone up.">
       <span id="account-bar-label" class="account-bar-label">Viewing account</span>
-      <div id="account-chips" class="account-chips"></div>
+      <div id="account-chips" class="account-chips"></div><div id="account-options" class="account-options" role="region" aria-live="polite"></div>
     </div>
     <div id="view-screen-time" class="view">
       <div class="page-heading">
@@ -371,7 +371,7 @@
       </div>
     </div>
     <div id="view-schedule" class="view">
-      <h2>Allowed Hours Schedule</h2>
+      <h2>Allowed Hours Schedule</h2><p id="schedule-scope" class="scope-note multi-only"></p>
       <div id="schedule-protect-banner" class="screen-notice hidden" role="status"></div>
       <div class="table-container" id="schedule-table"></div>
       <div class="add-form">

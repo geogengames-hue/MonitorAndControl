@@ -1,5 +1,4 @@
 {
-  "Whose time the Live, Today, History and Limits pages show, and who receives extra time you give. All accounts adds everyone up.": "Wessen Zeit die Seiten Live, Heute, Verlauf und Limits zeigen und wer zusätzliche Zeit erhält, die Sie vergeben. „Alle Konten“ addiert alle.",
   "Extend PC Time": "PC-Zeit verlängern",
   "Give a Windows account more total PC time today, on top of its daily allowance (the PC Time rule).": "Geben Sie einem Windows-Konto heute mehr PC-Gesamtzeit, zusätzlich zum Tageskontingent (die PC-Zeit-Regel).",
   "Add to the total time for today": "Zur Gesamtzeit für heute addieren",
@@ -8,7 +7,6 @@
   "Add 30 minutes to today's total PC time of this account.": "Fügt der heutigen PC-Gesamtzeit dieses Kontos 30 Minuten hinzu.",
   "Add 60 minutes to today's total PC time of this account.": "Fügt der heutigen PC-Gesamtzeit dieses Kontos 60 Minuten hinzu.",
   "The Windows account this page is showing.": "Das Windows-Konto, das diese Seite zeigt.",
-  "Showing {name} only. Click the account again, or choose All accounts above, to add everyone up.": "Es wird nur {name} angezeigt. Klicken Sie das Konto erneut an oder wählen Sie oben „Alle Konten“, um alle zu addieren.",
   "Showing every account added up. Choose an account above, or click one below, to see only its time.": "Alle Konten werden addiert angezeigt. Wählen Sie oben ein Konto oder klicken Sie unten auf eines, um nur dessen Zeit zu sehen.",
   "Showing {name} only. Websites, shared groups and the hourly timeline still cover every account.": "Es wird nur {name} angezeigt. Websites, gemeinsame Gruppen und die Stundenübersicht umfassen weiterhin alle Konten.",
   "Showing every account added up. Choose an account above to see only its time.": "Alle Konten werden addiert angezeigt. Wählen Sie oben ein Konto, um nur dessen Zeit zu sehen.",
@@ -741,7 +739,6 @@
   "Everyone": "Alle",
   "Everyone shares this group, or it counts only one Windows account's own time.": "Alle teilen sich diese Gruppe, oder sie zählt nur die Zeit eines einzelnen Windows-Kontos.",
   "The limits above give every Windows account its own allowance, counted from that account's own time. A limit set here for one account replaces the shared limit for that app. Groups, schedule rules and website rules can also be set for one account (choose it in their forms). Homework mode applies to everyone.": "Die Limits oben geben jedem Windows-Konto sein eigenes Kontingent, gezählt nach der eigenen Zeit dieses Kontos. Ein hier für ein Konto festgelegtes Limit ersetzt das gemeinsame Limit für diese App. Gruppen, Zeitplanregeln und Website-Regeln können ebenfalls für ein einzelnes Konto gelten (im jeweiligen Formular auswählen). Der Hausaufgabenmodus gilt für alle.",
-  "All accounts": "Alle Konten",
   "Viewing account": "Angezeigtes Konto",
   "Whose time the Live, Today and Limits pages show, and who receives extra time you give. All accounts shows the busiest account for each app.": "Wessen Zeit die Seiten Live, Heute und Limits zeigen und wer zusätzliche Zeit erhält, die Sie vergeben. „Alle Konten“ zeigt für jede App das aktivste Konto.",
   "The rule applies to everyone, or only to one Windows account (counted from that account's own browsing, and in force while it is the account at the screen).": "Die Regel gilt für alle oder nur für ein Windows-Konto (gezählt wird nur dessen eigenes Surfen, und sie gilt, solange dieses Konto am Bildschirm ist).",
@@ -825,5 +822,19 @@
   "Use the guess": "Vermutung verwenden",
   "The category this app counts in.": "Die Kategorie, in der diese App zählt.",
   "Enter a group name, daily limit, and select at least one app or a category.": "Geben Sie einen Gruppennamen und ein Tageslimit ein und wählen Sie mindestens eine App oder eine Kategorie.",
-  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importiert. {n} Regel(n) für Windows-Konten, die es auf diesem PC nicht gibt, wurden weggelassen."
+  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importiert. {n} Regel(n) für Windows-Konten, die es auf diesem PC nicht gibt, wurden weggelassen.",
+  "Whose time the Live, Today, History and Limits pages show, and who receives extra time you give. All (sum) adds everyone up.": "Wessen Zeit die Seiten Live, Heute, Verlauf und Limits zeigen und wer zus├ñtzliche Zeit erh├ñlt, die Sie vergeben. ΓÇ₧Alle (Summe)ΓÇ£ addiert alle.",
+  "Showing {name} only. Click the account again, or choose All (sum) above, to add everyone up.": "Es wird nur {name} angezeigt. Klicken Sie das Konto erneut an oder w├ñhlen Sie oben ΓÇ₧Alle (Summe)ΓÇ£, um alle zu addieren.",
+  "All (sum)": "Alle (Summe)",
+  "Daily allowance, bedtime, breaks and lock for this account.": "T├ñgliches Kontingent, Schlafenszeit, Pausen und Sperre f├╝r dieses Konto.",
+  "Limits, shared groups and extra time for this account.": "Limits, gemeinsame Gruppen und Extrazeit f├╝r dieses Konto.",
+  "Allowed hours for this account.": "Erlaubte Zeiten f├╝r dieses Konto.",
+  "Blocked and limited websites for this account.": "Gesperrte und begrenzte Websites f├╝r dieses Konto.",
+  "Choose an account above to see and change its own options: PC time, app limits, schedule and website limits.": "W├ñhlen Sie oben ein Konto, um seine Optionen zu sehen und zu ├ñndern: PC-Zeit, App-Limits, Zeitplan und Website-Limits.",
+  "Options for {name}": "Optionen f├╝r {name}",
+  "PC time is used up today.": "Die PC-Zeit f├╝r heute ist aufgebraucht.",
+  "{time} of PC time left today.": "Heute noch {time} PC-Zeit ├╝brig.",
+  "No PC Time limit for this account.": "Dieses Konto hat kein PC-Zeit-Limit.",
+  "Showing the rules that apply to {name}: those for this account and those for everyone.": "Angezeigt werden die Regeln f├╝r {name}: die f├╝r dieses Konto und die f├╝r alle.",
+  "Showing every rule. Choose an account above to see only the rules that apply to it.": "Alle Regeln werden angezeigt. W├ñhlen Sie oben ein Konto, um nur die f├╝r es geltenden Regeln zu sehen."
 }

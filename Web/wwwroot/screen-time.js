@@ -353,7 +353,10 @@ async function loadScreenTime(force = false) {
       option.textContent = account.name;
       select.appendChild(option);
     });
-    if (eligibleAccounts.some(a => a.sid === previousSid)) select.value = previousSid;
+    // With an account chosen in the account bar, this page shows that account.
+    const barSid = typeof viewSid === 'string' ? viewSid : '';
+    if (eligibleAccounts.some(a => a.sid === barSid)) select.value = barSid;
+    else if (eligibleAccounts.some(a => a.sid === previousSid)) select.value = previousSid;
     else select.value = eligibleAccounts[0]?.sid || '';
     if (!eligibleAccounts.length) {
       const option = document.createElement('option');
@@ -365,6 +368,7 @@ async function loadScreenTime(force = false) {
     screenElement('message').textContent = data.error || remoteBlock || t('Accounts refreshed. Choose who to control and save the limit.');
     screenElement('message').classList.toggle('screen-error', !!data.error || !!remoteBlock);
     screenRenderSelection(force || !screenDirty || select.value !== previousSid);
+    renderAccountOptions();
     screenRenderRequests();
     screenRenderTimeZone();
     screenRenderPrograms();
@@ -381,7 +385,11 @@ async function loadScreenTime(force = false) {
   }
 }
 
-screenElement('account').addEventListener('change', () => screenRenderSelection(true));
+screenElement('account').addEventListener('change', () => {
+  screenRenderSelection(true);
+  // Picking an account here picks it in the account bar too, so every page agrees on who is selected.
+  if (isMultiUser() && screenElement('account').value) setViewAccount(screenElement('account').value);
+});
 screenElement('form').addEventListener('input', () => { screenDirty = true; });
 screenElement('refresh').addEventListener('click', () => loadScreenTime());
 
@@ -639,6 +647,7 @@ function renderLiveTime() {
     if (block) left.append(document.createElement('br'), block);
   }
   ['15', '30', '60'].forEach(n => { liveTimeElement(n).disabled = !canGrant; });
+  renderAccountOptions();
 }
 
 function liveTimeGrant(minutes) {
@@ -668,5 +677,5 @@ document.querySelector('.sidebar nav a[data-view="live"]').addEventListener('cli
 
 setInterval(() => {
   if (document.getElementById('view-screen-time').classList.contains('active') && !screenElement('auth').open) loadScreenTime();
-  if (document.getElementById('view-live').classList.contains('active') && !screenElement('auth').open && !document.hidden) loadLiveTime();
+  if ((document.getElementById('view-live').classList.contains('active') || (isMultiUser() && viewSid)) && !screenElement('auth').open && !document.hidden) loadLiveTime();
 }, 5000);

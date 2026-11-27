@@ -84,7 +84,8 @@ async function loadSiteLimits() {
     // Rules for everyone and rules for one Windows account share one table.
     const [shared, own] = await Promise.all([api('/api/site-limits'), api('/api/user-site-limits'), loadAccountChoices()]);
     fillAccountSelect(siteEl('account'));
-    const rules = [...shared.map(r => ({ ...r, userSid: '' })), ...own];
+    followViewAccount(siteEl('account'));
+    const rules = [...shared.map(r => ({ ...r, userSid: '' })), ...own].filter(r => !viewSid || !r.userSid || r.userSid === viewSid);
     holder.replaceChildren();
     if (!rules.length) {
       const p = document.createElement('p');
