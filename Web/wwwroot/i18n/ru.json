@@ -790,5 +790,9 @@
   "Use the guess": "Использовать догадку",
   "The category this app counts in.": "Категория, в которой учитывается это приложение.",
   "Enter a group name, daily limit, and select at least one app or a category.": "Введите название группы и дневной лимит и выберите хотя бы одно приложение или категорию.",
-  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Импортировано. Пропущено правил для учётных записей Windows, которых нет на этом ПК: {n}."
+  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Импортировано. Пропущено правил для учётных записей Windows, которых нет на этом ПК: {n}.",
+  "Theme": "╨ó╨╡╨╝╨░",
+  "Dark": "╨ó╤æ╨╝╨╜╨░╤Å",
+  "Light": "╨í╨▓╨╡╤é╨╗╨░╤Å",
+  "The color theme of this dashboard (saved in this browser).": "╨ª╨▓╨╡╤é╨╛╨▓╨░╤Å ╤é╨╡╨╝╨░ ╤ì╤é╨╛╨╣ ╨┐╨░╨╜╨╡╨╗╨╕ (╤ü╨╛╤à╤Ç╨░╨╜╤Å╨╡╤é╤ü╤Å ╨▓ ╤ì╤é╨╛╨╝ ╨▒╤Ç╨░╤â╨╖╨╡╤Ç╨╡)."
 }

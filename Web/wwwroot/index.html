@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Monitor & Control</title>
+<script>try { if (localStorage.getItem('theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) { }</script>
 <link rel="stylesheet" href="style.css">
 <script src="chart.umd.min.js"></script>
 </head>
@@ -409,6 +410,11 @@
           <option value="es">Español</option>
           <option value="ru">Русский</option>
           <option value="fr">Français</option>
+        </select>
+        <label title="The color theme of this dashboard (saved in this browser).">Theme</label>
+        <select id="set-theme" title="The color theme of this dashboard (saved in this browser).">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
         </select>
         <label title="Start this app automatically when Windows starts." style="display:flex;align-items:center;gap:8px;margin-top:5px">
           <input type="checkbox" id="set-auto-start" style="width:auto"> Auto-start with Windows

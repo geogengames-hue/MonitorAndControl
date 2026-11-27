@@ -501,3 +501,71 @@ code { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; ba
 /* Labels inside the phone-notification groups are not direct children of the panel, so style them the same way. */
 #push-ntfy label, #push-telegram label { display: block; margin: 13px 0 4px; color: var(--text-soft); font-size: 12px; font-weight: 600; }
 #push-ntfy input, #push-telegram input { display: block; }
+
+/* Light theme: chosen under Settings > Theme (dark is the default). Overrides the palette and the few hard-coded dark colors above. */
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f3f5f4;
+  --sidebar: #ffffff;
+  --surface: #ffffff;
+  --surface-raised: #f7f9f8;
+  --surface-soft: #eef1ef;
+  --border: #dde2df;
+  --border-strong: #c3cbc7;
+  --text: #1f2926;
+  --text-soft: #3c4743;
+  --muted: #66716c;
+  --primary: #b85c0a;
+  --primary-hover: #d06a12;
+  --primary-soft: rgba(184, 92, 10, 0.1);
+  --warning: #96680a;
+  --danger: #c0392b;
+  --success: #1f8a4c;
+  --cyan: #2a8493;
+  --violet: #7653b5;
+  --blue: #3f78b0;
+  --shadow: 0 10px 30px rgba(31, 41, 38, 0.08);
+}
+html[data-theme="light"] body { background-image: radial-gradient(circle at 78% -10%, rgba(240,164,93,.12), transparent 30%); }
+html[data-theme="light"] ::selection { background: rgba(240,164,93,.35); color: inherit; }
+html[data-theme="light"] .sidebar nav a:hover { background: rgba(0,0,0,.04); }
+html[data-theme="light"] .logo small { color: #7b8680; }
+html[data-theme="light"] .card-mark { color: #8a948f; }
+html[data-theme="light"] .live-clock { background: #fff; box-shadow: none; }
+html[data-theme="light"] .alert-bar, html[data-theme="light"] .error-bar { color: #9a2b22; }
+html[data-theme="light"] .alert-bar.countdown { color: #7a5810; }
+html[data-theme="light"] .alert-bar.success { color: #1d6b40; }
+html[data-theme="light"] .active-hero { background: linear-gradient(112deg,#fff3e3 0%,#ffffff 60%,#f6f8f7 100%); border-color: var(--border-strong); }
+html[data-theme="light"] .active-hero::before { background-image: linear-gradient(rgba(0,0,0,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,.05) 1px,transparent 1px); }
+html[data-theme="light"] .active-hero .live-label { color: #7a6a58; }
+html[data-theme="light"] .active-hero .live-proc { color: var(--muted); }
+html[data-theme="light"] .diagnostic-card { background: linear-gradient(145deg,#eef8f8,#ffffff); }
+html[data-theme="light"] .usage-card { background: linear-gradient(145deg,#f3f0fa,#ffffff); }
+html[data-theme="light"] .action-card { background: linear-gradient(145deg,#eef3f9,#ffffff); }
+html[data-theme="light"] .extend-card { background: linear-gradient(145deg,#fdf3e7,#ffffff); }
+html[data-theme="light"] .settings-panel { background: linear-gradient(145deg,#ffffff,#f6f8f7); }
+html[data-theme="light"] input:hover, html[data-theme="light"] select:hover { border-color: #9aa6a0; }
+html[data-theme="light"] input::placeholder { color: #8a948f; }
+html[data-theme="light"] button.btn-secondary, html[data-theme="light"] .period-select button, html[data-theme="light"] .history-range button { background: linear-gradient(145deg,#ffffff,#eef1ef); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+html[data-theme="light"] button.btn-secondary:hover, html[data-theme="light"] .period-select button:hover, html[data-theme="light"] .history-range button:hover { border-color: #8a948f; background: linear-gradient(145deg,#ffffff,#e3e8e5); color: var(--text); box-shadow: 0 4px 12px rgba(0,0,0,.1); }
+html[data-theme="light"] button.btn-danger { color: #a52a22; }
+html[data-theme="light"] button.btn-danger:hover { color: #fff; }
+html[data-theme="light"] .period-select button.active, html[data-theme="light"] .history-range button.active { border-color: var(--primary); }
+html[data-theme="light"] tbody tr:hover { background: rgba(0,0,0,.03); }
+html[data-theme="light"] .backup-file-button { color: #4b3a78; }
+html[data-theme="light"] .update-status { background: rgba(0,0,0,.025); }
+html[data-theme="light"] .update-status-success { background: linear-gradient(135deg,rgba(31,138,76,.1),rgba(0,0,0,.01)); }
+html[data-theme="light"] .update-status-failed { background: linear-gradient(135deg,rgba(192,57,43,.1),rgba(0,0,0,.01)); }
+html[data-theme="light"] .update-status-running, html[data-theme="light"] .update-status-starting { background: linear-gradient(135deg,rgba(217,164,65,.14),rgba(0,0,0,.01)); }
+html[data-theme="light"] .update-status pre { background: rgba(0,0,0,.05); }
+html[data-theme="light"] code { color: #1f6f5c; }
+html[data-theme="light"] .logs-container { background: #f6f8f7; }
+html[data-theme="light"] .logs-output .log-info { color: #2f6b5c; }
+html[data-theme="light"] .logs-output .log-warn { color: #8a6410; }
+html[data-theme="light"] .logs-output .log-error { color: #b3322c; }
+html[data-theme="light"] .screen-auth-error { color: #b3322c; }
+html[data-theme="light"] .screen-auth::backdrop { background: rgba(31,41,38,.45); }
+html[data-theme="light"] .help-toggle.on { color: #fff; }
+@media (hover:hover) {
+  html[data-theme="light"] .live-card:not(.active-hero):hover, html[data-theme="light"] .settings-panel:hover, html[data-theme="light"] .stat-card:hover, html[data-theme="light"] .history-panel:hover, html[data-theme="light"] .chart-container:hover { box-shadow: 0 14px 36px rgba(31,41,38,.14); }
+}

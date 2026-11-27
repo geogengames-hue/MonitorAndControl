@@ -1694,6 +1694,18 @@ document.getElementById('settings-save').addEventListener('click', async () => {
   alert(t('Settings saved.'));
 });
 
+// Theme: dark (default) or light, remembered in this browser. index.html applies it before first paint.
+function applyTheme(theme) {
+  const light = theme === 'light';
+  if (light) document.documentElement.dataset.theme = 'light';
+  else delete document.documentElement.dataset.theme;
+  try { localStorage.setItem('theme', light ? 'light' : 'dark'); } catch { }
+  // The bundled chart library reads its colors from the CSS variables each time it draws.
+  [todayChart, historyChart].forEach(chart => chart?.render?.());
+}
+document.getElementById('set-theme').value = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+document.getElementById('set-theme').addEventListener('change', e => applyTheme(e.target.value));
+
 document.getElementById('set-language').addEventListener('change', async e => {
   const newLang = e.target.value;
   await loadTranslations(newLang);

@@ -47,5 +47,9 @@
 , "Started": "Started"
 , "Finished": "Finished"
 , "Source": "Source"
-, "Could not load update status.": "Could not load update status."
+, "Could not load update status.": "Could not load update status.",
+  "Theme": "Theme",
+  "Dark": "Dark",
+  "Light": "Light",
+  "The color theme of this dashboard (saved in this browser).": "The color theme of this dashboard (saved in this browser)."
 }
