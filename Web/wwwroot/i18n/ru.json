@@ -791,5 +791,13 @@
   "The category this app counts in.": "Категория, в которой учитывается это приложение.",
   "Enter a group name, daily limit, and select at least one app or a category.": "Введите название группы и дневной лимит и выберите хотя бы одно приложение или категорию.",
   "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Импортировано. Пропущено правил для учётных записей Windows, которых нет на этом ПК: {n}.",
-  "Saved, but the Windows service could not be reached: sign in again later to finish.": "╨í╨╛╤à╤Ç╨░╨╜╨╡╨╜╨╛, ╨╜╨╛ ╤ü╨╗╤â╨╢╨▒╨░ Windows ╨╜╨╡╨┤╨╛╤ü╤é╤â╨┐╨╜╨░: ╨▓╨╛╨╣╨┤╨╕╤é╨╡ ╤ü╨╜╨╛╨▓╨░ ╨┐╨╛╨╖╨╢╨╡, ╤ç╤é╨╛╨▒╤ï ╨╖╨░╨▓╨╡╤Ç╤ê╨╕╤é╤î."
+  "Saved, but the Windows service could not be reached: sign in again later to finish.": "╨í╨╛╤à╤Ç╨░╨╜╨╡╨╜╨╛, ╨╜╨╛ ╤ü╨╗╤â╨╢╨▒╨░ Windows ╨╜╨╡╨┤╨╛╤ü╤é╤â╨┐╨╜╨░: ╨▓╨╛╨╣╨┤╨╕╤é╨╡ ╤ü╨╜╨╛╨▓╨░ ╨┐╨╛╨╖╨╢╨╡, ╤ç╤é╨╛╨▒╤ï ╨╖╨░╨▓╨╡╤Ç╤ê╨╕╤é╤î.",
+  "Confirm with your parent password. It is the same on this PC and from other devices, with no Windows prompt.": "╨ƒ╨╛╨┤╤é╨▓╨╡╤Ç╨┤╨╕╤é╨╡ ╤Ç╨╛╨┤╨╕╤é╨╡╨╗╤î╤ü╨║╨╕╨╝ ╨┐╨░╤Ç╨╛╨╗╨╡╨╝. ╨₧╨╜ ╨╛╨┤╨╕╨╜╨░╨║╨╛╨▓ ╨╜╨░ ╤ì╤é╨╛╨╝ ╨ƒ╨Ü ╨╕ ╤ü ╨┤╤Ç╤â╨│╨╕╤à ╤â╤ü╤é╤Ç╨╛╨╣╤ü╤é╨▓, ╨▒╨╡╨╖ ╨╖╨░╨┐╤Ç╨╛╤ü╨░ Windows.",
+  "Parent password": "╨á╨╛╨┤╨╕╤é╨╡╨╗╤î╤ü╨║╨╕╨╣ ╨┐╨░╤Ç╨╛╨╗╤î",
+  "The same password you use to sign in to this dashboard.": "╨ó╨╛╤é ╨╢╨╡ ╨┐╨░╤Ç╨╛╨╗╤î, ╨║╨╛╤é╨╛╤Ç╤ï╨╝ ╨▓╤ï ╨▓╤à╨╛╨┤╨╕╤é╨╡ ╨▓ ╤ì╤é╤â ╨┐╨░╨╜╨╡╨╗╤î.",
+  "Enter your parent password.": "╨Æ╨▓╨╡╨┤╨╕╤é╨╡ ╤Ç╨╛╨┤╨╕╤é╨╡╨╗╤î╤ü╨║╨╕╨╣ ╨┐╨░╤Ç╨╛╨╗╤î.",
+  "Sensitive changes are off: the parent password has not reached the service yet. Sign out and sign in again to finish.": "╨º╤â╨▓╤ü╤é╨▓╨╕╤é╨╡╨╗╤î╨╜╤ï╨╡ ╨╕╨╖╨╝╨╡╨╜╨╡╨╜╨╕╤Å ╨╛╤é╨║╨╗╤Ä╤ç╨╡╨╜╤ï: ╤Ç╨╛╨┤╨╕╤é╨╡╨╗╤î╤ü╨║╨╕╨╣ ╨┐╨░╤Ç╨╛╨╗╤î ╨╡╤ë╤æ ╨╜╨╡ ╨┐╨╡╤Ç╨╡╨┤╨░╨╜ ╤ü╨╗╤â╨╢╨▒╨╡. ╨Æ╤ï╨╣╨┤╨╕╤é╨╡ ╨╕ ╨▓╨╛╨╣╨┤╨╕╤é╨╡ ╤ü╨╜╨╛╨▓╨░, ╤ç╤é╨╛╨▒╤ï ╨╖╨░╨▓╨╡╤Ç╤ê╨╕╤é╤î.",
+  "Sensitive changes are locked until {time} after too many wrong password attempts.": "╨º╤â╨▓╤ü╤é╨▓╨╕╤é╨╡╨╗╤î╨╜╤ï╨╡ ╨╕╨╖╨╝╨╡╨╜╨╡╨╜╨╕╤Å ╨╖╨░╨▒╨╗╨╛╨║╨╕╤Ç╨╛╨▓╨░╨╜╤ï ╨┤╨╛ {time} ╨╕╨╖-╨╖╨░ ╤ü╨╗╨╕╤ê╨║╨╛╨╝ ╨▒╨╛╨╗╤î╤ê╨╛╨│╨╛ ╤ç╨╕╤ü╨╗╨░ ╨╜╨╡╨▓╨╡╤Ç╨╜╤ï╤à ╨┐╨╛╨┐╤ï╤é╨╛╨║ ╨┐╨░╤Ç╨╛╨╗╤Å.",
+  "Save the rule. You confirm it with your parent password.": "╨í╨╛╤à╤Ç╨░╨╜╨╕╤é╤î ╨┐╤Ç╨░╨▓╨╕╨╗╨╛. ╨Æ╤ï ╨┐╨╛╨┤╤é╨▓╨╡╤Ç╨╢╨┤╨░╨╡╤é╨╡ ╨╡╨│╨╛ ╤Ç╨╛╨┤╨╕╤é╨╡╨╗╤î╤ü╨║╨╕╨╝ ╨┐╨░╤Ç╨╛╨╗╨╡╨╝.",
+  "Protect the app limits, schedule and groups so they can only be changed after you confirm with your parent password.": "╨ù╨░╤ë╨╕╤ë╨░╨╡╤é ╨╗╨╕╨╝╨╕╤é╤ï ╨┐╤Ç╨╕╨╗╨╛╨╢╨╡╨╜╨╕╨╣, ╤Ç╨░╤ü╨┐╨╕╤ü╨░╨╜╨╕╨╡ ╨╕ ╨│╤Ç╤â╨┐╨┐╤ï, ╤ç╤é╨╛╨▒╤ï ╨╕╤à ╨╝╨╛╨╢╨╜╨╛ ╨▒╤ï╨╗╨╛ ╨╕╨╖╨╝╨╡╨╜╨╕╤é╤î ╤é╨╛╨╗╤î╨║╨╛ ╨┐╨╛╤ü╨╗╨╡ ╨┐╨╛╨┤╤é╨▓╨╡╤Ç╨╢╨┤╨╡╨╜╨╕╤Å ╤Ç╨╛╨┤╨╕╤é╨╡╨╗╤î╤ü╨║╨╕╨╝ ╨┐╨░╤Ç╨╛╨╗╨╡╨╝."
 }

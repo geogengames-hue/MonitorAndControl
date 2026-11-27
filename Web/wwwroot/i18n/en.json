@@ -48,5 +48,13 @@
 , "Finished": "Finished"
 , "Source": "Source"
 , "Could not load update status.": "Could not load update status.",
-  "Saved, but the Windows service could not be reached: sign in again later to finish.": "Saved, but the Windows service could not be reached: sign in again later to finish."
+  "Saved, but the Windows service could not be reached: sign in again later to finish.": "Saved, but the Windows service could not be reached: sign in again later to finish.",
+  "Confirm with your parent password. It is the same on this PC and from other devices, with no Windows prompt.": "Confirm with your parent password. It is the same on this PC and from other devices, with no Windows prompt.",
+  "Parent password": "Parent password",
+  "The same password you use to sign in to this dashboard.": "The same password you use to sign in to this dashboard.",
+  "Enter your parent password.": "Enter your parent password.",
+  "Sensitive changes are off: the parent password has not reached the service yet. Sign out and sign in again to finish.": "Sensitive changes are off: the parent password has not reached the service yet. Sign out and sign in again to finish.",
+  "Sensitive changes are locked until {time} after too many wrong password attempts.": "Sensitive changes are locked until {time} after too many wrong password attempts.",
+  "Save the rule. You confirm it with your parent password.": "Save the rule. You confirm it with your parent password.",
+  "Protect the app limits, schedule and groups so they can only be changed after you confirm with your parent password.": "Protect the app limits, schedule and groups so they can only be changed after you confirm with your parent password."
 }

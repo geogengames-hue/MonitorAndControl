@@ -21,19 +21,18 @@ let screenPendingGrant = null;
 let screenPendingProgram = null;
 const screenElement = id => document.getElementById('screen-' + id);
 
-// On the child PC itself a change is approved with a Windows (UAC) prompt. From any other
-// device there is no prompt to answer, so a PIN set on the PC authorizes it instead.
-const screenIsLocal = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
+// Sensitive changes are confirmed with the parent password, the same on the PC itself and from any
+// other device (no Windows prompt). The service checks it and locks after repeated wrong attempts.
 
-// Returns why a remote change cannot be made right now, or '' when it can.
+// Returns why a sensitive change cannot be made right now, or '' when it can.
 function screenRemoteBlock() {
-  if (screenIsLocal || !screenData) return '';
+  if (!screenData) return '';
   const remote = screenData.remote;
   if (!remote?.configured)
-    return t('Remote changes are off. On the child PC, run GameHost.exe --set-remote-pin as administrator, or open this dashboard on that PC.');
+    return t('Sensitive changes are off: the parent password has not reached the service yet. Sign out and sign in again to finish.');
   const until = remote.lockedUntilUtc ? new Date(remote.lockedUntilUtc) : null;
   if (until && until > new Date())
-    return t('Remote changes are locked until {time} after too many wrong PIN attempts. You can still make changes on the child PC.', { time: until.toLocaleTimeString() });
+    return t('Sensitive changes are locked until {time} after too many wrong password attempts.', { time: until.toLocaleTimeString() });
   return '';
 }
 
@@ -495,11 +494,9 @@ function screenOpenAuth(summary) {
   screenElement('auth-summary').textContent = summary;
   screenElement('auth-error').textContent = '';
   // Local: Windows asks for approval. Remote: ask for the PIN instead.
-  screenElement('auth-uac').classList.toggle('hidden', !screenIsLocal);
-  screenElement('auth-pin-row').classList.toggle('hidden', screenIsLocal);
   screenElement('auth-pin').value = '';
   screenElement('auth').showModal();
-  screenElement('auth-submit').focus();
+  screenElement('auth-pin').focus();
 }
 
 screenElement('lock').addEventListener('click', () => {
@@ -552,8 +549,8 @@ screenElement('auth').addEventListener('close', () => { screenPending = null; sc
 screenElement('auth-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (!screenPending || screenBusy) return;
-  if (!screenIsLocal && !screenElement('auth-pin').value) {
-    screenElement('auth-error').textContent = t('Enter the remote PIN.');
+  if (!screenElement('auth-pin').value) {
+    screenElement('auth-error').textContent = t('Enter your parent password.');
     return;
   }
   screenBusy = true;
@@ -561,10 +558,10 @@ screenElement('auth-form').addEventListener('submit', async event => {
   screenElement('auth-cancel').disabled = true;
   screenElement('auth-error').textContent = '';
   try {
-    await screenApi(screenIsLocal ? '/api/screen-time/policy' : '/api/screen-time/remote-policy', {
+    await screenApi('/api/screen-time/remote-policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(screenIsLocal ? { ...screenPending } : { ...screenPending, pin: screenElement('auth-pin').value })
+      body: JSON.stringify({ ...screenPending, pin: screenElement('auth-pin').value })
     });
     screenElement('auth').close();
     screenDirty = false;

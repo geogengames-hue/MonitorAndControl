@@ -791,5 +791,13 @@
   "The category this app counts in.": "Die Kategorie, in der diese App zählt.",
   "Enter a group name, daily limit, and select at least one app or a category.": "Geben Sie einen Gruppennamen und ein Tageslimit ein und wählen Sie mindestens eine App oder eine Kategorie.",
   "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importiert. {n} Regel(n) für Windows-Konten, die es auf diesem PC nicht gibt, wurden weggelassen.",
-  "Saved, but the Windows service could not be reached: sign in again later to finish.": "Gespeichert, aber der Windows-Dienst war nicht erreichbar: Melden Sie sich sp├ñter erneut an, um es abzuschlie├ƒen."
+  "Saved, but the Windows service could not be reached: sign in again later to finish.": "Gespeichert, aber der Windows-Dienst war nicht erreichbar: Melden Sie sich sp├ñter erneut an, um es abzuschlie├ƒen.",
+  "Confirm with your parent password. It is the same on this PC and from other devices, with no Windows prompt.": "Best├ñtigen Sie mit Ihrem Eltern-Passwort. Es ist auf diesem PC und von anderen Ger├ñten gleich, ohne Windows-Abfrage.",
+  "Parent password": "Eltern-Passwort",
+  "The same password you use to sign in to this dashboard.": "Dasselbe Passwort, mit dem Sie sich bei diesem Dashboard anmelden.",
+  "Enter your parent password.": "Geben Sie Ihr Eltern-Passwort ein.",
+  "Sensitive changes are off: the parent password has not reached the service yet. Sign out and sign in again to finish.": "Sensible ├änderungen sind aus: Das Eltern-Passwort hat den Dienst noch nicht erreicht. Melden Sie sich ab und wieder an, um es abzuschlie├ƒen.",
+  "Sensitive changes are locked until {time} after too many wrong password attempts.": "Sensible ├änderungen sind bis {time} gesperrt, nach zu vielen falschen Passwortversuchen.",
+  "Save the rule. You confirm it with your parent password.": "Die Regel speichern. Sie best├ñtigen sie mit Ihrem Eltern-Passwort.",
+  "Protect the app limits, schedule and groups so they can only be changed after you confirm with your parent password.": "Sch├╝tzt die App-Limits, den Zeitplan und die Gruppen, sodass sie nur nach Best├ñtigung mit Ihrem Eltern-Passwort ge├ñndert werden k├╢nnen."
 }

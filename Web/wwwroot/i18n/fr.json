@@ -791,5 +791,13 @@
   "The category this app counts in.": "La catégorie dans laquelle compte cette application.",
   "Enter a group name, daily limit, and select at least one app or a category.": "Saisissez un nom de groupe et une limite quotidienne, et choisissez au moins une application ou une catégorie.",
   "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importé. {n} règle(s) pour des comptes Windows absents de ce PC ont été ignorées.",
-  "Saved, but the Windows service could not be reached: sign in again later to finish.": "Enregistr├⌐, mais le service Windows est injoignable : reconnectez-vous plus tard pour terminer."
+  "Saved, but the Windows service could not be reached: sign in again later to finish.": "Enregistr├⌐, mais le service Windows est injoignable : reconnectez-vous plus tard pour terminer.",
+  "Confirm with your parent password. It is the same on this PC and from other devices, with no Windows prompt.": "Confirmez avec votre mot de passe parent. Il est identique sur ce PC et depuis d'autres appareils, sans invite Windows.",
+  "Parent password": "Mot de passe parent",
+  "The same password you use to sign in to this dashboard.": "Le m├¬me mot de passe que celui utilis├⌐ pour vous connecter ├á ce tableau de bord.",
+  "Enter your parent password.": "Saisissez votre mot de passe parent.",
+  "Sensitive changes are off: the parent password has not reached the service yet. Sign out and sign in again to finish.": "Les modifications sensibles sont d├⌐sactiv├⌐es : le mot de passe parent n'a pas encore atteint le service. D├⌐connectez-vous puis reconnectez-vous pour terminer.",
+  "Sensitive changes are locked until {time} after too many wrong password attempts.": "Les modifications sensibles sont verrouill├⌐es jusqu'├á {time} apr├¿s trop de tentatives de mot de passe erron├⌐es.",
+  "Save the rule. You confirm it with your parent password.": "Enregistrer la r├¿gle. Vous la confirmez avec votre mot de passe parent.",
+  "Protect the app limits, schedule and groups so they can only be changed after you confirm with your parent password.": "Prot├¿ge les limites d'applications, le planning et les groupes afin qu'ils ne puissent ├¬tre modifi├⌐s qu'apr├¿s confirmation avec votre mot de passe parent."
 }
