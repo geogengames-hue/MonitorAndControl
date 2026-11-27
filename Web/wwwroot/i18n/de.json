@@ -836,5 +836,18 @@
   "{time} of PC time left today.": "Heute noch {time} PC-Zeit ├╝brig.",
   "No PC Time limit for this account.": "Dieses Konto hat kein PC-Zeit-Limit.",
   "Showing the rules that apply to {name}: those for this account and those for everyone.": "Angezeigt werden die Regeln f├╝r {name}: die f├╝r dieses Konto und die f├╝r alle.",
-  "Showing every rule. Choose an account above to see only the rules that apply to it.": "Alle Regeln werden angezeigt. W├ñhlen Sie oben ein Konto, um nur die f├╝r es geltenden Regeln zu sehen."
+  "Showing every rule. Choose an account above to see only the rules that apply to it.": "Alle Regeln werden angezeigt. W├ñhlen Sie oben ein Konto, um nur die f├╝r es geltenden Regeln zu sehen.",
+  "Pause limits": "Limits pausieren",
+  "Custom minutes": "Eigene Minuten",
+  "Pause": "Pausieren",
+  "Enter a time between 1 and 240 minutes.": "Gib eine Zeit zwischen 1 und 240 Minuten ein.",
+  "Stop closing apps for 60 minutes. Limits resume automatically.": "Apps 60 Minuten lang nicht schlie├ƒen. Die Limits gelten danach automatisch wieder.",
+  "Stop closing apps until the end of today's allowed hours, or midnight if there is no schedule.": "Apps bis zum Ende der heute erlaubten Zeiten nicht schlie├ƒen, oder bis Mitternacht, wenn es keinen Zeitplan gibt.",
+  "Stop closing apps for this many minutes (1-240). Press Enter or Pause.": "Apps so viele Minuten lang nicht schlie├ƒen (1-240). Dr├╝cke Eingabe oder Pausieren.",
+  "Stop closing apps for the minutes typed in the box. Limits resume automatically.": "Apps so viele Minuten lang nicht schlie├ƒen, wie im Feld stehen. Die Limits gelten danach automatisch wieder.",
+  "Add 60 minutes to the chosen app's allowance for today.": "60 Minuten zur heutigen Zeit der gew├ñhlten App hinzuf├╝gen.",
+  "Add this many minutes to the chosen app's allowance for today (1-240). Press Enter or Add.": "So viele Minuten zur heutigen Zeit der gew├ñhlten App hinzuf├╝gen (1-240). Dr├╝cke Eingabe oder Hinzuf├╝gen.",
+  "Add the minutes typed in the box to the chosen app's allowance for today.": "Die im Feld eingegebenen Minuten zur heutigen Zeit der gew├ñhlten App hinzuf├╝gen.",
+  "Add this many minutes to today's total PC time of this account (1-240). Press Enter or Add.": "So viele Minuten zur heutigen PC-Gesamtzeit dieses Kontos hinzuf├╝gen (1-240). Dr├╝cke Eingabe oder Hinzuf├╝gen.",
+  "Add the minutes typed in the box to today's total PC time of this account.": "Die im Feld eingegebenen Minuten zur heutigen PC-Gesamtzeit dieses Kontos hinzuf├╝gen."
 }

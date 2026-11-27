@@ -227,8 +227,12 @@ a { color: var(--primary); }
 .action-dock { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin-top: 16px; }
 .action-dock button { width: 100%; }
 .action-dock .btn-danger { grid-column: 1/-1; }
-.extend-dock { display: grid; grid-template-columns: minmax(150px,1fr) repeat(3,auto); margin-top: 16px; }
-.extend-dock select { width: 100%; min-width: 0; }
+.duration-dock { margin-top: 16px; }
+.duration-dock select { flex: 1 1 150px; min-width: 0; }
+.custom-minutes { display: inline-flex; gap: 8px; align-items: center; }
+.custom-minutes input { width: 140px; }
+.live-subhead { margin-top: 16px; color: var(--text-soft); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.live-subhead + .duration-dock { margin-top: 8px; }
 #live-time-card { grid-column: 1/-1; }
 .live-time-left { margin-top: 14px; color: var(--text-soft); font-size: 14px; }
 .live-time-left strong { color: var(--text); font-size: 20px; font-weight: 650; }
@@ -311,7 +315,7 @@ button.btn-danger { background: linear-gradient(135deg,rgba(216,91,85,.25),rgba(
 button.btn-danger:hover { background: linear-gradient(135deg,#d85b55,#a83e3a); border-color: #e07069; color: #fff; box-shadow: 0 9px 25px rgba(216,91,85,.25); }
 .button-ripple { position: absolute; z-index: 3; width: 12px; height: 12px; margin: -6px 0 0 -6px; pointer-events: none; border-radius: 50%; background: rgba(255,255,255,.42); transform: scale(0); animation: button-ripple .55s ease-out; }
 @keyframes button-ripple { to { opacity: 0; transform: scale(18); } }
-#action-pause-15::before, #action-pause-30::before { content: "Ⅱ"; color: #83b7e5; font-size: 10px; letter-spacing: -2px; }
+#action-pause-15::before, #action-pause-30::before, #action-pause-60::before { content: "Ⅱ"; color: #83b7e5; font-size: 10px; letter-spacing: -2px; }
 #action-resume::before { content: "▶"; color: #70ca95; font-size: 9px; }
 #action-reset-today::before { content: "↻"; color: #b69be8; font-size: 14px; }
 #action-block-all::before { content: "■"; font-size: 8px; }
@@ -441,8 +445,6 @@ code { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; ba
   .active-hero { min-height: 210px; }
   .hero-content { max-width: 82%; }
   .hero-visual { right: -50px; opacity: .55; }
-  .extend-dock { grid-template-columns: repeat(3,1fr); }
-  .extend-dock select { grid-column: 1/-1; }
   .backup-actions { grid-template-columns: 1fr; }
   .backup-actions button { min-width: 0; }
 }

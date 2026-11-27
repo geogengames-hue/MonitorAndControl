@@ -160,9 +160,18 @@
         </section>
         <section class="live-card action-card">
           <div class="card-heading"><div><div class="live-label" title="One-click controls that take effect immediately.">Quick Actions</div><p>Immediate controls</p></div><span class="card-mark">03</span></div>
+          <div class="live-subhead">Pause limits</div>
+          <div class="quick-actions duration-dock">
+            <button id="action-pause-15" title="Stop closing apps for 15 minutes. Limits resume automatically." class="btn-secondary" type="button">15m</button>
+            <button id="action-pause-30" title="Stop closing apps for 30 minutes. Limits resume automatically." class="btn-secondary" type="button">30m</button>
+            <button id="action-pause-60" title="Stop closing apps for 60 minutes. Limits resume automatically." class="btn-secondary" type="button">60m</button>
+            <button id="action-pause-bedtime" title="Stop closing apps until the end of today&#x27;s allowed hours, or midnight if there is no schedule." class="btn-secondary" type="button">Until Bedtime</button>
+            <span class="custom-minutes">
+              <input type="number" id="action-pause-custom" min="1" max="240" step="1" placeholder="Custom minutes" title="Stop closing apps for this many minutes (1-240). Press Enter or Pause." aria-label="Custom pause in minutes">
+              <button id="action-pause-custom-go" title="Stop closing apps for the minutes typed in the box. Limits resume automatically." class="btn-secondary" type="button">Pause</button>
+            </span>
+          </div>
           <div class="quick-actions action-dock">
-            <button id="action-pause-15" title="Stop closing apps for 15 minutes. Limits resume automatically." class="btn-secondary">Pause 15m</button>
-            <button id="action-pause-30" title="Stop closing apps for 30 minutes. Limits resume automatically." class="btn-secondary">Pause 30m</button>
             <button id="action-resume" title="End the pause now and enforce limits again." class="btn-secondary">Resume</button>
             <button id="action-reset-today" title="Set today&#x27;s recorded time to zero for all apps. Earlier days are not affected." class="btn-secondary">Reset Today</button>
             <button id="action-block-all" title="Close every tracked app that is running right now. They can be opened again." class="btn-danger">Block All Now</button>
@@ -171,11 +180,16 @@
         <section class="live-card extend-card">
           <div class="card-heading"><div><div class="live-label" title="Give an app extra time today without changing its daily limit.">Extend App Time</div><p>Grant a temporary exception</p></div><span class="card-mark">04</span></div>
           <p class="scope-note multi-only" id="extend-target"></p>
-          <div class="quick-actions extend-dock">
+          <div class="quick-actions duration-dock">
             <select id="quick-extend-app" title="Choose the app to give extra time to."><option value="">Choose app</option></select>
-            <button id="quick-extend-15" title="Add 15 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary">+15m</button>
-            <button id="quick-extend-30" title="Add 30 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary">+30m</button>
-            <button id="quick-extend-bedtime" title="Keep the chosen app allowed until the end of today&#x27;s allowed hours, or midnight if there is no schedule." class="btn-secondary">Until Bedtime</button>
+            <button id="quick-extend-15" title="Add 15 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary" type="button">+15m</button>
+            <button id="quick-extend-30" title="Add 30 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary" type="button">+30m</button>
+            <button id="quick-extend-60" title="Add 60 minutes to the chosen app&#x27;s allowance for today." class="btn-secondary" type="button">+60m</button>
+            <button id="quick-extend-bedtime" title="Keep the chosen app allowed until the end of today&#x27;s allowed hours, or midnight if there is no schedule." class="btn-secondary" type="button">Until Bedtime</button>
+            <span class="custom-minutes">
+              <input type="number" id="quick-extend-custom" min="1" max="240" step="1" placeholder="Custom minutes" title="Add this many minutes to the chosen app&#x27;s allowance for today (1-240). Press Enter or Add." aria-label="Custom extra minutes for the app">
+              <button id="quick-extend-custom-go" title="Add the minutes typed in the box to the chosen app&#x27;s allowance for today." class="btn-secondary" type="button">Add</button>
+            </span>
           </div>
         </section>
         <section class="live-card extend-card" id="live-time-card">
@@ -186,6 +200,10 @@
             <button id="live-time-15" title="Add 15 minutes to today&#x27;s total PC time of this account." class="btn-secondary" type="button">+15m</button>
             <button id="live-time-30" title="Add 30 minutes to today&#x27;s total PC time of this account." class="btn-secondary" type="button">+30m</button>
             <button id="live-time-60" title="Add 60 minutes to today&#x27;s total PC time of this account." class="btn-secondary" type="button">+60m</button>
+            <span class="custom-minutes">
+              <input type="number" id="live-time-custom" min="1" max="240" step="1" placeholder="Custom minutes" title="Add this many minutes to today&#x27;s total PC time of this account (1-240). Press Enter or Add." aria-label="Custom extra PC minutes">
+              <button id="live-time-custom-go" title="Add the minutes typed in the box to today&#x27;s total PC time of this account." class="btn-secondary" type="button">Add</button>
+            </span>
           </div>
         </section>
       </div>

@@ -619,10 +619,29 @@ async function runQuickAction(action, payload, confirmText) {
   }
 }
 
-document.getElementById('action-pause-15').addEventListener('click', () =>
-  runQuickAction('pause', { minutes: 15 }));
-document.getElementById('action-pause-30').addEventListener('click', () =>
-  runQuickAction('pause', { minutes: 30 }));
+// A box for any number of minutes next to the preset buttons; Enter or its button applies it.
+function wireCustomMinutes(inputId, buttonId, apply) {
+  const input = document.getElementById(inputId);
+  const run = () => {
+    const minutes = Math.floor(Number(input.value));
+    if (!(minutes >= 1 && minutes <= 240)) {
+      alert(t('Enter a time between 1 and 240 minutes.'));
+      return;
+    }
+    input.value = '';
+    apply(minutes);
+  };
+  document.getElementById(buttonId).addEventListener('click', run);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+}
+
+[15, 30, 60].forEach(minutes =>
+  document.getElementById(`action-pause-${minutes}`).addEventListener('click', () =>
+    runQuickAction('pause', { minutes })));
+document.getElementById('action-pause-bedtime').addEventListener('click', () =>
+  runQuickAction('pause', { untilBedtime: true }));
+wireCustomMinutes('action-pause-custom', 'action-pause-custom-go', minutes =>
+  runQuickAction('pause', { minutes }));
 document.getElementById('action-resume').addEventListener('click', () =>
   runQuickAction('resume'));
 document.getElementById('action-reset-today').addEventListener('click', () =>
@@ -630,9 +649,10 @@ document.getElementById('action-reset-today').addEventListener('click', () =>
 document.getElementById('action-block-all').addEventListener('click', () =>
   runQuickAction('block-all', null, t('Close all running tracked apps now?')));
 
-document.getElementById('quick-extend-15').addEventListener('click', () => quickExtend(15));
-document.getElementById('quick-extend-30').addEventListener('click', () => quickExtend(30));
+[15, 30, 60].forEach(minutes =>
+  document.getElementById(`quick-extend-${minutes}`).addEventListener('click', () => quickExtend(minutes)));
 document.getElementById('quick-extend-bedtime').addEventListener('click', quickExtendUntilBedtime);
+wireCustomMinutes('quick-extend-custom', 'quick-extend-custom-go', quickExtend);
 
 async function quickExtend(minutes) {
   const appName = document.getElementById('quick-extend-app').value;

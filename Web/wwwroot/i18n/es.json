@@ -836,5 +836,18 @@
   "{time} of PC time left today.": "Quedan {time} de tiempo de PC hoy.",
   "No PC Time limit for this account.": "Esta cuenta no tiene l├¡mite de Tiempo de PC.",
   "Showing the rules that apply to {name}: those for this account and those for everyone.": "Se muestran las reglas que se aplican a {name}: las de esta cuenta y las de todos.",
-  "Showing every rule. Choose an account above to see only the rules that apply to it.": "Se muestran todas las reglas. Elija una cuenta arriba para ver solo las que se le aplican."
+  "Showing every rule. Choose an account above to see only the rules that apply to it.": "Se muestran todas las reglas. Elija una cuenta arriba para ver solo las que se le aplican.",
+  "Pause limits": "Pausar l├¡mites",
+  "Custom minutes": "Minutos personalizados",
+  "Pause": "Pausar",
+  "Enter a time between 1 and 240 minutes.": "Introduce un tiempo entre 1 y 240 minutos.",
+  "Stop closing apps for 60 minutes. Limits resume automatically.": "No cerrar aplicaciones durante 60 minutos. Los l├¡mites se reanudan solos.",
+  "Stop closing apps until the end of today's allowed hours, or midnight if there is no schedule.": "No cerrar aplicaciones hasta el final del horario permitido de hoy, o hasta medianoche si no hay horario.",
+  "Stop closing apps for this many minutes (1-240). Press Enter or Pause.": "No cerrar aplicaciones durante este n├║mero de minutos (1-240). Pulsa Intro o Pausar.",
+  "Stop closing apps for the minutes typed in the box. Limits resume automatically.": "No cerrar aplicaciones durante los minutos escritos en el cuadro. Los l├¡mites se reanudan solos.",
+  "Add 60 minutes to the chosen app's allowance for today.": "A├▒adir 60 minutos al tiempo de hoy de la aplicaci├│n elegida.",
+  "Add this many minutes to the chosen app's allowance for today (1-240). Press Enter or Add.": "A├▒adir este n├║mero de minutos al tiempo de hoy de la aplicaci├│n elegida (1-240). Pulsa Intro o A├▒adir.",
+  "Add the minutes typed in the box to the chosen app's allowance for today.": "A├▒adir los minutos escritos en el cuadro al tiempo de hoy de la aplicaci├│n elegida.",
+  "Add this many minutes to today's total PC time of this account (1-240). Press Enter or Add.": "A├▒ade este n├║mero de minutos al tiempo total de PC de hoy de esta cuenta (1-240). Pulsa Intro o A├▒adir.",
+  "Add the minutes typed in the box to today's total PC time of this account.": "A├▒ade los minutos escritos en el cuadro al tiempo total de PC de hoy de esta cuenta."
 }

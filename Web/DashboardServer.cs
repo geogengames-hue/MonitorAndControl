@@ -570,17 +570,36 @@ public class DashboardServer
             if (auth != null) return auth;
 
             var minutes = 15;
+            var untilBedtime = false;
             if (ctx.Request.ContentLength > 0)
             {
                 using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
                 if (doc.RootElement.TryGetProperty("minutes", out var mins))
                     minutes = mins.GetInt32();
+                untilBedtime = doc.RootElement.TryGetProperty("untilBedtime", out var bedtime) && bedtime.ValueKind == JsonValueKind.True;
             }
 
-            if (minutes is < 1 or > 240)
-                return Results.BadRequest(new { error = "Pause duration must be between 1 and 240 minutes." });
+            TimeSpan duration;
+            if (untilBedtime)
+            {
+                // Until the end of today's allowed hours (the latest open schedule window), or midnight if there is none.
+                var now = ParentClock.Now;
+                var rules = (await scheduler.GetRulesAsync()).ToList();
+                var allowedUntil = rules.Select(r => r.AppName ?? "").Append("").Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(app => SchedulerService.GetCurrentAllowedWindowEnd(rules, app, now))
+                    .Where(end => end != null).Max() ?? now.Date.AddDays(1);
+                if (allowedUntil <= now)
+                    return Results.BadRequest(new { error = "No remaining allowed time today." });
+                duration = allowedUntil - now;
+            }
+            else
+            {
+                if (minutes is < 1 or > 240)
+                    return Results.BadRequest(new { error = "Pause duration must be between 1 and 240 minutes." });
+                duration = TimeSpan.FromMinutes(minutes);
+            }
 
-            var pausedUntil = enforcer.PauseFor(TimeSpan.FromMinutes(minutes));
+            var pausedUntil = enforcer.PauseFor(duration);
             return Results.Ok(new { status = "paused", pausedUntil });
         });
 

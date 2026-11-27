@@ -646,7 +646,7 @@ function renderLiveTime() {
     left.classList.toggle('warning', profile.remainingSeconds > 0 && profile.remainingSeconds < 900);
     if (block) left.append(document.createElement('br'), block);
   }
-  ['15', '30', '60'].forEach(n => { liveTimeElement(n).disabled = !canGrant; });
+  ['15', '30', '60', 'custom', 'custom-go'].forEach(n => { liveTimeElement(n).disabled = !canGrant; });
   renderAccountOptions();
 }
 
@@ -672,6 +672,7 @@ function liveTimeGrant(minutes) {
 }
 
 ['15', '30', '60'].forEach(n => liveTimeElement(n).addEventListener('click', () => liveTimeGrant(Number(n))));
+wireCustomMinutes('live-time-custom', 'live-time-custom-go', liveTimeGrant);
 liveTimeElement('account').addEventListener('change', renderLiveTime);
 document.querySelector('.sidebar nav a[data-view="live"]').addEventListener('click', loadLiveTime);
 
