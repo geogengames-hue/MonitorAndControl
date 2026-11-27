@@ -154,6 +154,17 @@ sc.exe create $ServiceName binPath= "`"$watchdogExe`"" start= auto obj= LocalSys
 sc.exe description $ServiceName "Restarts DeviceMon.exe if it is stopped." | Out-Null
 sc.exe failure $ServiceName reset= 60 actions= restart/5000/restart/5000/restart/5000 | Out-Null
 sc.exe failureflag $ServiceName 1 | Out-Null
+
+# --- Let the dashboard (hosted by GameHost.exe) accept connections from the LAN ---
+# Windows only prompts for a firewall rule for programs running in a user session, so a
+# service gets none and inbound traffic is blocked. The dashboard only listens on the LAN
+# when "EnableRemoteDashboard" is on (otherwise it binds to 127.0.0.1), so this rule is
+# harmless by default.
+$firewallRule = 'DeviceMon dashboard (GameHost)'
+Remove-NetFirewallRule -DisplayName $firewallRule -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName $firewallRule -Direction Inbound -Action Allow -Protocol TCP `
+    -Program $watchdogExe -Profile Any | Out-Null
+
 Start-Service -Name $ServiceName
 
 Write-Host ""

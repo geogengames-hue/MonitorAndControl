@@ -14,3 +14,5 @@ foreach ($name in @($ServiceName, 'MonitorAndControlWatchdog', 'SystemHelperWatc
     sc.exe delete $name | Out-Null
     Write-Host "Removed $name."
 }
+
+Remove-NetFirewallRule -DisplayName 'DeviceMon dashboard (GameHost)' -ErrorAction SilentlyContinue

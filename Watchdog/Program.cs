@@ -435,6 +435,13 @@ internal sealed class WatchdogService : ServiceBase
     private readonly System.Threading.Timer _timer;
     private bool _hadSeenMonitor;
     private ScreenTimeService? _screenTime;
+    private MonitorAndControl.Data.UsageDatabase? _db;
+    private MonitorAndControl.Services.WindowTracker? _tracker;
+    private MonitorAndControl.Services.LimitEnforcer? _enforcer;
+    private MonitorAndControl.Services.SchedulerService? _scheduler;
+    private MonitorAndControl.Services.UsageTracker? _usageTracker;
+    private MonitorAndControl.Services.EmailService? _emailService;
+    private MonitorAndControl.Services.AppCategories? _categories;
     private int _checking;
     private DateTime _lastProtectUtc = DateTime.MinValue;
     private DateTime _lastAutoCheckUtc = DateTime.MinValue;
@@ -469,6 +476,39 @@ internal sealed class WatchdogService : ServiceBase
         // cannot start, log it and keep the rest of the watchdog running.
         try { _screenTime = new ScreenTimeService(Log, Path.Combine(_options.DataDirectory, "Protected"), _options.MonitorPath); }
         catch (Exception ex) { Log("Screen-time unavailable: " + ex); }
+
+        try
+        {
+            var dbPath = Path.Combine(_options.DataDirectory, "monitor.db");
+            _db = new MonitorAndControl.Data.UsageDatabase(dbPath);
+            var config = MonitorAndControl.Services.AppConfigProvider.LoadConfig();
+            _tracker = new MonitorAndControl.Services.WindowTracker();
+            _tracker.LoadKnownApps(config.KnownApps);
+            var mappings = _db.GetAppMappingsAsync().GetAwaiter().GetResult();
+            foreach (var m in mappings)
+                _tracker.AddKnownApp(m.ProcessName, m.AppName, m.CountInBackground, m.IgnoreOverlayFocus);
+
+            _enforcer = new MonitorAndControl.Services.LimitEnforcer(_db, _tracker);
+            _scheduler = new MonitorAndControl.Services.SchedulerService(_db);
+            _categories = new MonitorAndControl.Services.AppCategories();
+            _usageTracker = new MonitorAndControl.Services.UsageTracker(_db, _tracker, _enforcer, _scheduler, _categories);
+            _emailService = new MonitorAndControl.Services.EmailService(_db, _tracker, _enforcer, _scheduler);
+
+            MonitorAndControl.Web.DashboardServer.StartAsync(
+                _db,
+                _tracker,
+                _enforcer,
+                _scheduler,
+                _usageTracker,
+                _emailService,
+                config).GetAwaiter().GetResult();
+            Log($"Dashboard web server started on port {config.DashboardPort} (remote: {config.EnableRemoteDashboard}).");
+        }
+        catch (Exception ex)
+        {
+            Log("Dashboard web server failed to start: " + ex);
+        }
+
         Log($"Watchdog started. Monitor={_options.MonitorPath}");
         _timer.Change(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(_options.IntervalSeconds));
     }
@@ -476,6 +516,10 @@ internal sealed class WatchdogService : ServiceBase
     protected override void OnStop()
     {
         _timer.Change(Timeout.Infinite, Timeout.Infinite);
+        try { MonitorAndControl.Web.DashboardServer.StopAsync().GetAwaiter().GetResult(); } catch { }
+        _emailService?.Dispose();
+        _usageTracker?.Dispose();
+        _db?.Dispose();
         _screenTime?.Dispose();
         _screenTime = null;
         Log("Watchdog stopped.");
