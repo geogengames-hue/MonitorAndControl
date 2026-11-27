@@ -17,11 +17,16 @@
     <AssemblyVersion>1.13.1.0</AssemblyVersion>
     <FileVersion>1.13.1.0</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- Self-contained so Setup starts on a PC with no .NET installed; it installs the runtimes DeviceMon needs. -->
     <SelfContained>true</SelfContained>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="logo.png" LogicalName="logo.png" />
+  </ItemGroup>
 
   <!-- publish.ps1 passes the zipped publish folder: dotnet publish -p:PayloadZip=<path> -->
   <ItemGroup Condition="'$(PayloadZip)' != ''">

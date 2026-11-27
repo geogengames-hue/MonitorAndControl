@@ -1979,7 +1979,8 @@ public class DashboardServer
         var path = ctx.Request.Path.Value ?? "";
         if (path.Equals("/login.html", StringComparison.OrdinalIgnoreCase) ||
             path.Equals("/quick.html", StringComparison.OrdinalIgnoreCase) ||
-            path.Equals("/favicon.ico", StringComparison.OrdinalIgnoreCase))
+            path.Equals("/favicon.ico", StringComparison.OrdinalIgnoreCase) ||
+            path.Equals("/logo.png", StringComparison.OrdinalIgnoreCase))
             return false;
 
         if (!_adminPasswordSet)

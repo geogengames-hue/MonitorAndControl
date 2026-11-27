@@ -65,8 +65,15 @@ internal sealed class SetupForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
+        try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath ?? Application.ExecutablePath); } catch { /* keep default icon */ }
 
-        var title = new Label { Text = InstallerLocalization.SetupTitle(SetupVersion), UseMnemonic = false, Font = new Font(Font.FontFamily, 14f, FontStyle.Bold), Location = new Point(16, 12), AutoSize = true };
+        var title = new Label { Text = InstallerLocalization.SetupTitle(SetupVersion), UseMnemonic = false, Font = new Font(Font.FontFamily, 14f, FontStyle.Bold), Location = new Point(60, 16), AutoSize = true };
+        var logo = new PictureBox { Location = new Point(16, 8), Size = new Size(36, 36), SizeMode = PictureBoxSizeMode.Zoom };
+        using (Stream? logoStream = typeof(SetupForm).Assembly.GetManifestResourceStream("logo.png"))
+        {
+            if (logoStream != null)
+                using (var raw = new Bitmap(logoStream)) logo.Image = new Bitmap(raw);
+        }
         _status = new Label { Text = InstallerLocalization.Starting, UseMnemonic = false, Location = new Point(16, 48), Size = new Size(608, 22) };
         _progress = new ProgressBar { Location = new Point(16, 74), Size = new Size(608, 22), Style = ProgressBarStyle.Marquee };
         _log = new TextBox
@@ -81,7 +88,7 @@ internal sealed class SetupForm : Form
         };
         _close = new Button { Text = InstallerLocalization.ButtonClose, Location = new Point(544, 340), Size = new Size(80, 28), Enabled = false };
         _close.Click += (_, _) => Close();
-        Controls.AddRange(new Control[] { title, _status, _progress, _log, _close });
+        Controls.AddRange(new Control[] { logo, title, _status, _progress, _log, _close });
 
         Shown += async (_, _) => await RunAsync();
         FormClosing += (_, e) => { if (_busy) e.Cancel = true; };
