@@ -99,7 +99,7 @@ public class LimitEnforcer
 
     private void OnAppChanged(string app, string proc)
     {
-        if (IsAlwaysAllowed(app)) return;
+        if (IsAlwaysAllowed(app) || AccountExemption.IsExempt) return;
         // Auto-clear exceeded set at midnight
         var today = MonitorAndControl.ScreenTime.ParentClock.Now.ToString("yyyy-MM-dd");
         if (_todayDate != today)
@@ -142,6 +142,13 @@ public class LimitEnforcer
     {
         if (IsPaused)
             return Task.CompletedTask;
+
+        // An account the parent excluded from limits: nothing is closed, and nothing stays queued from before.
+        if (AccountExemption.IsExempt)
+        {
+            if (!_exceededToday.IsEmpty || !_activeCountdowns.IsEmpty) ClearExceeded();
+            return Task.CompletedTask;
+        }
 
         if (_pausedUntil.HasValue && _pausedUntil.Value <= DateTimeOffset.Now)
             _pausedUntil = null;

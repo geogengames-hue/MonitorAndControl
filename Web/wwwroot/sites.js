@@ -403,3 +403,51 @@ document.querySelectorAll('[data-view="limits"]').forEach(a => a.addEventListene
 setInterval(() => {
   if (document.getElementById('view-limits')?.classList.contains('active')) loadUserLimits(false);
 }, 15000);
+
+// ---- Windows accounts the app limits do not apply to
+async function loadExemptAccounts() {
+  const holder = document.getElementById('exempt-accounts');
+  if (!holder || holder.contains(document.activeElement)) return;
+  try {
+    let accounts = [];
+    try { accounts = ((await api('/api/screen-time')).accounts || []).filter(a => a.sid && a.exclusionReason !== 'Account not found'); } catch { /* the service may be unavailable */ }
+    const exempt = ((await api('/api/limit-exempt')).accounts || []).map(s => s.toUpperCase());
+    holder.replaceChildren();
+    if (!accounts.length) {
+      holder.textContent = t('No Windows account is available (needs the GameHost service).');
+      return;
+    }
+    accounts.forEach(account => {
+      const label = document.createElement('label');
+      label.className = 'inline-check';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = exempt.includes(account.sid.toUpperCase());
+      box.addEventListener('change', async () => {
+        const chosen = [...holder.querySelectorAll('input')].filter(i => i.checked).map(i => i.dataset.sid);
+        const message = document.getElementById('exempt-message');
+        message.classList.add('hidden');
+        try {
+          await api('/api/limit-exempt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accounts: chosen })
+          });
+        } catch (error) {
+          box.checked = !box.checked;
+          let text = error.message;
+          try { text = JSON.parse(text).error || text; } catch { /* plain text */ }
+          message.textContent = t(text);
+          message.classList.remove('hidden');
+        }
+      });
+      box.dataset.sid = account.sid;
+      label.append(box, ' ' + account.name);
+      holder.appendChild(label);
+    });
+  } catch { /* shown by the page's other loaders */ }
+}
+document.querySelectorAll('[data-view="limits"]').forEach(a => a.addEventListener('click', loadExemptAccounts));
+setInterval(() => {
+  if (document.getElementById('view-limits')?.classList.contains('active')) loadExemptAccounts();
+}, 15000);

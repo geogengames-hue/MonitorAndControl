@@ -26,6 +26,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("New programs wait for the parent's OK", TestProgramApprovals),
     ("A blocked site can be asked for once and answered", TestSiteRequests),
     ("Always-allowed apps are never closed and are sealed", TestAlwaysAllowed),
+    ("Exempt accounts are not limited and are sealed", TestExemptAccounts),
     ("Breaks lock the PC after a stretch of use", TestBreakReminders),
     ("App categories cover new apps and are sealed", TestAppCategories),
     ("Older databases are upgraded for per-account groups", TestGroupMembersUpgrade),
@@ -1958,6 +1959,41 @@ static Task TestAlwaysAllowed()
     var snapshot = db.ReadLimitsSnapshotAsync().GetAwaiter().GetResult();
     AssertTrue(snapshot.AlwaysAllowed.Count == 2, "The list is stored once per app and is part of the sealed copy.");
     return Task.CompletedTask;
+}
+
+static async Task TestExemptAccounts()
+{
+    const string parent = "S-1-5-21-1-2-3-1001";
+    var plain = new MonitorAndControl.ScreenTime.SealedLimits { HomeworkApps = { "Minecraft" } };
+    var withExempt = new MonitorAndControl.ScreenTime.SealedLimits { HomeworkApps = { "Minecraft" }, ExemptAccounts = { parent } };
+    AssertTrue(plain.Fingerprint() != withExempt.Fingerprint(), "Changing the exempt accounts is noticed while limits are protected.");
+    AssertTrue(new MonitorAndControl.ScreenTime.SealedLimits { ExemptAccounts = null! }.Normalized().ExemptAccounts.Count == 0, "A missing list reads as empty.");
+
+    using var db = CreateTempDatabase();
+    await db.SetExemptAccountsAsync(new[] { parent, parent.ToLowerInvariant(), "S-1-5-21-1-2-3-1002" });
+    var snapshot = await db.ReadLimitsSnapshotAsync();
+    AssertTrue(snapshot.ExemptAccounts.Count == 2, "Each account is stored once and is part of the sealed copy.");
+    await db.SetExemptAccountsAsync(Array.Empty<string>());
+    await db.ApplyLimitsSnapshotAsync(snapshot);
+    AssertTrue((await db.GetExemptAccountsAsync()).Count == 2, "The sealed exempt accounts are restored.");
+
+    using var tracker = new WindowTracker();
+    tracker.AddKnownApp("missing-chess.exe", "Chess");
+    var enforcer = new LimitEnforcer(db, tracker);
+    var group = new List<GroupLimitBreach> { new(1, "Games", new[] { "Chess" }, 60, 60) };
+    try
+    {
+        MonitorAndControl.Services.AccountExemption.Set(true);
+        await enforcer.EnforceAsync(new List<(string AppName, long UsedSecs, long MaxSecs)>(), group, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        AssertFalse(enforcer.IsExceededToday("Chess"), "An exempt account's apps are not blocked.");
+        MonitorAndControl.Services.AccountExemption.Set(false);
+        await enforcer.EnforceAsync(new List<(string AppName, long UsedSecs, long MaxSecs)>(), group, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        AssertTrue(enforcer.IsExceededToday("Chess"), "The same limit applies once the account is no longer exempt.");
+        MonitorAndControl.Services.AccountExemption.Set(true);
+        await enforcer.EnforceAsync(new List<(string AppName, long UsedSecs, long MaxSecs)>(), group, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        AssertFalse(enforcer.IsExceededToday("Chess"), "Becoming exempt lifts what was already blocked.");
+    }
+    finally { MonitorAndControl.Services.AccountExemption.Set(false); }
 }
 
 static Task TestBreakReminders()

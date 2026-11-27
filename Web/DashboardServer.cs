@@ -1288,6 +1288,30 @@ public class DashboardServer
             return Results.Ok();
         });
 
+        // Windows accounts the app limits, groups, schedule and homework app closing do not apply to.
+        app.MapGet("/api/limit-exempt", async () => Results.Json(new { accounts = await db.GetExemptAccountsAsync() }, JsonOpts));
+
+        app.MapPost("/api/limit-exempt", async (HttpContext ctx) =>
+        {
+            var auth = RequireWriteAccess(ctx);
+            if (auth != null) return auth;
+            using var doc = await TryParseBodyAsync(ctx);
+            if (doc == null || !doc.RootElement.TryGetProperty("accounts", out var list) || list.ValueKind != JsonValueKind.Array)
+                return Results.BadRequest(new { error = "Choose the accounts." });
+            var sids = new List<string>();
+            foreach (var item in list.EnumerateArray())
+            {
+                var sid = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
+                if (!AccountIdentity.IsValidSid(sid)) return Results.BadRequest(new { error = "Choose Windows accounts only." });
+                sids.Add(sid!);
+            }
+            if (sids.Count > 50) return Results.BadRequest(new { error = "Up to 50 accounts." });
+            await db.SetExemptAccountsAsync(sids);
+            await AccountExemption.RefreshAsync(db);
+            enforcer.ClearExceeded();
+            return Results.Ok();
+        });
+
         // "New programs need my OK": turning it on and keeping a program blocked only restrict, so they need no
         // approval. Turning it off and allowing a program go through PC Time's approval (UAC or remote PIN).
         app.MapPost("/api/programs/on", async (HttpContext ctx) =>

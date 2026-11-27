@@ -62,6 +62,8 @@ public sealed class SealedLimits
     public List<string> HomeworkApps { get; set; } = new();
     /// <summary>Apps that are never closed: not by the schedule, limits, homework mode, Block now or new-program checks.</summary>
     public List<string> AlwaysAllowed { get; set; } = new();
+    /// <summary>Windows accounts (SIDs) that the app limits, groups, schedule and homework app closing do not apply to.</summary>
+    public List<string> ExemptAccounts { get; set; } = new();
     /// <summary>The parent's app category choices (app name to category or "none").</summary>
     public Dictionary<string, string> Categories { get; set; } = new();
 
@@ -79,6 +81,8 @@ public sealed class SealedLimits
         HomeworkApps.RemoveAll(x => x == null);
         AlwaysAllowed ??= new();
         AlwaysAllowed.RemoveAll(x => x == null);
+        ExemptAccounts ??= new();
+        ExemptAccounts.RemoveAll(x => x == null);
         Categories = (Categories ?? new()).Where(kv => kv.Key != null && kv.Value != null).ToDictionary(kv => kv.Key, kv => kv.Value);
         Limits.RemoveAll(x => x == null);
         Schedule.RemoveAll(x => x == null);
@@ -92,7 +96,7 @@ public sealed class SealedLimits
     }
 
     public bool IsReasonable() =>
-        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxSites && HomeworkApps.Count <= MaxEntries && AlwaysAllowed.Count <= MaxEntries && UserLimits.Count <= MaxEntries && Categories.Count <= MaxEntries
+        Limits.Count <= MaxEntries && Schedule.Count <= MaxEntries && Groups.Count <= MaxEntries && Sites.Count <= MaxSites && HomeworkApps.Count <= MaxEntries && AlwaysAllowed.Count <= MaxEntries && UserLimits.Count <= MaxEntries && Categories.Count <= MaxEntries && ExemptAccounts.Count <= MaxEntries
         && Groups.All(g => g.Members.Count <= MaxEntries);
 
     // An account is added only when set, so copies sealed before per-account rules existed keep their fingerprint.
@@ -108,6 +112,7 @@ public sealed class SealedLimits
             .Concat(UserLimits.Select(u => $"U|{u.User}|{u.App}|{u.Minutes}|{(u.Enabled ? 1 : 0)}"))
             .Concat(HomeworkApps.Select(h => h.ToLowerInvariant()).Distinct().Select(h => $"H|{h}"))
             .Concat(AlwaysAllowed.Select(a => a.ToLowerInvariant()).Distinct().Select(a => $"A|{a}"))
+            .Concat(ExemptAccounts.Select(a => a.ToUpperInvariant()).Distinct().Select(a => $"X|{a}"))
             .Concat(Categories.GroupBy(c => c.Key.ToLowerInvariant()).Select(c => $"C|{c.Key}|{c.OrderBy(x => x.Value, StringComparer.Ordinal).First().Value}"))
             .Concat(AllowOnly || SafeBrowsing ? new[] { $"P|{(AllowOnly ? 1 : 0)}|{(SafeBrowsing ? 1 : 0)}" } : Array.Empty<string>())
             .Concat(Groups.Select(g => $"G|{g.Name}|{g.Minutes}|{(g.Enabled ? 1 : 0)}|" +
