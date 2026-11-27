@@ -366,6 +366,8 @@ async function refreshActiveView() {
 async function loadLive() {
   try {
     const data = await api('/api/live');
+    document.getElementById('live-account').textContent = data.account ? t('Account: {name}', { name: data.account }) : '';
+    renderLiveSessions(data);
     document.getElementById('live-app').textContent = data.currentApp || '(idle)';
     document.getElementById('live-proc').textContent = data.currentProcess || '';
     const status = document.getElementById('enforcement-status');
@@ -379,6 +381,24 @@ async function loadLive() {
     }
     renderTrackingDiagnostics(data);
   } catch (e) { log(e); }
+}
+
+// What the other signed-in Windows accounts are doing (the hero above shows the account this dashboard runs in)
+function renderLiveSessions(data) {
+  const box = document.getElementById('live-sessions');
+  const others = (data.sessions || []).filter(s => s.sid !== data.accountSid);
+  box.replaceChildren();
+  if (others.length === 0) return;
+  const states = { locked: t('Locked'), idle: t('Idle') };
+  const head = document.createElement('span');
+  head.textContent = t('Also signed in:');
+  box.appendChild(head);
+  others.forEach(s => {
+    const chip = document.createElement('span');
+    chip.className = 'live-session';
+    chip.textContent = `${s.account}: ${states[s.state] || s.app || t('No tracked app')}`;
+    box.appendChild(chip);
+  });
 }
 
 function renderTrackingDiagnostics(data) {

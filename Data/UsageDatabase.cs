@@ -101,6 +101,15 @@ public class UsageDatabase : IDisposable
                 PRIMARY KEY (UserSid, AppName, Date)
             );
 
+            CREATE TABLE IF NOT EXISTS LiveSessions (
+                UserSid TEXT PRIMARY KEY,
+                Account TEXT NOT NULL DEFAULT '',
+                App TEXT NOT NULL DEFAULT '',
+                Process TEXT NOT NULL DEFAULT '',
+                State TEXT NOT NULL DEFAULT 'active',
+                UpdatedUtc TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS ActivityHours (
                 Hour TEXT NOT NULL,
                 Kind TEXT NOT NULL,
@@ -537,6 +546,31 @@ public class UsageDatabase : IDisposable
 
     public Task<bool> MarkSiteRequestToldAsync(string id) =>
         ExecuteAsync("UPDATE SiteRequests SET Told = 1 WHERE Id = @id", ("@id", id));
+
+    /// <summary>Records what a signed-in account is doing right now, so the dashboard can tell the accounts apart.</summary>
+    public Task<bool> PublishLiveSessionAsync(string userSid, string account, string app, string process, string state) =>
+        ExecuteAsync("INSERT INTO LiveSessions (UserSid, Account, App, Process, State, UpdatedUtc) VALUES (@sid, @account, @app, @process, @state, @now) " +
+                     "ON CONFLICT(UserSid) DO UPDATE SET Account = @account, App = @app, Process = @process, State = @state, UpdatedUtc = @now",
+            ("@sid", userSid), ("@account", account), ("@app", app), ("@process", process), ("@state", state),
+            ("@now", DateTime.UtcNow.ToString("O")));
+
+    /// <summary>The accounts that reported in within <paramref name="maxAge"/>; a signed-out account stops reporting and drops out.</summary>
+    public async Task<List<LiveSession>> GetLiveSessionsAsync(TimeSpan maxAge)
+    {
+        await _lock.WaitAsync();
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT UserSid, Account, App, Process, State FROM LiveSessions WHERE UpdatedUtc >= @since ORDER BY Account";
+            cmd.Parameters.AddWithValue("@since", DateTime.UtcNow.Subtract(maxAge).ToString("O"));
+            using var r = await cmd.ExecuteReaderAsync();
+            var list = new List<LiveSession>();
+            while (await r.ReadAsync())
+                list.Add(new LiveSession(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetString(4)));
+            return list;
+        }
+        finally { _lock.Release(); }
+    }
 
     private async Task<bool> ExecuteAsync(string sql, params (string Name, object Value)[] parameters)
     {
