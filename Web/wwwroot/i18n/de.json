@@ -790,5 +790,9 @@
   "Use the guess": "Vermutung verwenden",
   "The category this app counts in.": "Die Kategorie, in der diese App zählt.",
   "Enter a group name, daily limit, and select at least one app or a category.": "Geben Sie einen Gruppennamen und ein Tageslimit ein und wählen Sie mindestens eine App oder eine Kategorie.",
-  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importiert. {n} Regel(n) für Windows-Konten, die es auf diesem PC nicht gibt, wurden weggelassen."
+  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importiert. {n} Regel(n) für Windows-Konten, die es auf diesem PC nicht gibt, wurden weggelassen.",
+  "Theme": "Design",
+  "Dark": "Dunkel",
+  "Light": "Hell",
+  "The color theme of this dashboard (saved in this browser).": "Das Farbschema dieses Dashboards (wird in diesem Browser gespeichert)."
 }

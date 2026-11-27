@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Monitor & Control Login</title>
+<script>try { if (localStorage.getItem('theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) { }</script>
 <style>
 * { box-sizing: border-box; }
 :root { color-scheme: dark; }
@@ -118,6 +119,21 @@ button:disabled {
   .login-story h2, .login-story p, .story-status { display: none; }
   .login { padding: 34px 28px 38px; }
 }
+/* Light theme, chosen on the dashboard under Settings > Theme (dark is the default). */
+html[data-theme="light"] { color-scheme: light; }
+html[data-theme="light"] body { background: #f3f5f4; color: #1f2926; }
+html[data-theme="light"] .login-shell { border-color: #dde2df; background: #ffffff; box-shadow: 0 25px 70px rgba(31,41,38,.14); }
+html[data-theme="light"] .login-story { background: linear-gradient(145deg,#fff3e3 0%,#fbf7f1 55%,#ffffff 100%); }
+html[data-theme="light"] .login-story::before, html[data-theme="light"] .login-story::after { border-color: rgba(184,92,10,.2); }
+html[data-theme="light"] .story-brand, html[data-theme="light"] .logo { color: #b85c0a; }
+html[data-theme="light"] .login-story h2, html[data-theme="light"] h1 { color: #1f2926; }
+html[data-theme="light"] .login-story p { color: #66716c; }
+html[data-theme="light"] .story-status { color: #3c4743; }
+html[data-theme="light"] label { color: #3c4743; }
+html[data-theme="light"] input { background: #eef1ef; color: #1f2926; border-color: #c3cbc7; }
+html[data-theme="light"] input:focus { border-color: #b85c0a; box-shadow: 0 0 0 3px rgba(184,92,10,.14); }
+html[data-theme="light"] .message { color: #96680a; }
+html[data-theme="light"] .message.error { color: #b3322c; }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
 </style>
 </head>
