@@ -180,6 +180,8 @@ public class DashboardServer
             ResetLoginRateLimit(ctx);
             await RotateAdminTokenAsync(db);
             SetAdminCookie(ctx);
+            // Installs that used a separate PIN before get unified silently: the verified password becomes the parent password.
+            await SyncParentPasswordAsync(password, ctx.RequestAborted);
             return Results.Ok(new { passwordSet = true });
         });
 
@@ -212,8 +214,10 @@ public class DashboardServer
             if (root.TryGetProperty("newPassword", out var np))
                 newPassword = np.GetString() ?? "";
 
-            if (newPassword.Length is < 8 or > 128)
-                return Results.BadRequest(new { error = "Admin password must be 8-128 characters." });
+            if (newPassword.Length is < 8 or > RemotePinStore.MaxLength)
+                return Results.BadRequest(new { error = $"Parent password must be 8-{RemotePinStore.MaxLength} characters." });
+            if (!RemotePinStore.IsAcceptable(newPassword, out var simpleError))
+                return Results.BadRequest(new { error = simpleError.Replace("PIN", "password") });
 
             var storedHash = await db.GetSettingAsync("DashboardAdminPasswordHash", "");
             if (!string.IsNullOrEmpty(storedHash))
@@ -235,7 +239,9 @@ public class DashboardServer
             _adminPasswordSet = true;
             await RotateAdminTokenAsync(db);
             SetAdminCookie(ctx);
-            return Results.Ok(new { status = "password_set" });
+            // One parent password: the service verifies sensitive changes against the same value.
+            var synced = await SyncParentPasswordAsync(newPassword, ctx.RequestAborted);
+            return Results.Ok(new { status = "password_set", serviceSynced = synced });
         });
 
         app.MapPost("/api/auth/token/rotate", async (HttpContext ctx) =>
@@ -1887,6 +1893,22 @@ public class DashboardServer
 
     private static string CreateAdminToken() =>
         Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+
+    /// <summary>
+    /// Hands a dashboard password that was just verified (or just set) to the SYSTEM service, which keeps its own
+    /// salted hash so it can check the parent password on every sensitive change. False when the service is not reachable.
+    /// </summary>
+    private static async Task<bool> SyncParentPasswordAsync(string password, CancellationToken token)
+    {
+        if (!RemotePinStore.IsAcceptable(password, out _)) return false;
+        try
+        {
+            var reply = await ScreenTimeClient.SendAsync(new ScreenTimeRequest { Command = "set-parent-password", NewPin = password }, token);
+            return reply.Ok;
+        }
+        catch { return false; }
+    }
+
 
     private static async Task RotateAdminTokenAsync(UsageDatabase db)
     {

@@ -53,7 +53,7 @@
         <button type="button" id="screen-homework-stop" title="End homework mode now. Needs your approval." class="btn-secondary hidden">Stop homework mode</button>
         <small id="screen-homework-hint" class="hidden"></small>
       </div>
-      <div id="screen-limits-panel" class="screen-notice screen-lock" title="Protect the app limits, schedule and groups so they can only be changed after you approve it (Windows prompt on the PC, remote PIN from another device).">
+      <div id="screen-limits-panel" class="screen-notice screen-lock" title="Protect the app limits, schedule and groups so they can only be changed after you confirm with your parent password.">
         <strong>Protect limits</strong>
         <span id="screen-limits-status"></span>
         <button type="button" id="screen-limits-protect" title="Seal the current app limits, schedule and groups. Needs your approval." class="btn-secondary hidden">Protect limits</button>
@@ -106,7 +106,7 @@
           <label title="Extra minutes for today only." for="screen-bonus">Bonus for today (total minutes)</label>
           <input type="number" id="screen-bonus" title="Extra minutes for today only." min="0" max="1440" value="0" required>
           <p class="screen-help">The bonus applies only today. Saving again does not add it twice.</p>
-          <div class="quick-actions"><button id="screen-save" title="Save the rule. On the child PC, Windows asks for administrator approval; from another device you enter the remote PIN." type="submit">Save settings</button></div>
+          <div class="quick-actions"><button id="screen-save" title="Save the rule. You confirm it with your parent password." type="submit">Save settings</button></div>
         </section>
         <section class="settings-panel">
           <h3>How the time works</h3>
@@ -435,8 +435,8 @@
           <select id="set-hotkey-key" title="Keys pressed on the child&#x27;s PC to open this dashboard." style="width:120px"></select>
         </div>
         <p style="font-size:12px;color:#888">Changes apply immediately on the child's PC.</p>
-        <label title="The password that protects this dashboard. Set one before anything else.">Admin password</label>
-        <input type="password" id="set-admin-pw" title="The password that protects this dashboard. Set one before anything else." placeholder="Set or change admin password" autocomplete="new-password" style="width:350px">
+        <label title="Your parent password: it signs you in and confirms sensitive changes (8-64 characters). Set one before anything else.">Admin password</label>
+        <input type="password" id="set-admin-pw" title="Your parent password: it signs you in and confirms sensitive changes (8-64 characters). Set one before anything else." placeholder="Set or change admin password" autocomplete="new-password" style="width:350px">
         <label title="Only needed when changing an existing password.">Current admin password</label>
         <input type="password" id="set-admin-current-pw" title="Only needed when changing an existing password." placeholder="Required when changing password" autocomplete="current-password" style="width:350px">
         <button id="settings-admin-password" title="Save the new admin password." class="btn-secondary">Save Admin Password</button>
@@ -588,11 +588,10 @@
   <form id="screen-auth-form">
     <h3 id="screen-auth-title">Confirm change</h3>
     <p id="screen-auth-summary" class="screen-help"></p>
-    <p id="screen-auth-uac" class="screen-help">Windows will ask for administrator authorization on this PC. Enter the administrator credentials, or confirm the UAC prompt if the administrator account has no password.</p>
-    <div id="screen-auth-pin-row" class="hidden">
-      <p class="screen-help">Changes made from another device are approved with the remote PIN you set on the child PC, instead of a Windows prompt.</p>
-      <label for="screen-auth-pin" title="The PIN set on the child PC with GameHost.exe --set-remote-pin.">Remote PIN</label>
-      <input type="password" id="screen-auth-pin" autocomplete="off" maxlength="64" title="The PIN set on the child PC with GameHost.exe --set-remote-pin.">
+    <div id="screen-auth-pin-row">
+      <p class="screen-help">Confirm with your parent password. It is the same on this PC and from other devices, with no Windows prompt.</p>
+      <label for="screen-auth-pin" title="The same password you use to sign in to this dashboard.">Parent password</label>
+      <input type="password" id="screen-auth-pin" autocomplete="current-password" maxlength="64" title="The same password you use to sign in to this dashboard.">
     </div><p id="screen-auth-error" class="screen-auth-error" role="alert"></p>
     <div class="quick-actions"><button type="submit" id="screen-auth-submit">Authorize and save</button><button type="button" id="screen-auth-cancel" class="btn-secondary">Cancel</button></div>
   </form>

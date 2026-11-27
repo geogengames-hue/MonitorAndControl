@@ -28,8 +28,10 @@ public static class ScreenTimeEndpoints
     private static int StatusFor(string? error)
     {
         if (string.IsNullOrEmpty(error)) return 400;
-        if (error.StartsWith("Wrong PIN", StringComparison.Ordinal) || error.StartsWith("Too many", StringComparison.Ordinal)
-            || error.StartsWith("Remote changes are", StringComparison.Ordinal))
+        if (error.StartsWith("Wrong password", StringComparison.Ordinal) || error.StartsWith("Too many", StringComparison.Ordinal)
+            || error.StartsWith("Sensitive changes are", StringComparison.Ordinal)
+            || error.StartsWith("Remote changes are", StringComparison.Ordinal)
+            || error.StartsWith("The parent password is not", StringComparison.Ordinal))
             return 403;
         if (error.StartsWith("Could not record", StringComparison.Ordinal)) return 503;
         return 400;
@@ -144,8 +146,8 @@ public static class ScreenTimeEndpoints
             catch { return Results.Json(new { error = "The screen-time service is unavailable." }, statusCode: 503); }
         });
 
-        // Remote change: authorized by the dashboard admin login AND the remote PIN, which the service
-        // verifies (with lockout). There is no Windows UAC prompt on this path, by necessity.
+        // Sensitive change, on the PC itself or remote: authorized by the dashboard admin login AND the parent
+        // password typed again, which the service verifies (with lockout). There is no Windows UAC prompt.
         app.MapPost("/api/screen-time/remote-policy", async (HttpContext ctx) =>
         {
             if (isAdminAuthenticated?.Invoke(ctx) != true || !SameOriginOrNone(ctx))
@@ -160,10 +162,13 @@ public static class ScreenTimeEndpoints
                 try { request = JsonSerializer.Deserialize<ScreenTimeRequest>(bytes.AsSpan(0, size), ScreenTimeProtocol.Json); }
                 finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes); }
                 if (request == null) return Results.BadRequest(new { error = "Select an account and set the limits." });
-                if (string.IsNullOrWhiteSpace(request.Pin)) return Results.BadRequest(new { error = "Enter the remote PIN." });
+                if (string.IsNullOrWhiteSpace(request.Pin)) return Results.BadRequest(new { error = "Enter your parent password." });
 
                 request.Command = "remote-save";
+                var local = TrustedLocalRequest(ctx);
                 var source = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+                // Changes made on the PC itself by someone who knows the password need no alert; remote ones and wrong guesses do.
+                void Raise(string message, bool security) { if (!local) ScreenTimeEndpoints.Raise(message, security); }
                 var reply = await ScreenTimeClient.SendAsync(request, ctx.RequestAborted);
                 if (reply.Ok)
                 {
@@ -204,12 +209,12 @@ public static class ScreenTimeEndpoints
                 }
 
                 // A wrong guess is worth an alert, but never more than one per 10 minutes (CAS keeps the throttle correct under concurrency).
-                if (reply.Error is { } error && (error.StartsWith("Wrong PIN", StringComparison.Ordinal) || error.StartsWith("Too many", StringComparison.Ordinal)))
+                if (reply.Error is { } error && (error.StartsWith("Wrong password", StringComparison.Ordinal) || error.StartsWith("Too many", StringComparison.Ordinal)))
                 {
                     var now = DateTime.UtcNow.Ticks;
                     var last = Interlocked.Read(ref _lastFailureReportTicks);
                     if (now - last > TimeSpan.FromMinutes(10).Ticks && Interlocked.CompareExchange(ref _lastFailureReportTicks, now, last) == last)
-                        Raise($"A wrong remote PC Time PIN was entered from {source}.", true);
+                        ScreenTimeEndpoints.Raise($"A wrong parent password was entered for a sensitive PC Time change ({(local ? "on the PC" : "from " + source)}).", true);
                 }
                 return Results.Json(new { error = reply.Error }, statusCode: StatusFor(reply.Error));
             }

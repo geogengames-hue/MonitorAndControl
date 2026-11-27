@@ -790,5 +790,15 @@
   "Use the guess": "Usar la suposición",
   "The category this app counts in.": "La categoría en la que cuenta esta app.",
   "Enter a group name, daily limit, and select at least one app or a category.": "Escriba un nombre de grupo y un límite diario, y elija al menos una app o una categoría.",
-  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importado. Se omitieron {n} regla(s) de cuentas de Windows que no existen en este PC."
+  "Imported. {n} rule(s) for Windows accounts that are not on this PC were left out.": "Importado. Se omitieron {n} regla(s) de cuentas de Windows que no existen en este PC.",
+  "Saved, but the Windows service could not be reached: sign in again later to finish.": "Guardada, pero no se pudo contactar con el servicio de Windows: vuelva a iniciar sesi├│n m├ís tarde para terminar.",
+  "Confirm with your parent password. It is the same on this PC and from other devices, with no Windows prompt.": "Confirme con su contrase├▒a de padres. Es la misma en este PC y desde otros dispositivos, sin aviso de Windows.",
+  "Parent password": "Contrase├▒a de padres",
+  "The same password you use to sign in to this dashboard.": "La misma contrase├▒a con la que inicia sesi├│n en este panel.",
+  "Enter your parent password.": "Introduzca su contrase├▒a de padres.",
+  "Sensitive changes are off: the parent password has not reached the service yet. Sign out and sign in again to finish.": "Los cambios sensibles est├ín desactivados: la contrase├▒a de padres a├║n no ha llegado al servicio. Cierre sesi├│n y vuelva a iniciarla para terminar.",
+  "Sensitive changes are locked until {time} after too many wrong password attempts.": "Los cambios sensibles est├ín bloqueados hasta las {time} por demasiados intentos de contrase├▒a err├│neos.",
+  "Save the rule. You confirm it with your parent password.": "Guardar la regla. Se confirma con su contrase├▒a de padres.",
+  "Protect the app limits, schedule and groups so they can only be changed after you confirm with your parent password.": "Protege los l├¡mites de apps, el horario y los grupos para que solo se puedan cambiar tras confirmar con su contrase├▒a de padres.",
+  "Your parent password: it signs you in and confirms sensitive changes (8-64 characters). Set one before anything else.": "Su contrase├▒a de padres: inicia su sesi├│n y confirma los cambios sensibles (8-64 caracteres). Defina una antes que nada."
 }

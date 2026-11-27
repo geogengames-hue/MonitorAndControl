@@ -102,6 +102,21 @@ public sealed class RemotePinStore
         Save(new Record { Salt = Convert.ToBase64String(salt), Hash = Convert.ToBase64String(Hash(pin, salt, DefaultIterations)) });
     }
 
+    /// <summary>
+    /// True when <paramref name="pin"/> equals the stored one. Never touches the lockout counters,
+    /// so it is only for the dashboard syncing its own (already verified) password into the store.
+    /// </summary>
+    public bool Matches(string pin)
+    {
+        lock (_sync)
+        {
+            var record = Load();
+            if (record == null || string.IsNullOrEmpty(pin) || pin.Length > MaxLength) return false;
+            var actual = Hash(pin, Convert.FromBase64String(record.Salt), record.Iterations);
+            return CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(record.Hash), actual);
+        }
+    }
+
     public void Clear()
     {
         lock (_sync)
@@ -128,7 +143,7 @@ public sealed class RemotePinStore
             var record = Load();
             if (record == null)
                 return new(RemotePinStatus.NotConfigured,
-                    "Remote changes are not set up. On the child PC, run GameHost.exe --set-remote-pin as administrator.");
+                    "The parent password is not set up in the service yet. Sign in to the dashboard once, or run GameHost.exe --set-remote-pin as administrator.");
 
             if (record.LockedUntil is { } until && until > now)
                 return new(RemotePinStatus.Locked, LockedMessage(until, now), until);
@@ -161,11 +176,11 @@ public sealed class RemotePinStore
                 lockedUntil = now + duration;
                 record.LockedUntil = lockedUntil;
                 record.Failures = 0;
-                message = "Too many wrong PIN attempts. " + LockedMessage(lockedUntil.Value, now);
+                message = "Too many wrong password attempts. " + LockedMessage(lockedUntil.Value, now);
             }
             else
             {
-                message = $"Wrong PIN. {MaxFailuresBeforeLock - record.Failures} attempt(s) left before a lockout.";
+                message = $"Wrong password. {MaxFailuresBeforeLock - record.Failures} attempt(s) left before a lockout.";
             }
 
             // If the failure cannot be recorded, refuse rather than allow unlimited guessing.
@@ -178,7 +193,7 @@ public sealed class RemotePinStore
     private static string LockedMessage(DateTimeOffset until, DateTimeOffset now)
     {
         var minutes = (int)Math.Ceiling((until - now).TotalMinutes);
-        return $"Remote changes are locked for {minutes} more minute(s). Changes made on the child PC still work.";
+        return $"Sensitive changes are locked for {minutes} more minute(s).";
     }
 
     private static byte[] Hash(string pin, byte[] salt, int iterations) =>

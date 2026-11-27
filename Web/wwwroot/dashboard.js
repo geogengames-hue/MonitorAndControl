@@ -1620,15 +1620,16 @@ document.getElementById('settings-admin-password').addEventListener('click', asy
   const newPassword = document.getElementById('set-admin-pw').value;
   el.textContent = t('Saving...');
   try {
-    await api('/api/auth/password', {
+    const saved = await api('/api/auth/password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ currentPassword, newPassword })
     });
     document.getElementById('set-admin-current-pw').value = '';
     document.getElementById('set-admin-pw').value = '';
-    el.style.color = '#44bb44';
-    el.textContent = t('Saved');
+    const synced = saved?.serviceSynced !== false;
+    el.style.color = synced ? '#44bb44' : '#ddaa00';
+    el.textContent = synced ? t('Saved') : t('Saved, but the Windows service could not be reached: sign in again later to finish.');
   } catch (e) {
     el.style.color = '#ff4444';
     el.textContent = e.message || t('Failed');

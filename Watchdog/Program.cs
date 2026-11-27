@@ -97,7 +97,7 @@ internal static class Program
         if (args.Contains("--clear-remote-pin", StringComparer.OrdinalIgnoreCase))
         {
             store.Clear();
-            Console.WriteLine("Remote PC Time changes are now OFF. PC Time can only be changed on this PC.");
+            Console.WriteLine("The parent password was removed from the service: sensitive changes are OFF until the next dashboard sign-in sets it again.");
             Environment.ExitCode = 0;
             return;
         }
@@ -109,25 +109,25 @@ internal static class Program
             return;
         }
 
-        Console.WriteLine("Set the remote PC Time PIN.");
-        Console.WriteLine($"It lets you change PC Time rules from the dashboard on another device, together with the");
-        Console.WriteLine("dashboard admin password. Use {0}-{1} characters; keep it secret and different from your admin password.",
+        Console.WriteLine("Set the parent password (recovery path).");
+        Console.WriteLine("It confirms sensitive changes, on this PC and from other devices. Signing in to the dashboard with");
+        Console.WriteLine("a different dashboard password replaces it. Use {0}-{1} characters.",
             MonitorAndControl.ScreenTime.RemotePinStore.MinLength, MonitorAndControl.ScreenTime.RemotePinStore.MaxLength);
-        var pin = ReadSecret("New PIN: ");
+        var pin = ReadSecret("New password: ");
         if (!MonitorAndControl.ScreenTime.RemotePinStore.IsAcceptable(pin, out var error))
         {
             Console.Error.WriteLine(error);
             return;
         }
-        if (!string.Equals(pin, ReadSecret("Repeat PIN: "), StringComparison.Ordinal))
+        if (!string.Equals(pin, ReadSecret("Repeat password: "), StringComparison.Ordinal))
         {
-            Console.Error.WriteLine("The PINs do not match. Nothing was changed.");
+            Console.Error.WriteLine("The passwords do not match. Nothing was changed.");
             return;
         }
 
         store.Set(pin);
-        Console.WriteLine("Remote PC Time changes are now ON.");
-        Console.WriteLine("Five wrong PIN attempts lock remote changes for 15 minutes (longer each time).");
+        Console.WriteLine("The parent password is set.");
+        Console.WriteLine("Five wrong attempts lock sensitive changes for 15 minutes (longer each time).");
         Environment.ExitCode = 0;
     }
 
